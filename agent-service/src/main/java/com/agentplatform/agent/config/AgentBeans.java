@@ -1,5 +1,6 @@
 package com.agentplatform.agent.config;
 
+import com.agentplatform.agent.ai.VisionAwareToolCallingManager;
 import com.agentplatform.security.JwtUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +12,8 @@ import org.springframework.ai.anthropic.api.AnthropicCacheStrategy;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.model.tool.DefaultToolCallingManager;
+import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.context.annotation.Bean;
@@ -107,6 +110,7 @@ public class AgentBeans {
                                         ObjectProvider<ChatClient> singleProvider) {
         List<AgentProperties.Provider> configured = props.agent().providers();
         boolean cacheOn = Boolean.TRUE.equals(props.agent().memory().enablePromptCache());
+        boolean visionOn = Boolean.TRUE.equals(props.agent().memory().enableVisionToolResults());
         List<ChatClient> out = new ArrayList<>();
         if (configured != null) {
             for (AgentProperties.Provider p : configured) {
@@ -119,10 +123,10 @@ public class AgentBeans {
                 switch (kind) {
                     case "anthropic-messages" -> {
                         try {
-                            ChatClient cc = buildAnthropicClient(p, cacheOn);
+                            ChatClient cc = buildAnthropicClient(p, cacheOn, visionOn);
                             out.add(cc);
-                            log.info("[agent] provider '{}' ready: kind=anthropic-messages model={} baseUrl={} promptCache={}",
-                                    p.name(), p.model(), p.baseUrl(), cacheOn);
+                            log.info("[agent] provider '{}' ready: kind=anthropic-messages model={} baseUrl={} promptCache={} vision={}",
+                                    p.name(), p.model(), p.baseUrl(), cacheOn, visionOn);
                         } catch (RuntimeException ex) {
                             log.warn("[agent] provider '{}' build failed: {}; skipping", p.name(), ex.getMessage());
                         }
@@ -158,7 +162,7 @@ public class AgentBeans {
      * volatile RAG context routed to the user message instead) so only the
      * stable head consumes a breakpoint.
      */
-    private static ChatClient buildAnthropicClient(AgentProperties.Provider p, boolean cacheOn) {
+    private static ChatClient buildAnthropicClient(AgentProperties.Provider p, boolean cacheOn, boolean visionOn) {
         AnthropicApi api = AnthropicApi.builder()
                 .baseUrl(p.baseUrl() == null || p.baseUrl().isBlank() ? "https://api.anthropic.com" : p.baseUrl())
                 .apiKey(p.apiKey())
@@ -171,7 +175,7 @@ public class AgentBeans {
                 .topP(null)
                 .cacheOptions(cacheOn ? buildSystemCacheOptions() : AnthropicCacheOptions.DISABLED)
                 .build();
-        AnthropicChatModel model = AnthropicChatModel.builder()
+        AnthropicChatModel.Builder builder = AnthropicChatModel.builder()
                 .anthropicApi(api)
                 .defaultOptions(options)
                 // Spring AI 1.x default RetryTemplate is maxAttempts=10 with
@@ -179,8 +183,18 @@ public class AgentBeans {
                 // explodes into up to 10 sub2api hits and 10 billing rows.
                 // Cap at 2 attempts (1 retry, ~500ms backoff): covers brief
                 // network blips without flooding the upstream relay.
-                .retryTemplate(restrainedRetryTemplate())
-                .build();
+                .retryTemplate(restrainedRetryTemplate());
+        if (visionOn) {
+            // Wrap the default tool-calling manager so we can post-process
+            // tool responses: any base64 images stashed in the shared
+            // tool-context by RemoteToolCallback get appended as a sibling
+            // UserMessage with Media attachments, which the Anthropic chat
+            // model already knows how to render as multimodal content blocks.
+            ToolCallingManager wrapped = new VisionAwareToolCallingManager(
+                    DefaultToolCallingManager.builder().build());
+            builder = builder.toolCallingManager(wrapped);
+        }
+        AnthropicChatModel model = builder.build();
         return ChatClient.builder(model).defaultOptions(options).build();
     }
 

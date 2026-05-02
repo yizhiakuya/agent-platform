@@ -33,7 +33,7 @@ public record AgentProperties(
     ) {
         public Agent {
             if (memory == null) {
-                memory = new Memory(null, 0, 0, null, null, 0);
+                memory = new Memory(null, 0, 0, null, null, 0, null);
             }
         }
     }
@@ -66,7 +66,8 @@ public record AgentProperties(
             int topK,
             String factExtractorModel,
             Boolean enablePromptCache,
-            int factBatchSize
+            int factBatchSize,
+            Boolean enableVisionToolResults
     ) {
         public Memory {
             if (embeddingModel == null || embeddingModel.isBlank()) {
@@ -90,6 +91,16 @@ public record AgentProperties(
             // user walks away mid-batch (memory is best-effort anyway).
             if (factBatchSize <= 0) {
                 factBatchSize = 3;
+            }
+            // Multimodal tool_result: when a device tool returns base64
+            // image bytes (e.g. photos.list_recent.thumb_b64), inject them
+            // into the next LLM turn as a sibling user message with Media
+            // attachments so a vision-aware Claude can actually "see" them
+            // — instead of being fed the legacy <binary NB omitted> stub.
+            // Default true; flip false to fall back to the strip path
+            // (e.g. cost-conscious deploys or non-vision LLM endpoints).
+            if (enableVisionToolResults == null) {
+                enableVisionToolResults = Boolean.TRUE;
             }
         }
     }

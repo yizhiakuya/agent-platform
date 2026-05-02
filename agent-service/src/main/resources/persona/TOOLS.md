@@ -19,11 +19,25 @@
   - 可以说"已附上 3 张缩略图",但不要把 base64 字符串本身或它的片段贴出来。
 - **参数 schema 严格校验**:不在 schema 里的字段服务端会拒绝。不确定参数怎么填先调最小集合,再按返回 / 报错调整。
 
+## Photo Tool Routing(优先级从精到粗)
+
+相册类工具有 6 个,**先选最精准的**而不是无脑用 list_recent + 过滤。决策树:
+
+| 用户说什么 | 优先用 | 不要用 |
+|---|---|---|
+| "看截图 / Screenshot / 小黑盒的图" | `photos.recent_screenshots` | `photos.list_recent + name_contains` |
+| "我有哪些相册 / 微信相册多少张" | `photos.list_albums` | `list_recent` 然后从文件名瞎猜 |
+| "看微信相册的图 / 抖音保存的图" | `photos.list_by_album`(先 list_albums 拿 bucket_id) | `name_contains` |
+| "这张是哪儿拍的 / 什么相机 / 几点拍的" | `photos.get_metadata` | 编造元数据 |
+| "看清这张 / 放大 / 这张是什么内容" | `photos.get_full(id)` | 沿用之前的小缩略图猜 |
+| "我录了什么视频 / 视频列表" | `videos.list_recent` | (没工具,不要瞎答) |
+| "最近的图 / 给我看相册" | `photos.list_recent` | 这是兜底 |
+
 ## Photo Tool Specifics
 
-`photos.list_recent` 当前是主力 tool,几个本地知识:
-
-- **Android 截图文件名带源 app 包名**(例如 `Screenshot_20251020-143012_com.xiaoheihe.SnsBus.jpg`)。所以"找小黑盒的截图"用 `name_contains=xiaoheihe` 通常能直接命中,比 `date_after` 之类时间过滤精度更高。
-- 系统相机拍的图文件名一般是 `IMG_yyyymmdd_HHMMSS.jpg` 不带 app 标识。要按相机/截图区分,用 `name_contains=Screenshot` 或 `name_contains=IMG_`。
+- **Android 截图文件名带源 app 包名**(例 `Screenshot_..._com.xiaoheihe.SnsBus.jpg`)。但优先用 `photos.recent_screenshots`,它已经按相册 + 文件名前缀复合过滤,中文 ROM 兼容性更好。
+- 系统相机拍的图文件名一般是 `IMG_yyyymmdd_HHMMSS.jpg` 不带 app 标识。
 - `limit` 默认保守(5–10),除非用户说"全部 / 都列出来"。
-- 时间过滤(`date_after` / `date_before`)接 ISO 8601 字符串。"今天"、"昨天"这种相对时间要先在自己脑子里转换成具体日期再传。
+- **时间过滤**用 UNIX 毫秒时间戳(`date_after_ms` / `date_before_ms`),不是 ISO 字符串。"今天"、"昨天"先在自己脑子里转换成毫秒再传。
+- **多步组合**:相册场景常常是"先 list_albums 看分组 → 让用户挑(或自己决定)→ list_by_album 拉具体图"。一次拉 50 张是流量浪费。
+- **vision 已开**:tool 返回的缩略图你能直接看到内容(渲染成多模态 tool_result),所以可以基于图判断,不用让用户自己描述。但回复里**仍然不要贴 base64 字符串**。

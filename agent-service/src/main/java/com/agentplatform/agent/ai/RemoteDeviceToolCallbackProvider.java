@@ -2,6 +2,7 @@ package com.agentplatform.agent.ai;
 
 import com.agentplatform.agent.client.DeviceHubClient;
 import com.agentplatform.agent.client.DeviceToolDispatcher;
+import com.agentplatform.agent.config.AgentProperties;
 import com.agentplatform.api.hub.OnlineDeviceDto;
 import com.agentplatform.protocol.ToolSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,17 +36,21 @@ public class RemoteDeviceToolCallbackProvider implements ToolCallbackProvider {
     private final ObjectMapper mapper;
     private final List<ToolPreInterceptor> preInterceptors;
     private final ApplicationEventPublisher events;
+    private final boolean visionToolResults;
 
     public RemoteDeviceToolCallbackProvider(DeviceHubClient deviceHubClient,
                                             DeviceToolDispatcher dispatcher,
                                             ObjectMapper mapper,
                                             List<ToolPreInterceptor> preInterceptors,
-                                            ApplicationEventPublisher events) {
+                                            ApplicationEventPublisher events,
+                                            AgentProperties props) {
         this.deviceHubClient = deviceHubClient;
         this.dispatcher = dispatcher;
         this.mapper = mapper;
         this.preInterceptors = preInterceptors;
         this.events = events;
+        this.visionToolResults = props != null && props.agent() != null && props.agent().memory() != null
+                && Boolean.TRUE.equals(props.agent().memory().enableVisionToolResults());
     }
 
     @Override
@@ -71,7 +76,8 @@ public class RemoteDeviceToolCallbackProvider implements ToolCallbackProvider {
         }
         return Stream.<ToolSpec>concat(first.manifest().tools().stream(), Stream.empty())
                 .map(spec -> (ToolCallback) new RemoteToolCallback(
-                        first.deviceId(), userId, spec, dispatcher, mapper, preInterceptors, events))
+                        first.deviceId(), userId, spec, dispatcher, mapper,
+                        preInterceptors, events, visionToolResults))
                 .toArray(ToolCallback[]::new);
     }
 }

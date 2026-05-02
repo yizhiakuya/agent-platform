@@ -60,6 +60,15 @@ agent-platform:
       # discount on repeat calls within 5 min. Flip to false if a sub2api-style
       # proxy strips the field or you hit unexpected cache misses.
       enablePromptCache: ${AGENT_ENABLE_PROMPT_CACHE:true}
+      # Multimodal tool_result toggle. When true (default), any base64 image
+      # field (*_b64) returned by a device tool — e.g. photos.list_recent
+      # thumb_b64 — is forwarded to a vision-capable LLM as a real Media
+      # attachment on the next turn so it can answer content-level questions
+      # ("which photo is Steve?", "where's the dog?"). The web client always
+      # sees the full payload either way via the tool_call_result SSE event.
+      # Flip false to fall back to the legacy "<binary NB omitted>" stub —
+      # use that for non-vision endpoints or cost-conscious deploys.
+      enableVisionToolResults: ${AGENT_ENABLE_VISION_TOOL_RESULTS:true}
 
 logging:
   level:

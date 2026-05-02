@@ -53,6 +53,10 @@ fun BoundScreen(prefs: AppPrefs, onUnbind: () -> Unit) {
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_MEDIA_IMAGES) ==
                 PackageManager.PERMISSION_GRANTED
     } else true
+    val videosGranted = if (Build.VERSION.SDK_INT >= 33) {
+        ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_MEDIA_VIDEO) ==
+                PackageManager.PERMISSION_GRANTED
+    } else true
 
     Column(
         modifier = Modifier
@@ -85,6 +89,13 @@ fun BoundScreen(prefs: AppPrefs, onUnbind: () -> Unit) {
             PermissionCard(
                 title = "媒体读取权限",
                 desc = "photos.list_recent 工具需要此权限,不给将返回空列表。",
+                actionLabel = "打开设置"
+            ) { openAppSettings(ctx as Activity) }
+        }
+        if (!videosGranted) {
+            PermissionCard(
+                title = "读取视频权限",
+                desc = "videos.list_recent 工具需要,不给将看不到视频。",
                 actionLabel = "打开设置"
             ) { openAppSettings(ctx as Activity) }
         }

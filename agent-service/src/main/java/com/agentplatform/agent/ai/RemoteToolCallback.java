@@ -16,7 +16,9 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -41,6 +43,19 @@ public class RemoteToolCallback implements ToolCallback {
 
     private static final Logger log = LoggerFactory.getLogger(RemoteToolCallback.class);
 
+    /**
+     * ToolContext key under which RemoteToolCallback stashes any base64 images
+     * extracted from a device tool's response. {@code VisionAwareToolCallingManager}
+     * drains this list after each batch of tool calls and appends a sibling
+     * UserMessage with {@code Media} attachments — so a vision-capable LLM
+     * actually sees the bytes, not just a {@code <binary omitted>} stub.
+     *
+     * <p>Value type: {@code List<PendingImage>} (declared in this class).
+     * The map itself must be mutable — see {@code ChatService} for the
+     * {@code ConcurrentHashMap} wiring.
+     */
+    public static final String PENDING_IMAGES_KEY = "agent.pending.vision.images";
+
     private final UUID deviceId;
     private final UUID userId;
     private final ToolSpec spec;
@@ -48,11 +63,20 @@ public class RemoteToolCallback implements ToolCallback {
     private final ObjectMapper mapper;
     private final List<ToolPreInterceptor> preInterceptors;
     private final ApplicationEventPublisher events;
+    private final boolean visionEnabled;
 
     public RemoteToolCallback(UUID deviceId, UUID userId, ToolSpec spec,
                               DeviceToolDispatcher dispatcher, ObjectMapper mapper,
                               List<ToolPreInterceptor> preInterceptors,
                               ApplicationEventPublisher events) {
+        this(deviceId, userId, spec, dispatcher, mapper, preInterceptors, events, false);
+    }
+
+    public RemoteToolCallback(UUID deviceId, UUID userId, ToolSpec spec,
+                              DeviceToolDispatcher dispatcher, ObjectMapper mapper,
+                              List<ToolPreInterceptor> preInterceptors,
+                              ApplicationEventPublisher events,
+                              boolean visionEnabled) {
         this.deviceId = deviceId;
         this.userId = userId;
         this.spec = spec;
@@ -60,7 +84,16 @@ public class RemoteToolCallback implements ToolCallback {
         this.mapper = mapper;
         this.preInterceptors = preInterceptors == null ? List.of() : preInterceptors;
         this.events = events;
+        this.visionEnabled = visionEnabled;
     }
+
+    /**
+     * Carrier struct for one base64-encoded image extracted from a tool result.
+     * The {@code path} is only used for diagnostics — Anthropic's tool_result
+     * doesn't take a "field name" hint, but we keep it to log exactly which
+     * field on which tool produced each image.
+     */
+    public record PendingImage(String toolName, String path, String mimeType, String b64) {}
 
     @Override
     public ToolDefinition getToolDefinition() {
@@ -145,14 +178,117 @@ public class RemoteToolCallback implements ToolCallback {
         // into the LLM as a tool_result message). Both success and error are
         // surfaced as JSON so the LLM can react to either.
         //
-        // Strip *_b64 fields before handing to the LLM — base64 thumbnails
-        // would otherwise dump a 50-100KB string into the model context that
-        // a non-vision-aware Claude routinely echoes back into its reply
-        // markdown. The web client still gets the full payload via the
-        // tool_call_result SSE event above.
-        return result.hasError()
-                ? wireError(result)
-                : (result.value() == null ? "null" : stripB64ForLlm(result.value()).toString());
+        // Two paths for *_b64 base64 fields:
+        //   - vision DISABLED (legacy): replace each *_b64 with a
+        //     "<binary NB omitted>" placeholder — keeps a non-vision LLM from
+        //     echoing 50-100KB strings into its reply.
+        //   - vision ENABLED: same placeholder in the JSON BUT we also stash
+        //     the raw bytes into {@link #PENDING_IMAGES_KEY} on the shared
+        //     ToolContext, so {@code VisionAwareToolCallingManager} can
+        //     append a sibling user message carrying real Media attachments
+        //     for the LLM's next turn. Either way the web client still gets
+        //     the full payload via the tool_call_result SSE event above.
+        if (result.hasError()) {
+            return wireError(result);
+        }
+        JsonNode raw = result.value();
+        if (raw == null) {
+            return "null";
+        }
+        if (visionEnabled) {
+            List<PendingImage> imgs = new ArrayList<>();
+            JsonNode stripped = stripB64ForLlmAndCollect(raw, "", imgs);
+            if (!imgs.isEmpty() && toolContext != null) {
+                stashPendingImages(toolContext, imgs);
+                if (stripped instanceof ObjectNode obj) {
+                    obj.put("_vision_attached_count", imgs.size());
+                }
+            }
+            return stripped.toString();
+        }
+        return stripB64ForLlm(raw).toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void stashPendingImages(ToolContext ctx, List<PendingImage> imgs) {
+        Map<String, Object> shared = ctx.getContext();
+        if (shared == null) return;
+        Object existing = shared.get(PENDING_IMAGES_KEY);
+        List<PendingImage> bucket;
+        if (existing instanceof List<?> l) {
+            bucket = (List<PendingImage>) l;
+        } else {
+            bucket = new ArrayList<>();
+            try {
+                shared.put(PENDING_IMAGES_KEY, bucket);
+            } catch (UnsupportedOperationException ex) {
+                // Caller wired an immutable Map.of(...) — log once and bail.
+                // VisionAwareToolCallingManager will see no images and skip.
+                log.warn("ToolContext map is immutable — vision tool_result feature disabled for this call. "
+                        + "ChatService should pass a mutable Map (e.g. ConcurrentHashMap).");
+                return;
+            }
+        }
+        bucket.addAll(imgs);
+    }
+
+    /**
+     * Vision-aware variant of {@link #stripB64ForLlm}. Walks the tree just
+     * like the legacy path (replacing every {@code *_b64} string with a stub),
+     * but also collects each base64 string into {@code out} so the caller can
+     * forward them to the LLM as Media attachments. The MIME type is inferred
+     * from the field name and the raw bytes — JPEG and PNG cover all device
+     * tools we ship today.
+     *
+     * @param pathPrefix dotted JSON pointer accumulated so far, used only for
+     *                   diagnostic logging in {@code VisionAwareToolCallingManager}.
+     */
+    private JsonNode stripB64ForLlmAndCollect(JsonNode node, String pathPrefix, List<PendingImage> out) {
+        if (node instanceof ObjectNode obj) {
+            ObjectNode copy = obj.objectNode();
+            obj.fields().forEachRemaining(e -> {
+                String k = e.getKey();
+                String childPath = pathPrefix.isEmpty() ? k : pathPrefix + "." + k;
+                JsonNode v = e.getValue();
+                if (k.endsWith("_b64") && v.isTextual()) {
+                    String b64 = v.asText();
+                    int len = b64.length();
+                    copy.put(k, "<binary " + len + "B attached as image; rendered to user>");
+                    if (len > 0 && len < 7_000_000) {  // Anthropic per-image cap ~5MB binary; b64 is ~4/3 of binary
+                        out.add(new PendingImage(spec.name(), childPath, sniffMime(k, b64), b64));
+                    }
+                } else {
+                    copy.set(k, stripB64ForLlmAndCollect(v, childPath, out));
+                }
+            });
+            return copy;
+        } else if (node instanceof ArrayNode arr) {
+            ArrayNode copy = arr.arrayNode();
+            int i = 0;
+            for (JsonNode child : arr) {
+                copy.add(stripB64ForLlmAndCollect(child, pathPrefix + "[" + i + "]", out));
+                i++;
+            }
+            return copy;
+        }
+        return node;
+    }
+
+    /**
+     * Best-effort MIME-type guess. Field names like {@code thumb_b64} /
+     * {@code image_b64} come from Android device tools that always emit JPEG;
+     * for safety we also peek at the base64 prefix — JPEG starts with "/9j/",
+     * PNG with "iVBORw0KGgo". Default to JPEG since Anthropic accepts both
+     * and our existing photos.list_recent path emits JPEG. (PDFs are not
+     * supported via this path; if a tool ever returns one it would still
+     * be stripped but not attached.)
+     */
+    private static String sniffMime(String fieldName, String b64) {
+        if (b64 == null || b64.length() < 8) return "image/jpeg";
+        if (b64.startsWith("iVBORw0KGgo")) return "image/png";
+        if (b64.startsWith("R0lGOD")) return "image/gif";
+        if (b64.startsWith("UklGR")) return "image/webp";
+        return "image/jpeg";
     }
 
     /** Recursively replace any "*_b64" string field with a short placeholder. */

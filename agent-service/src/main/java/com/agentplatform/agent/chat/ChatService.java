@@ -50,6 +50,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 
 /**
@@ -239,14 +240,18 @@ public class ChatService {
         boolean started = false;
         for (ChatClient cc : chatClients) {
             try {
+                // VisionAwareToolCallingManager / RemoteToolCallback need to
+                // mutate this map (push/drain pending image attachments), so
+                // it MUST be a mutable Map — Map.of(...) would NPE/throw on put.
+                Map<String, Object> toolCtx = new ConcurrentHashMap<>();
+                toolCtx.put(ChatEventSink.KEY, sink);
+                toolCtx.put("userId", userId);
+                toolCtx.put("sessionId", sessionId);
                 Disposable disp = cc.prompt()
                         .messages(buildSystemMessages(stableSystemText, history))
                         .user(userText)
                         .toolCallbacks(allTools.toArray(new ToolCallback[0]))
-                        .toolContext(Map.of(
-                                ChatEventSink.KEY, sink,
-                                "userId", userId,
-                                "sessionId", sessionId))
+                        .toolContext(toolCtx)
                         .stream()
                         .chatResponse()
                         .doOnNext(resp -> {

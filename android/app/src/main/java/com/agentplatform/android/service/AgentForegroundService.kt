@@ -19,7 +19,13 @@ import com.agentplatform.android.core.ws.WsClient
 import com.agentplatform.android.core.ws.decodeJsonRpc
 import com.agentplatform.android.core.ws.JsonRpcError
 import com.agentplatform.android.data.AppPrefs
+import com.agentplatform.android.tools.photos.PhotosGetFullTool
+import com.agentplatform.android.tools.photos.PhotosGetMetadataTool
+import com.agentplatform.android.tools.photos.PhotosListAlbumsTool
+import com.agentplatform.android.tools.photos.PhotosListByAlbumTool
 import com.agentplatform.android.tools.photos.PhotosListRecentTool
+import com.agentplatform.android.tools.photos.PhotosRecentScreenshotsTool
+import com.agentplatform.android.tools.videos.VideosListRecentTool
 import com.agentplatform.android.ui.MainActivity
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ObjectNode
@@ -53,6 +59,12 @@ class AgentForegroundService : Service() {
 
         // PR 11: register the device's tools. Add more here as we ship them.
         toolRegistry.register(PhotosListRecentTool(applicationContext, mapper))
+        toolRegistry.register(PhotosGetMetadataTool(applicationContext, mapper))
+        toolRegistry.register(PhotosGetFullTool(applicationContext, mapper))
+        toolRegistry.register(PhotosListAlbumsTool(applicationContext, mapper))
+        toolRegistry.register(PhotosListByAlbumTool(applicationContext, mapper))
+        toolRegistry.register(PhotosRecentScreenshotsTool(applicationContext, mapper))
+        toolRegistry.register(VideosListRecentTool(applicationContext, mapper))
 
         val prefs = AppPrefs(this)
         if (!prefs.isBound()) {

@@ -73,5 +73,8 @@ dependencies {
     // Background work for keep-alive
     implementation("androidx.work:work-runtime-ktx:2.10.0")
 
+    // EXIF reader for photos.get_metadata (no native deps).
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
