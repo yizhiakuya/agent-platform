@@ -10,8 +10,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Embeds plain text via an OpenAI-compatible {@code POST /v1/embeddings}
@@ -38,6 +41,21 @@ public class EmbeddingService {
     private final String apiKey;
     private final String embeddingModel;
     private final int embeddingDim;
+
+    // LRU cache by raw input text. Most embeddings come from (a) the current
+    // user message during memory recall and (b) extracted fact contents during
+    // store. Both are stable strings — same text → same vector — so caching
+    // saves real money: avoids re-paying $0.02/M tokens to OpenAI for the same
+    // input within minutes. Size 256 covers ~30-60 minutes of normal traffic.
+    private static final int LRU_MAX = 256;
+    private final Map<String, float[]> cache = Collections.synchronizedMap(
+            new LinkedHashMap<String, float[]>(64, 0.75f, true) {
+                @Override protected boolean removeEldestEntry(Map.Entry<String, float[]> eldest) {
+                    return size() > LRU_MAX;
+                }
+            });
+    private final AtomicLong hits = new AtomicLong();
+    private final AtomicLong misses = new AtomicLong();
 
     public EmbeddingService(WebClient.Builder defaultWebClientBuilder, AgentProperties props) {
         this.props = props;
@@ -71,6 +89,15 @@ public class EmbeddingService {
         if (apiKey.isBlank()) {
             throw new IllegalStateException("Embedding provider apiKey is blank — set ANTHROPIC_API_KEY or configure providers[0].apiKey");
         }
+        // LRU lookup before hitting the network.
+        float[] cached = cache.get(text);
+        if (cached != null) {
+            long h = hits.incrementAndGet();
+            if ((h & 31) == 0) {
+                log.info("[embed] LRU stats hits={} misses={} size={}", h, misses.get(), cache.size());
+            }
+            return cached;
+        }
         try {
             JsonNode resp = webClient.post()
                     .uri("/v1/embeddings")
@@ -98,6 +125,8 @@ public class EmbeddingService {
             if (embeddingDim > 0 && out.length != embeddingDim) {
                 log.warn("[embed] embedding dim {} != configured {} — chat-service insert may fail", out.length, embeddingDim);
             }
+            cache.put(text, out);
+            misses.incrementAndGet();
             return out;
         } catch (RuntimeException e) {
             throw new IllegalStateException("embed(" + embeddingModel + ") failed: " + e.getMessage(), e);

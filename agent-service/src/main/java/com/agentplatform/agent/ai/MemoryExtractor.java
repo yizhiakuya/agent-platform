@@ -10,8 +10,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 
 /**
@@ -35,6 +38,12 @@ public class MemoryExtractor {
     private final ObjectMapper mapper;
     private final AgentProperties props;
 
+    // Per-session ring of (USER, ASSISTANT) turns waiting for the LLM extractor
+    // to chew on. We flush in batches to cut the per-turn sub2api request count
+    // — each chat used to spawn (1 stream + 1 embed + 1 extract); now it's
+    // (1 stream + 1 embed) most turns and (+1 extract) only every Nth turn.
+    private final Map<UUID, List<String>> pending = new ConcurrentHashMap<>();
+
     public MemoryExtractor(List<ChatClient> chatClients,
                            EmbeddingService embeddingService,
                            InternalChatFeignClient chatFeign,
@@ -50,22 +59,48 @@ public class MemoryExtractor {
     }
 
     /**
-     * Schedule async fact extraction. Returns immediately; failure is silent.
+     * Buffer a turn for batched extraction. Once {@code factBatchSize} turns
+     * have accumulated for a session, drains them and runs the extractor LLM
+     * once over the whole batch.
+     *
+     * <p>Open issue: turns left in the buffer when the user walks away never
+     * get extracted — memory is best-effort, so we tolerate this. A scheduled
+     * idle-flush could close the gap later.
      */
     public void extractAsync(UUID userId, UUID sessionId, String userMsg, String assistantMsg) {
         if (chatClients == null || chatClients.isEmpty()) return;
-        if (userId == null) return;
+        if (userId == null || sessionId == null) return;
         if ((userMsg == null || userMsg.isBlank()) && (assistantMsg == null || assistantMsg.isBlank())) return;
-        chatExecutor.execute(() -> runExtraction(userId, sessionId, safe(userMsg), safe(assistantMsg)));
+
+        int batchSize = props.agent().memory().factBatchSize();
+        String turn = "USER: %s\nASSISTANT: %s".formatted(safe(userMsg), safe(assistantMsg));
+
+        List<String> drained = null;
+        synchronized (pending) {
+            List<String> list = pending.computeIfAbsent(sessionId, k -> new ArrayList<>());
+            list.add(turn);
+            if (list.size() >= batchSize) {
+                drained = new ArrayList<>(list);
+                pending.remove(sessionId);
+            }
+        }
+        if (drained != null) {
+            List<String> batch = drained;
+            chatExecutor.execute(() -> runExtractionBatch(userId, sessionId, batch));
+        }
     }
 
-    private void runExtraction(UUID userId, UUID sessionId, String userMsg, String assistantMsg) {
+    private void runExtractionBatch(UUID userId, UUID sessionId, List<String> turns) {
         try {
+            StringBuilder body = new StringBuilder();
+            for (int i = 0; i < turns.size(); i++) {
+                body.append("Exchange ").append(i + 1).append(":\n").append(turns.get(i)).append("\n\n");
+            }
             String prompt = """
-                    You analyse one (user, assistant) exchange and extract durable user-specific
-                    facts, preferences, or rules worth remembering for future conversations.
-                    Skip transient details (one-off questions, generic advice). Output a JSON
-                    array, e.g.
+                    Below are %d recent (USER, ASSISTANT) exchanges from the same conversation.
+                    Across all of them, extract durable user-specific facts, preferences, or
+                    rules worth remembering for future conversations. Combine related observations
+                    where it makes sense; skip transient one-off details. Output a JSON array, e.g.
                     [
                       {"kind":"preference","content":"用户喜欢简短中文回答"},
                       {"kind":"fact","content":"用户的小狗叫旺财"}
@@ -74,9 +109,8 @@ public class MemoryExtractor {
                     If nothing worth remembering, output [] exactly.
                     Output ONLY the JSON array, no prose, no code fence.
 
-                    USER: %s
-                    ASSISTANT: %s
-                    """.formatted(userMsg, assistantMsg);
+                    %s
+                    """.formatted(turns.size(), body.toString());
 
             String reply = chatClients.get(0).prompt().user(prompt).call().content();
             if (reply == null) return;
@@ -105,10 +139,11 @@ public class MemoryExtractor {
                 }
             }
             if (saved > 0) {
-                log.info("[memory-extract] saved {} fact(s) for user {} session {}", saved, userId, sessionId);
+                log.info("[memory-extract] saved {} fact(s) for user {} session {} (batch of {} turns)",
+                        saved, userId, sessionId, turns.size());
             }
         } catch (Exception ex) {
-            log.warn("[memory-extract] extraction failed for user {}: {}", userId, ex.getMessage());
+            log.warn("[memory-extract] batch extraction failed for user {}: {}", userId, ex.getMessage());
         }
     }
 

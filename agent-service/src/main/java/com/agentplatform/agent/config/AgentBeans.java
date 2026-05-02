@@ -6,7 +6,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.anthropic.api.AnthropicApi;
+import org.springframework.ai.anthropic.api.AnthropicCacheOptions;
+import org.springframework.ai.anthropic.api.AnthropicCacheStrategy;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
@@ -42,7 +45,9 @@ public class AgentBeans {
      * falls back to its mock LLM path in that case.
      */
     @Bean
-    public ChatClient singleProviderChatClient(ObjectProvider<ChatModel> chatModelProvider, Environment env) {
+    public ChatClient singleProviderChatClient(ObjectProvider<ChatModel> chatModelProvider,
+                                               Environment env,
+                                               AgentProperties props) {
         String apiKey = env.getProperty("spring.ai.anthropic.api-key", "");
         if (apiKey.isBlank() || apiKey.contains("PLACEHOLDER")) {
             log.warn("[agent] ANTHROPIC_API_KEY missing/placeholder — singleProviderChatClient=null (mock LLM fallback)");
@@ -59,14 +64,17 @@ public class AgentBeans {
         // explicitly construct the default options ourselves to keep it null.
         String modelName = env.getProperty("spring.ai.anthropic.chat.options.model", "claude-opus-4-7");
         Integer maxTokens = Integer.valueOf(env.getProperty("spring.ai.anthropic.chat.options.max-tokens", "4096"));
+        boolean cacheOn = Boolean.TRUE.equals(props.agent().memory().enablePromptCache());
         AnthropicChatOptions options = AnthropicChatOptions.builder()
                 .model(modelName)
                 .maxTokens(maxTokens)
                 .temperature(null)   // Opus 4.7 rejects the param outright; force serialiser to omit it
                 .topK(null)
                 .topP(null)
+                .cacheOptions(cacheOn ? buildSystemCacheOptions() : AnthropicCacheOptions.DISABLED)
                 .build();
-        log.info("[agent] singleProviderChatClient ready (model={}, maxTokens={})", modelName, maxTokens);
+        log.info("[agent] singleProviderChatClient ready (model={}, maxTokens={}, promptCache={})",
+                modelName, maxTokens, cacheOn);
         return ChatClient.builder(model).defaultOptions(options).build();
     }
 
@@ -95,6 +103,7 @@ public class AgentBeans {
     public List<ChatClient> chatClients(AgentProperties props,
                                         ObjectProvider<ChatClient> singleProvider) {
         List<AgentProperties.Provider> configured = props.agent().providers();
+        boolean cacheOn = Boolean.TRUE.equals(props.agent().memory().enablePromptCache());
         List<ChatClient> out = new ArrayList<>();
         if (configured != null) {
             for (AgentProperties.Provider p : configured) {
@@ -107,10 +116,10 @@ public class AgentBeans {
                 switch (kind) {
                     case "anthropic-messages" -> {
                         try {
-                            ChatClient cc = buildAnthropicClient(p);
+                            ChatClient cc = buildAnthropicClient(p, cacheOn);
                             out.add(cc);
-                            log.info("[agent] provider '{}' ready: kind=anthropic-messages model={} baseUrl={}",
-                                    p.name(), p.model(), p.baseUrl());
+                            log.info("[agent] provider '{}' ready: kind=anthropic-messages model={} baseUrl={} promptCache={}",
+                                    p.name(), p.model(), p.baseUrl(), cacheOn);
                         } catch (RuntimeException ex) {
                             log.warn("[agent] provider '{}' build failed: {}; skipping", p.name(), ex.getMessage());
                         }
@@ -139,8 +148,14 @@ public class AgentBeans {
      * provider gets its own AnthropicApi (own baseUrl + apiKey) so the pool
      * can mix sub2api proxies, the official Anthropic API, and a self-hosted
      * relay without state crossover.
+     *
+     * <p>When {@code cacheOn} is true, the resulting options carry a SYSTEM_ONLY
+     * cache config with multi-block system caching enabled — ChatService is
+     * expected to feed the prompt as multiple SystemMessages (stable head first,
+     * volatile RAG context routed to the user message instead) so only the
+     * stable head consumes a breakpoint.
      */
-    private static ChatClient buildAnthropicClient(AgentProperties.Provider p) {
+    private static ChatClient buildAnthropicClient(AgentProperties.Provider p, boolean cacheOn) {
         AnthropicApi api = AnthropicApi.builder()
                 .baseUrl(p.baseUrl() == null || p.baseUrl().isBlank() ? "https://api.anthropic.com" : p.baseUrl())
                 .apiKey(p.apiKey())
@@ -151,12 +166,34 @@ public class AgentBeans {
                 .temperature(null)
                 .topK(null)
                 .topP(null)
+                .cacheOptions(cacheOn ? buildSystemCacheOptions() : AnthropicCacheOptions.DISABLED)
                 .build();
         AnthropicChatModel model = AnthropicChatModel.builder()
                 .anthropicApi(api)
                 .defaultOptions(options)
                 .build();
         return ChatClient.builder(model).defaultOptions(options).build();
+    }
+
+    /**
+     * Cache config for the system prompt: SYSTEM_ONLY strategy + multi-block
+     * caching, so that {@link com.agentplatform.agent.chat.ChatService} can
+     * split the system prompt into a stable head SystemMessage (gets the
+     * breakpoint) and the volatile RAG memory block flows through the user
+     * message (no breakpoint, never poisons the cached prefix).
+     *
+     * <p>{@code minContentLength=1024} matches Anthropic's hard floor for
+     * Sonnet/Opus — anything shorter than 1024 chars is below the model's
+     * cache floor anyway, so we'd waste a breakpoint on something the API
+     * wouldn't cache. Our stable head sits around 4500 chars so this passes.
+     * (Tools array is intentionally NOT cached — device tools are dynamic.)
+     */
+    private static AnthropicCacheOptions buildSystemCacheOptions() {
+        return AnthropicCacheOptions.builder()
+                .strategy(AnthropicCacheStrategy.SYSTEM_ONLY)
+                .messageTypeMinContentLength(MessageType.SYSTEM, 1024)
+                .multiBlockSystemCaching(true)
+                .build();
     }
 
     /**

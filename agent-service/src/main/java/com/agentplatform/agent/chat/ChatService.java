@@ -32,7 +32,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
@@ -170,6 +174,19 @@ public class ChatService {
         }
 
         // ---- Prompt assembly: layered persona + prefs + skills + memory ----
+        //
+        // PR-cache layout — split the system prompt into a STABLE HEAD that
+        // survives across requests (persona + user prefs + skill index) and
+        // route the per-request RAG memory block onto the user message. Why?
+        // Spring AI's SYSTEM_ONLY cache strategy with multiBlockSystemCaching
+        // walks every system block and resolves a cache_control breakpoint
+        // for each one that meets the size floor. If memories sat in system,
+        // a long memory recall would consume a 2nd breakpoint AND its content
+        // changes every turn, causing repeated cache_creation churn. Putting
+        // memories into the user-side keeps the system prefix bit-identical
+        // for repeat hits, and the user message was never going to be cached
+        // anyway. The [UNTRUSTED] markers carry over so the LLM still treats
+        // recalled facts as inert context, not instructions.
         PersonaBundle pb = personaLoader.getBundle();
         String userPrefs = loadUserPrefs(userId);
         String skillIndex = formatSkillIndex(skillRegistry.all());
@@ -183,10 +200,14 @@ public class ChatService {
         appendSection(sys, "TOOLS", pb.tools());
         appendSection(sys, "USER", userPrefs.isBlank() ? "(暂无用户偏好)" : userPrefs);
         appendSection(sys, "AVAILABLE SKILLS (call skill_load to load body)", skillIndex);
-        if (!memoryBlock.isBlank()) {
-            sys.append(memoryBlock);
-        }
-        String systemText = sys.toString();
+        String stableSystemText = sys.toString();
+
+        // Memories ride alongside the user message instead of in system, so
+        // the stable system prefix stays identical across calls and the
+        // ephemeral cache hits cleanly.
+        String userText = memoryBlock.isBlank()
+                ? req.message()
+                : memoryBlock + "\n" + req.message();
 
         // skill_load + device tools combined.
         List<ToolCallback> allTools = new ArrayList<>();
@@ -204,24 +225,42 @@ public class ChatService {
         // Provider failover — synchronous setup only. Once .stream().subscribe()
         // succeeds, subsequent async errors flow through doOnError below; we
         // do NOT switch providers mid-stream in v0 (TODO P2: reactor onErrorResume chain).
+        //
+        // Stream uses .chatResponse() instead of .content() so we can read the
+        // Anthropic Usage record (cache_creation_input_tokens / cache_read_input_tokens)
+        // off the final ChatResponseMetadata for cache observability — without
+        // it there's no way to confirm prompt caching actually fires.
+        long t0 = System.currentTimeMillis();
+        // Use single-element arrays to capture the final usage from the
+        // streaming pipeline — the trailing ChatResponse carries it.
+        final Usage[] lastUsage = new Usage[1];
         RuntimeException lastSetupError = null;
         boolean started = false;
         for (ChatClient cc : chatClients) {
             try {
                 cc.prompt()
-                        .system(systemText)
-                        .messages(history)
-                        .user(req.message())
+                        .messages(buildSystemMessages(stableSystemText, history))
+                        .user(userText)
                         .toolCallbacks(allTools.toArray(new ToolCallback[0]))
                         .toolContext(Map.of(
                                 ChatEventSink.KEY, sink,
                                 "userId", userId,
                                 "sessionId", sessionId))
                         .stream()
-                        .content()
-                        .doOnNext(chunk -> {
-                            textBuf.append(chunk);
-                            safeSend(emitter, SseEvent.assistantMessage(mapper, chunk));
+                        .chatResponse()
+                        .doOnNext(resp -> {
+                            String chunk = extractChunk(resp);
+                            if (chunk != null && !chunk.isEmpty()) {
+                                textBuf.append(chunk);
+                                safeSend(emitter, SseEvent.assistantMessage(mapper, chunk));
+                            }
+                            // Each streamed ChatResponse carries the cumulative
+                            // usage so far; keep the latest reference and log
+                            // once on complete (not per chunk — would spam).
+                            ChatResponseMetadata md = resp.getMetadata();
+                            if (md != null && md.getUsage() != null) {
+                                lastUsage[0] = md.getUsage();
+                            }
                         })
                         .doOnError(t -> {
                             log.warn("LLM stream error for user {}", userId, t);
@@ -231,6 +270,7 @@ public class ChatService {
                         .doOnComplete(() -> {
                             String fullReply = textBuf.toString();
                             persist(sessionId, userId, MessageRole.ASSISTANT, fullReply, null);
+                            logCacheUsage(userId, lastUsage[0], System.currentTimeMillis() - t0);
                             // B2: async fact extraction off the response path.
                             try {
                                 memoryExtractor.extractAsync(userId, sessionId, req.message(), fullReply);
@@ -330,7 +370,98 @@ public class ChatService {
         }
     }
 
+    /* -------------------- cache-observability helpers -------------------- */
+
+    /**
+     * Pull text content off a streaming ChatResponse chunk. Spring AI's
+     * AnthropicChatModel emits incremental AssistantMessage deltas; mid-tool-
+     * call frames have no text and we just skip them.
+     */
+    private static String extractChunk(ChatResponse resp) {
+        if (resp == null) return null;
+        var gen = resp.getResult();
+        if (gen == null) return null;
+        AssistantMessage am = gen.getOutput();
+        if (am == null) return null;
+        return am.getText();
+    }
+
+    /**
+     * Log the Anthropic prompt-cache stats for this turn. Pulls the native
+     * AnthropicApi.Usage off the Spring AI Usage wrapper so we can read the
+     * cache_creation_input_tokens / cache_read_input_tokens fields the
+     * standard Spring AI Usage interface doesn't expose.
+     *
+     * <p>Format chosen so a docker-logs grep on "promptCache user=" picks
+     * up exactly one line per request:
+     * <pre>{@code
+     * promptCache user=<uuid> cache_create=<N> cache_read=<M> input=<K> output=<P> dur=<T>ms
+     * }</pre>
+     * cache_read &gt; 0 ⇒ the ephemeral cache hit. cache_create &gt; 0 only on
+     * the first request (or after the 5-min TTL elapses) — a steady stream
+     * of subsequent calls within 5 min should show cache_create=0.
+     */
+    private static void logCacheUsage(UUID userId, Usage usage, long durMs) {
+        if (usage == null) {
+            log.info("promptCache user={} usage=unavailable dur={}ms", userId, durMs);
+            return;
+        }
+        Integer input = usage.getPromptTokens();
+        Integer output = usage.getCompletionTokens();
+        Integer create = null;
+        Integer read = null;
+        Object native_ = usage.getNativeUsage();
+        // Reflective unwrap rather than a hard import on AnthropicApi.Usage
+        // — keeps this code path safe to compile if a future provider returns
+        // a non-Anthropic Usage shape (e.g. when openai-responses lands).
+        if (native_ != null) {
+            try {
+                var cls = native_.getClass();
+                var m1 = cls.getMethod("cacheCreationInputTokens");
+                var m2 = cls.getMethod("cacheReadInputTokens");
+                Object cv = m1.invoke(native_);
+                Object rv = m2.invoke(native_);
+                if (cv instanceof Integer i) create = i;
+                if (rv instanceof Integer i) read = i;
+            } catch (NoSuchMethodException ignored) {
+                // Non-Anthropic provider — leave nulls, logged as 0.
+            } catch (ReflectiveOperationException e) {
+                log.debug("usage reflective unwrap failed: {}", e.getMessage());
+            }
+        }
+        log.info("promptCache user={} cache_create={} cache_read={} input={} output={} dur={}ms",
+                userId,
+                create == null ? 0 : create,
+                read == null ? 0 : read,
+                input == null ? 0 : input,
+                output == null ? 0 : output,
+                durMs);
+    }
+
     /* -------------------- prompt-assembly helpers -------------------- */
+
+    /**
+     * Builds the message list passed to ChatClient.prompt().messages(...).
+     * One SystemMessage at the head holds the cache-eligible stable prompt
+     * (persona + prefs + skills); history follows untouched. The current
+     * user message is added separately by the caller via .user(...).
+     *
+     * <p>Spring AI's AnthropicChatModel pulls all SYSTEM-typed messages out
+     * of this list and rebuilds them as Anthropic system content blocks; with
+     * multiBlockSystemCaching=true the final stable block carries the cache
+     * breakpoint. We could put memories in a 2nd SystemMessage but that would
+     * also be cache-eligible (every system block over the size floor consumes
+     * a breakpoint), which would defeat the optimization on every recall.
+     */
+    private static List<Message> buildSystemMessages(String stableSystemText, List<Message> history) {
+        List<Message> out = new ArrayList<>(history.size() + 1);
+        if (stableSystemText != null && !stableSystemText.isBlank()) {
+            out.add(new SystemMessage(stableSystemText));
+        }
+        out.addAll(history);
+        return out;
+    }
+
 
     /**
      * Appends a {@code # NAME\n\n<content>\n\n} section to {@code sb} iff

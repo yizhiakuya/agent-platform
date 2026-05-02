@@ -55,6 +55,11 @@ agent-platform:
       embeddingDim: ${MEMORY_EMBEDDING_DIM:1536}
       topK: ${MEMORY_TOP_K:5}
       factExtractorModel: ${MEMORY_FACT_MODEL:claude-haiku-4-5}
+      # Anthropic prompt-cache toggle. true (default) tags the stable head of
+      # the system prompt with cache_control: ephemeral for ~90% input-token
+      # discount on repeat calls within 5 min. Flip to false if a sub2api-style
+      # proxy strips the field or you hit unexpected cache misses.
+      enablePromptCache: ${AGENT_ENABLE_PROMPT_CACHE:true}
 
 logging:
   level:

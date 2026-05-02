@@ -33,7 +33,7 @@ public record AgentProperties(
     ) {
         public Agent {
             if (memory == null) {
-                memory = new Memory(null, 0, 0, null);
+                memory = new Memory(null, 0, 0, null, null, 0);
             }
         }
     }
@@ -52,12 +52,21 @@ public record AgentProperties(
 
     /**
      * Memory pipeline config. Defaults applied here so unset properties are safe.
+     *
+     * <p>{@code enablePromptCache} toggles the Anthropic prompt-cache optimization.
+     * When true, the stable head of the system prompt (persona + user prefs +
+     * skill index) gets a {@code cache_control: ephemeral} breakpoint so repeat
+     * requests inside the 5-minute TTL pay the cache-read price (10% of input)
+     * instead of full input tokens. Default true; flip off via env if a provider
+     * proxy doesn't pass cache_control fields through cleanly.
      */
     public record Memory(
             String embeddingModel,
             int embeddingDim,
             int topK,
-            String factExtractorModel
+            String factExtractorModel,
+            Boolean enablePromptCache,
+            int factBatchSize
     ) {
         public Memory {
             if (embeddingModel == null || embeddingModel.isBlank()) {
@@ -71,6 +80,16 @@ public record AgentProperties(
             }
             if (factExtractorModel == null || factExtractorModel.isBlank()) {
                 factExtractorModel = "claude-haiku-4-5";
+            }
+            if (enablePromptCache == null) {
+                enablePromptCache = Boolean.TRUE;
+            }
+            // 1 = no batching (legacy behavior). 3 = sweet spot for typical
+            // multi-turn chats — most sessions hit it, sub2api request count
+            // drops ~60%, with at most 2 dropped turns per session if the
+            // user walks away mid-batch (memory is best-effort anyway).
+            if (factBatchSize <= 0) {
+                factBatchSize = 3;
             }
         }
     }
