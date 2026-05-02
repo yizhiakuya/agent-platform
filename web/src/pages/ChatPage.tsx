@@ -1,24 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { streamChat } from '../api/sse';
-
-interface ChatEvent {
-  type: string;
-  data: any;
-}
+import { ChatEvent, useChatStore } from '../lib/chatStore';
 
 export default function ChatPage() {
-  const [input, setInput] = useState('');
-  const [events, setEvents] = useState<ChatEvent[]>([]);
-  const [busy, setBusy] = useState(false);
+  // Chat state lives in the store (App-level Provider above the route Outlet)
+  // so it survives ChatPage unmount when the user switches tabs. Only purely
+  // local UI bits (lightbox image, the WIP keystroke buffer for assistant
+  // chunks within a single send call) stay as plain useState here.
+  const {
+    events, setEvents,
+    busy, setBusy,
+    sessionId, setSessionId,
+    input, setInput,
+    abortRef, lastSentRef, sentEventsIdxRef,
+  } = useChatStore();
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  // Stash of the just-sent message so a Stop / ESC can put it back into the input.
-  const lastSentRef = useRef<string>('');
-  // Index where the just-sent user_message was pushed; used to truncate
-  // the in-flight events on cancel so the screen doesn't keep an orphan
-  // half-streamed assistant bubble.
-  const sentEventsIdxRef = useRef<number>(-1);
 
   function handleStop() {
     if (!busy) return;

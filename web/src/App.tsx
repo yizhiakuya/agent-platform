@@ -3,6 +3,7 @@ import LoginPage from './pages/LoginPage';
 import DevicesPage from './pages/DevicesPage';
 import ChatPage from './pages/ChatPage';
 import SettingsPage from './pages/SettingsPage';
+import { ChatStoreProvider } from './lib/chatStore';
 import { isAuthed, setToken } from './lib/auth';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -37,7 +38,13 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route element={<RequireAuth><Shell /></RequireAuth>}>
+      <Route element={
+        <RequireAuth>
+          <ChatStoreProvider>
+            <Shell />
+          </ChatStoreProvider>
+        </RequireAuth>
+      }>
         <Route path="/devices" element={<DevicesPage />} />
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/settings" element={<SettingsPage />} />
