@@ -25,13 +25,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.agentplatform.android.data.AppPrefs
 import com.agentplatform.android.service.AgentForegroundService
 
@@ -44,19 +51,40 @@ import com.agentplatform.android.service.AgentForegroundService
 fun BoundScreen(prefs: AppPrefs, onUnbind: () -> Unit) {
     val ctx = LocalContext.current
     val status by AgentForegroundService.status.collectAsState()
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-    val notifGranted = if (Build.VERSION.SDK_INT >= 33) {
-        ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) ==
-                PackageManager.PERMISSION_GRANTED
-    } else true
-    val photosGranted = if (Build.VERSION.SDK_INT >= 33) {
-        ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_MEDIA_IMAGES) ==
-                PackageManager.PERMISSION_GRANTED
-    } else true
-    val videosGranted = if (Build.VERSION.SDK_INT >= 33) {
-        ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_MEDIA_VIDEO) ==
-                PackageManager.PERMISSION_GRANTED
-    } else true
+    fun isGranted(perm: String): Boolean =
+        ContextCompat.checkSelfPermission(ctx, perm) == PackageManager.PERMISSION_GRANTED
+
+    fun checkNotif() = if (Build.VERSION.SDK_INT >= 33) isGranted(Manifest.permission.POST_NOTIFICATIONS) else true
+    fun checkPhotos() = if (Build.VERSION.SDK_INT >= 33) isGranted(Manifest.permission.READ_MEDIA_IMAGES) else true
+    // MIUI / HyperOS 把"照片和视频"合并成一个系统权限项,授权后通常两边都给,
+    // 但有时只给 READ_MEDIA_VISUAL_USER_SELECTED(部分访问,Android 14+)。
+    // 任一覆盖到视频的权限存在就算给了。
+    fun checkVideos(): Boolean {
+        if (Build.VERSION.SDK_INT < 33) return true
+        if (isGranted(Manifest.permission.READ_MEDIA_VIDEO)) return true
+        if (Build.VERSION.SDK_INT >= 34 && isGranted("android.permission.READ_MEDIA_VISUAL_USER_SELECTED")) return true
+        return false
+    }
+
+    var notifGranted by remember { mutableStateOf(checkNotif()) }
+    var photosGranted by remember { mutableStateOf(checkPhotos()) }
+    var videosGranted by remember { mutableStateOf(checkVideos()) }
+
+    // 用户从系统设置改完权限切回 app 时,Compose 默认不会重新检查 —
+    // 监听 ON_RESUME 重算这三个状态,UI 自动重渲染。
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notifGranted = checkNotif()
+                photosGranted = checkPhotos()
+                videosGranted = checkVideos()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Column(
         modifier = Modifier
