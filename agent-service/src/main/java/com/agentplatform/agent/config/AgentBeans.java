@@ -17,6 +17,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.env.Environment;
+import org.springframework.retry.backoff.ExponentialBackOffPolicy;
+import org.springframework.retry.policy.SimpleRetryPolicy;
+import org.springframework.retry.support.RetryTemplate;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -171,6 +174,12 @@ public class AgentBeans {
         AnthropicChatModel model = AnthropicChatModel.builder()
                 .anthropicApi(api)
                 .defaultOptions(options)
+                // Spring AI 1.x default RetryTemplate is maxAttempts=10 with
+                // exponential backoff — a single transient 5xx or timeout
+                // explodes into up to 10 sub2api hits and 10 billing rows.
+                // Cap at 2 attempts (1 retry, ~500ms backoff): covers brief
+                // network blips without flooding the upstream relay.
+                .retryTemplate(restrainedRetryTemplate())
                 .build();
         return ChatClient.builder(model).defaultOptions(options).build();
     }
@@ -194,6 +203,25 @@ public class AgentBeans {
                 .messageTypeMinContentLength(MessageType.SYSTEM, 1024)
                 .multiBlockSystemCaching(true)
                 .build();
+    }
+
+    /**
+     * 2-attempt retry policy: caps the upstream blast radius when sub2api or
+     * Anthropic flakes. Backoff starts at 500ms and stops fast; we'd rather
+     * surface a fast error to the user than rack up 10 billing rows for one
+     * bad request.
+     */
+    private static RetryTemplate restrainedRetryTemplate() {
+        SimpleRetryPolicy policy = new SimpleRetryPolicy();
+        policy.setMaxAttempts(2);
+        ExponentialBackOffPolicy backoff = new ExponentialBackOffPolicy();
+        backoff.setInitialInterval(500);
+        backoff.setMultiplier(2.0);
+        backoff.setMaxInterval(2_000);
+        RetryTemplate t = new RetryTemplate();
+        t.setRetryPolicy(policy);
+        t.setBackOffPolicy(backoff);
+        return t;
     }
 
     /**
