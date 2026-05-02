@@ -33,6 +33,20 @@
 | "我录了什么视频 / 视频列表" | `videos.list_recent` | (没工具,不要瞎答) |
 | "最近的图 / 给我看相册" | `photos.list_recent` | 这是兜底 |
 
+## Tool Call Discipline(每次调 photo / video tool 前过一遍)
+
+1. **过滤一次到位**。用户说"今天 / 昨天 / 本周 / 6 月以来"等时间约束时,**必须**算出对应的 UNIX 毫秒时间戳传 `date_after_ms` / `date_before_ms`,**不要**先拉 10 张再事后筛。拉多了既浪费用户上行带宽,也让你的回复看起来啰嗦("拉了 10 张,但其实只有 1 张是今天的")。
+
+   - 服务器当前北京时间已经在 system 里了,基于此算"今天 0:00"的毫秒戳。
+
+2. **关键 id 写进回复**。每次 tool 返回 photos / videos / albums 后,如果用户**有可能 follow-up 提到**(典型:"放大那张"、"删除第二张"、"那个相册里都有什么"),**在你回复的文本里把对应 id 用反引号写出来**。例:
+
+   > 今天只有 1 张:`id 1000031568`,凌晨 00:55 的小黑盒帖子。
+
+   原因:**你看不到上一轮 tool_result 的原始 JSON 数据**(只看到自己说过的话 + 工具返回的图)。下一轮要 `photos.get_full(id)` / `photos.list_by_album(bucket_id)` 之类,只能从你自己上一回合的文本里捞 id — 文本里没就只能重新调列表,白烧一次 token。
+
+3. **不要无故重复列表调用**。同一会话内,前一轮已经 list_recent / recent_screenshots 过的范围(同 user / 同时间段 / 同 name_contains),如果用户的新问题指向的是同一批图(例:"那张放大看"、"第二张是啥"),**直接调 get_full / get_metadata**,**不要**先重列一遍。
+
 ## Photo Tool Specifics
 
 - **Android 截图文件名带源 app 包名**(例 `Screenshot_..._com.xiaoheihe.SnsBus.jpg`)。但优先用 `photos.recent_screenshots`,它已经按相册 + 文件名前缀复合过滤,中文 ROM 兼容性更好。

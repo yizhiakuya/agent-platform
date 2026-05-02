@@ -202,6 +202,11 @@ public class ChatService {
         appendSection(sys, "TOOLS", pb.tools());
         appendSection(sys, "USER", userPrefs.isBlank() ? "(暂无用户偏好)" : userPrefs);
         appendSection(sys, "AVAILABLE SKILLS (call skill_load to load body)", skillIndex);
+        // Time block lives in stable system head — Claude's prompt cache
+        // tolerates a few minutes of drift; we log the request time so
+        // any "today / yesterday / last week" reasoning has a real anchor
+        // and the LLM can compute date_after_ms accurately for tool calls.
+        appendSection(sys, "CURRENT TIME", buildCurrentTimeBlock());
         String stableSystemText = sys.toString();
 
         // Memories ride alongside the user message instead of in system, so
@@ -492,6 +497,26 @@ public class ChatService {
     private static void appendSection(StringBuilder sb, String name, String content) {
         if (content == null || content.isBlank()) return;
         sb.append("# ").append(name).append("\n\n").append(content.trim()).append("\n\n");
+    }
+
+    /**
+     * Render "now" in three forms the LLM commonly needs when computing
+     * filter timestamps for tools: human-readable Asia/Shanghai, current
+     * date floor as UNIX millis, and tomorrow date floor as UNIX millis
+     * (so "today" → [todayStartMs, tomorrowStartMs)).
+     */
+    private static String buildCurrentTimeBlock() {
+        java.time.ZoneId tz = java.time.ZoneId.of("Asia/Shanghai");
+        java.time.ZonedDateTime now = java.time.ZonedDateTime.now(tz);
+        java.time.ZonedDateTime todayStart = now.toLocalDate().atStartOfDay(tz);
+        java.time.ZonedDateTime tomorrowStart = todayStart.plusDays(1);
+        java.time.format.DateTimeFormatter fmt = java.time.format.DateTimeFormatter
+                .ofPattern("yyyy-MM-dd HH:mm:ss EEEE z");
+        return "Now: " + now.format(fmt)
+                + "\nToday 00:00 (Asia/Shanghai) ms: " + todayStart.toInstant().toEpochMilli()
+                + "\nTomorrow 00:00 (Asia/Shanghai) ms: " + tomorrowStart.toInstant().toEpochMilli()
+                + "\n\nUse these for `date_after_ms` / `date_before_ms` when the user says"
+                + " 'today / yesterday / last week / this month'. Do not hallucinate timestamps.";
     }
 
     private String loadUserPrefs(UUID userId) {
