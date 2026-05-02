@@ -1,0 +1,35 @@
+# Universal multi-stage Dockerfile for any Spring Boot service in this repo.
+# Pass the module name via the SERVICE build arg.
+#
+#   docker build --build-arg SERVICE=auth-service -f Dockerfile.spring -t agent/auth .
+#
+# docker-compose.yml wires this up automatically — see the build: blocks there.
+
+FROM eclipse-temurin:21-jdk-alpine AS build
+ARG SERVICE
+WORKDIR /app
+
+# Copy build descriptors first so we can prime the dep cache without invalidating
+# it on every source change.
+COPY mvnw mvnw.cmd ./
+COPY .mvn ./.mvn
+COPY pom.xml ./
+COPY common ./common
+COPY auth-service/pom.xml          ./auth-service/pom.xml
+COPY gateway/pom.xml                ./gateway/pom.xml
+COPY device-hub-service/pom.xml     ./device-hub-service/pom.xml
+COPY agent-service/pom.xml          ./agent-service/pom.xml
+COPY chat-service/pom.xml           ./chat-service/pom.xml
+RUN chmod +x mvnw && ./mvnw -B -pl ${SERVICE} -am dependency:resolve -DskipTests || true
+
+# Now bring the actual sources in and build the requested module
+COPY ${SERVICE} ./${SERVICE}
+RUN ./mvnw -B -pl ${SERVICE} -am package -DskipTests
+
+# Stage 2: thin runtime layer
+FROM eclipse-temurin:21-jre-alpine
+ARG SERVICE
+WORKDIR /app
+RUN apk add --no-cache curl
+COPY --from=build /app/${SERVICE}/target/*.jar /app/app.jar
+ENTRYPOINT ["java", "-XX:+UseG1GC", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]

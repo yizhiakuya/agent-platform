@@ -1,0 +1,55 @@
+server:
+  port: ${SERVER_PORT:8081}
+
+spring:
+  application:
+    name: auth-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:agent_platform}?currentSchema=auth
+    username: ${AUTH_DB_USER:agent_auth}
+    password: ${AUTH_DB_PASSWORD:auth_changeme}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: auth
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+    open-in-view: false
+  flyway:
+    enabled: true
+    schemas: auth
+    default-schema: auth
+    create-schemas: false           # schema is created by infra/postgres/init/01-init.sh
+    locations: classpath:db/migration
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        register-enabled: ${NACOS_REGISTER:true}
+
+agent-platform:
+  jwt:
+    # Dev fallback — decoded value is 50 bytes of "dev-only-..." text. NEVER use in production.
+    # Override via JWT_SECRET env var (must be base64, >= 32 raw bytes).
+    secret: ${JWT_SECRET:ZGV2LW9ubHktZG8tbm90LXVzZS1pbi1wcm9kdWN0aW9uLWRldi1vbmx5LWRldi1lbnY=}
+    issuer: agent-platform
+    user-token-ttl-hours: ${JWT_USER_TOKEN_TTL_HOURS:24}
+    device-token-ttl-days: ${JWT_DEVICE_TOKEN_TTL_DAYS:365}
+  enrollment:
+    ttl-minutes: ${ENROLLMENT_TTL_MINUTES:15}
+  public-url: ${SERVER_PUBLIC_URL:http://localhost:8080}
+
+logging:
+  level:
+    root: INFO
+    com.agentplatform: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized

@@ -1,0 +1,21 @@
+spring:
+  cloud:
+    nacos:
+      discovery:
+        register-enabled: false
+        watch:
+          enabled: false
+  main:
+    allow-bean-definition-overriding: true
+
+agent-platform:
+  jwt:
+    # 64-byte zero base64 — only valid for tests
+    secret: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+    issuer: agent-platform
+  hub:
+    tool-call-timeout-ms: 30000
+    mock-mode: true
+    mock-fake-latency-ms: 50
+    ws-allowed-origins: ['*']
+    ws-heartbeat-interval-ms: 60000

@@ -1,0 +1,74 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.project
+.classpath
+.settings/
+.factorypath
+.springBeans
+.sts4-cache
+.apt_generated
+.apt_generated_test
+
+# Spring Boot
+HELP.md
+
+# Node / Web
+node_modules/
+dist/
+build/
+.next/
+.cache/
+*.log
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/captures/
+*.apk
+*.aab
+*.keystore
+!debug.keystore
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Env / Secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Logs
+logs/
+*.log
+
+# Docker volumes (if mounted to host)
+infra/data/
+
+# Local dev scratch / probes
+wstest.py
+wstest2.py
+*.bak
+*.bak-*
+.mvn/wrapper/maven-wrapper.jar
+
+# Plans (Claude Code session-local plan files,如果有人误置入此目录)
+.claude/plans/
+
+# Build artifacts at the parent
+*.tsbuildinfo

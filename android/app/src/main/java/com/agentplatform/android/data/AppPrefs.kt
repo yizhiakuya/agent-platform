@@ -1,0 +1,49 @@
+package com.agentplatform.android.data
+
+import android.content.Context
+
+/**
+ * Tiny SharedPreferences wrapper for the only state the device app needs:
+ * which server it's bound to and the long-lived device JWT issued by
+ * {@code POST /api/auth/redeem/{token}}.
+ *
+ * <p>For PR 13 we'll back this with EncryptedSharedPreferences (AndroidX
+ * Security) so the JWT isn't readable from a rooted device's filesystem.
+ */
+class AppPrefs(context: Context) {
+
+    private val prefs = context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
+
+    var serverUrl: String?
+        get() = prefs.getString(KEY_SERVER, null)
+        set(value) { prefs.edit().putString(KEY_SERVER, value).apply() }
+
+    var token: String?
+        get() = prefs.getString(KEY_TOKEN, null)
+        set(value) { prefs.edit().putString(KEY_TOKEN, value).apply() }
+
+    var deviceId: String?
+        get() = prefs.getString(KEY_DEVICE, null)
+        set(value) { prefs.edit().putString(KEY_DEVICE, value).apply() }
+
+    fun isBound(): Boolean = !serverUrl.isNullOrBlank() && !token.isNullOrBlank()
+
+    fun save(serverUrl: String, token: String, deviceId: String) {
+        prefs.edit()
+            .putString(KEY_SERVER, serverUrl)
+            .putString(KEY_TOKEN, token)
+            .putString(KEY_DEVICE, deviceId)
+            .apply()
+    }
+
+    fun clear() {
+        prefs.edit().clear().apply()
+    }
+
+    companion object {
+        private const val NAME = "agent.prefs"
+        private const val KEY_SERVER = "serverUrl"
+        private const val KEY_TOKEN = "token"
+        private const val KEY_DEVICE = "deviceId"
+    }
+}

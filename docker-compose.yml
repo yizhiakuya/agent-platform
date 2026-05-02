@@ -1,0 +1,207 @@
+# Agent Platform — full self-host stack.
+#
+# Quick start:
+#   1. cp .env.example .env       (and edit JWT_SECRET, ANTHROPIC_API_KEY, ...)
+#   2. docker compose up -d
+#   3. open http://localhost:3000
+#
+# Two profiles available:
+#   - default:    everything (infra + 5 spring services + web)
+#   - dev:        only postgres+nacos (use spring-boot:run from your IDE for code reload)
+
+name: agent-platform
+
+services:
+
+  # ───────────────────────── infrastructure ─────────────────────────
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agent-platform-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: agent_platform
+      POSTGRES_USER: ${POSTGRES_USER:-agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-auth_changeme}
+      CHAT_DB_PASSWORD: ${CHAT_DB_PASSWORD:-chat_changeme}
+      HUB_DB_PASSWORD: ${HUB_DB_PASSWORD:-hub_changeme}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nacos:
+    image: nacos/nacos-server:v2.5.0
+    container_name: agent-platform-nacos
+    restart: unless-stopped
+    environment:
+      MODE: standalone
+      PREFER_HOST_MODE: hostname
+      NACOS_AUTH_ENABLE: "${NACOS_AUTH_ENABLE:-false}"
+      NACOS_AUTH_TOKEN: ${NACOS_AUTH_TOKEN}
+      NACOS_AUTH_IDENTITY_KEY: ${NACOS_AUTH_IDENTITY_KEY:-serverIdentity}
+      NACOS_AUTH_IDENTITY_VALUE: ${NACOS_AUTH_IDENTITY_VALUE}
+      JVM_XMS: 512m
+      JVM_XMX: 512m
+      JVM_XMN: 256m
+    ports:
+      - "${NACOS_PORT:-8848}:8848"
+      - "${NACOS_GRPC_PORT:-9848}:9848"
+    volumes:
+      - nacos-data:/home/nacos/data
+      - nacos-logs:/home/nacos/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8848/nacos/v1/console/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ───────────────────────── application services ─────────────────────────
+
+  auth-service:
+    profiles: ["default"]
+    build:
+      context: .
+      dockerfile: Dockerfile.spring
+      args:
+        SERVICE: auth-service
+    container_name: agent-platform-auth
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      nacos:    { condition: service_healthy }
+    environment:
+      SERVER_PORT: 8081
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: agent_platform
+      AUTH_DB_USER: agent_auth
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+      NACOS_ADDR: nacos:8848
+      JWT_SECRET: ${JWT_SECRET}
+      SERVER_PUBLIC_URL: ${SERVER_PUBLIC_URL:-http://localhost:8080}
+    expose: ["8081"]
+
+  gateway:
+    profiles: ["default"]
+    build:
+      context: .
+      dockerfile: Dockerfile.spring
+      args:
+        SERVICE: gateway
+    container_name: agent-platform-gateway
+    restart: unless-stopped
+    depends_on:
+      nacos: { condition: service_healthy }
+    environment:
+      SERVER_PORT: 8080
+      NACOS_ADDR: nacos:8848
+      JWT_SECRET: ${JWT_SECRET}
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:3000}
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+
+  device-hub-service:
+    profiles: ["default"]
+    build:
+      context: .
+      dockerfile: Dockerfile.spring
+      args:
+        SERVICE: device-hub-service
+    container_name: agent-platform-hub
+    restart: unless-stopped
+    depends_on:
+      nacos: { condition: service_healthy }
+    environment:
+      SERVER_PORT: 8083
+      NACOS_ADDR: nacos:8848
+      JWT_SECRET: ${JWT_SECRET}
+      HUB_MOCK_MODE: ${HUB_MOCK_MODE:-true}
+    expose: ["8083"]
+
+  agent-service:
+    profiles: ["default"]
+    build:
+      context: .
+      dockerfile: Dockerfile.spring
+      args:
+        SERVICE: agent-service
+    container_name: agent-platform-agent
+    restart: unless-stopped
+    depends_on:
+      nacos: { condition: service_healthy }
+    environment:
+      SERVER_PORT: 8082
+      NACOS_ADDR: nacos:8848
+      JWT_SECRET: ${JWT_SECRET}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # Override to point at sub2api (cc.rainaki.top) or any Anthropic-compatible relay.
+      # Default https://api.anthropic.com when this env var isn't set.
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:-claude-sonnet-4-6}
+    expose: ["8082"]
+
+  chat-service:
+    profiles: ["default"]
+    build:
+      context: .
+      dockerfile: Dockerfile.spring
+      args:
+        SERVICE: chat-service
+    container_name: agent-platform-chat
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      nacos:    { condition: service_healthy }
+    environment:
+      SERVER_PORT: 8084
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: agent_platform
+      CHAT_DB_USER: agent_chat
+      CHAT_DB_PASSWORD: ${CHAT_DB_PASSWORD}
+      NACOS_ADDR: nacos:8848
+      JWT_SECRET: ${JWT_SECRET}
+    expose: ["8084"]
+
+  web:
+    profiles: ["default"]
+    build:
+      context: ./web
+    container_name: agent-platform-web
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    ports:
+      - "${WEB_PORT:-3000}:80"
+
+  caddy:
+    profiles: ["default"]
+    image: caddy:2-alpine
+    container_name: agent-platform-caddy
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infra/caddy/certs:/etc/caddy/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  postgres-data:
+  nacos-data:
+  nacos-logs:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Agent Platform</string>
+    <string name="enroll_title">绑定此设备</string>
+    <string name="enroll_server_url">服务器地址</string>
+    <string name="enroll_server_url_hint">https://agent.example.com</string>
+    <string name="enroll_token">绑定 Token</string>
+    <string name="enroll_token_hint">从网页端复制粘贴或扫描二维码</string>
+    <string name="enroll_device_name">设备名称</string>
+    <string name="enroll_device_name_default">phone</string>
+    <string name="enroll_submit">绑定</string>
+    <string name="fgs_running">Agent Platform 已连接</string>
+    <string name="fgs_offline">Agent Platform — 连接中…</string>
+</resources>

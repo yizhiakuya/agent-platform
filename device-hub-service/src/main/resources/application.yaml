@@ -1,0 +1,49 @@
+server:
+  port: ${SERVER_PORT:8083}
+
+spring:
+  application:
+    name: device-hub-service
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        register-enabled: ${NACOS_REGISTER:true}
+  mvc:
+    async:
+      # Async controllers (DeferredResult) need a generous timeout so they hit
+      # OUR timeout in PendingCallRegistry first, not Spring's safety net.
+      request-timeout: 60000
+
+agent-platform:
+  jwt:
+    # Same secret as auth-service / gateway use to sign device JWTs. WS handshake
+    # verifies the bearer locally rather than calling auth-service per connect.
+    secret: ${JWT_SECRET:ZGV2LW9ubHktZG8tbm90LXVzZS1pbi1wcm9kdWN0aW9uLWRldi1vbmx5LWRldi1lbnY=}
+    issuer: agent-platform
+  hub:
+    # Default tool-call timeout. Per-call override via InternalCallRequest.timeoutMs.
+    tool-call-timeout-ms: ${HUB_TOOL_TIMEOUT_MS:30000}
+    # When true, InternalToolController auto-provisions a MockDeviceSession for
+    # any unknown deviceId (so agent-service can run end-to-end without a real
+    # Android device). PR 6 keeps it ON so real WS + mock fallback co-exist.
+    # Set false in production once the Android app is the source of truth.
+    mock-mode: ${HUB_MOCK_MODE:true}
+    # MockDeviceSession sleeps this long before returning a fake result.
+    mock-fake-latency-ms: ${HUB_MOCK_LATENCY_MS:100}
+    # WebSocket Origin whitelist. Empty/missing = "*" (allow any). In prod
+    # set to the public web URL only.
+    ws-allowed-origins: ${HUB_WS_ALLOWED_ORIGINS:}
+    # Reserved for future heartbeat/idle disconnect logic.
+    ws-heartbeat-interval-ms: 60000
+
+logging:
+  level:
+    root: INFO
+    com.agentplatform: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

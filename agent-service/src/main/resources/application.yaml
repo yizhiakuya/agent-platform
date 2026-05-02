@@ -1,0 +1,75 @@
+server:
+  port: ${SERVER_PORT:8082}
+
+spring:
+  application:
+    name: agent-service
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        register-enabled: ${NACOS_REGISTER:true}
+  # Disable WebFlux's reactive web server — we use Spring MVC + WebClient as a
+  # plain HTTP client. spring-boot-starter-webflux is on the classpath but Web
+  # MVC takes precedence as long as we don't @EnableWebFlux.
+  main:
+    web-application-type: servlet
+  mvc:
+    async:
+      request-timeout: 600000   # 10 min — SSE streams can run long
+  ai:
+    anthropic:
+      # When this is empty/blank/PLACEHOLDER, ChatService falls back to the PR 7
+      # mock LLM path so the rest of the platform stays runnable.
+      api-key: ${ANTHROPIC_API_KEY:}
+      base-url: ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
+      chat:
+        options:
+          model: ${LLM_CHAT_MODEL:claude-sonnet-4-6}
+          max-tokens: 4096
+          # temperature removed — Opus 4.7 (reasoning model) rejects the param.
+
+agent-platform:
+  jwt:
+    secret: ${JWT_SECRET:ZGV2LW9ubHktZG8tbm90LXVzZS1pbi1wcm9kdWN0aW9uLWRldi1vbmx5LWRldi1lbnY=}
+    issuer: agent-platform
+  agent:
+    # PR 7: hard-coded tool the mock LLM always picks. PR 8 swaps in Spring AI.
+    mock-tool-name: ${AGENT_MOCK_TOOL:photos.list_recent}
+    mock-tool-args-json: ${AGENT_MOCK_TOOL_ARGS:{"limit":5}}
+    # Per-tool-call timeout when calling device-hub /internal/tools/call
+    tool-call-timeout-ms: ${AGENT_TOOL_TIMEOUT_MS:35000}
+    # Where to find device-hub (load-balanced via Nacos by service name)
+    hub-base-uri: lb://device-hub-service
+    # LLM provider pool. ChatService tries each in order, fails over to next on RuntimeException
+    # at the synchronous setup stage. Reuses ANTHROPIC_API_KEY/BASE_URL/LLM_CHAT_MODEL env vars
+    # so existing deployments stay drop-in compatible. v0 only honours kind=anthropic-messages.
+    providers:
+      - name: ${LLM_PRIMARY_NAME:primary-anthropic}
+        baseUrl: ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
+        apiKey: ${ANTHROPIC_API_KEY:}
+        model: ${LLM_CHAT_MODEL:claude-sonnet-4-6}
+        kind: anthropic-messages
+    memory:
+      embeddingModel: ${MEMORY_EMBEDDING_MODEL:text-embedding-3-small}
+      embeddingDim: ${MEMORY_EMBEDDING_DIM:1536}
+      topK: ${MEMORY_TOP_K:5}
+      factExtractorModel: ${MEMORY_FACT_MODEL:claude-haiku-4-5}
+
+logging:
+  level:
+    root: INFO
+    com.agentplatform: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  prometheus:
+    metrics:
+      export:
+        enabled: true

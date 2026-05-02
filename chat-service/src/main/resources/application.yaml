@@ -1,0 +1,49 @@
+server:
+  port: ${SERVER_PORT:8084}
+
+spring:
+  application:
+    name: chat-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:agent_platform}?currentSchema=chat
+    username: ${CHAT_DB_USER:agent_chat}
+    password: ${CHAT_DB_PASSWORD:chat_changeme}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: chat
+    open-in-view: false
+  flyway:
+    enabled: true
+    schemas: chat
+    default-schema: chat
+    create-schemas: false
+    locations: classpath:db/migration
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:localhost:8848}
+        register-enabled: ${NACOS_REGISTER:true}
+
+agent-platform:
+  jwt:
+    secret: ${JWT_SECRET:ZGV2LW9ubHktZG8tbm90LXVzZS1pbi1wcm9kdWN0aW9uLWRldi1vbmx5LWRldi1lbnY=}
+    issuer: agent-platform
+  chat:
+    # Truncate message bodies bigger than this on write (PII sanitiser).
+    max-content-bytes: ${CHAT_MAX_CONTENT_BYTES:10240}
+    # base64 fields longer than this in metadata are replaced with a placeholder.
+    redact-base64-over-bytes: ${CHAT_REDACT_BASE64_BYTES:4096}
+
+logging:
+  level:
+    root: INFO
+    com.agentplatform: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
