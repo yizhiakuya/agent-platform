@@ -17,9 +17,11 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Spring AI {@link ToolCallback} that maps a single device tool to a
@@ -211,25 +213,34 @@ public class RemoteToolCallback implements ToolCallback {
 
     @SuppressWarnings("unchecked")
     private void stashPendingImages(ToolContext ctx, List<PendingImage> imgs) {
-        Map<String, Object> shared = ctx.getContext();
-        if (shared == null) return;
-        Object existing = shared.get(PENDING_IMAGES_KEY);
-        List<PendingImage> bucket;
-        if (existing instanceof List<?> l) {
-            bucket = (List<PendingImage>) l;
-        } else {
-            bucket = new ArrayList<>();
-            try {
-                shared.put(PENDING_IMAGES_KEY, bucket);
-            } catch (UnsupportedOperationException ex) {
-                // Caller wired an immutable Map.of(...) — log once and bail.
-                // VisionAwareToolCallingManager will see no images and skip.
-                log.warn("ToolContext map is immutable — vision tool_result feature disabled for this call. "
-                        + "ChatService should pass a mutable Map (e.g. ConcurrentHashMap).");
-                return;
-            }
+        Map<String, Object> shared = ctx == null ? null : ctx.getContext();
+        // Spring AI 1.1.5 ToolContext.getContext() returns a Collections.unmodifiableMap
+        // wrapper, so even when ChatService passes in a ConcurrentHashMap
+        // we can't write through it. Use a static side-channel keyed on
+        // (userId, sessionId) which both RemoteToolCallback (writer) and
+        // VisionAwareToolCallingManager (reader) can read out of the same
+        // ToolContext. Within one chat turn the (user, session) pair is
+        // stable and the front-end blocks parallel sends, so collisions
+        // are not a concern.
+        String key = pendingKey(shared);
+        if (key == null) {
+            log.debug("no userId/sessionId in tool context — skipping vision stash");
+            return;
         }
-        bucket.addAll(imgs);
+        PENDING_BY_KEY
+                .computeIfAbsent(key, k -> Collections.synchronizedList(new ArrayList<>()))
+                .addAll(imgs);
+    }
+
+    /** Static side-channel for vision images, keyed by {@code userId:sessionId}. */
+    static final Map<String, List<PendingImage>> PENDING_BY_KEY = new ConcurrentHashMap<>();
+
+    static String pendingKey(Map<String, Object> ctx) {
+        if (ctx == null) return null;
+        Object u = ctx.get("userId");
+        Object s = ctx.get("sessionId");
+        if (u == null || s == null) return null;
+        return u + ":" + s;
     }
 
     /**

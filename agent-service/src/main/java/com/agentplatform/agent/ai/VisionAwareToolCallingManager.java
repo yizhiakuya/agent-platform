@@ -76,24 +76,17 @@ public class VisionAwareToolCallingManager implements ToolCallingManager {
     public ToolExecutionResult executeToolCalls(Prompt prompt, ChatResponse chatResponse) {
         ToolExecutionResult result = delegate.executeToolCalls(prompt, chatResponse);
 
-        // Pull pending images out of the shared tool-context. Both prompt
-        // options and the delegate's options carry the same map (Spring AI
-        // merges them in AnthropicChatModel.buildRequestPrompt before
-        // dispatching), so we look at the prompt's options first since
-        // that's the surface the user-facing ChatService set up.
+        // Pull pending images out of the static side-channel keyed on
+        // userId+sessionId — Spring AI's ToolContext.getContext() returns
+        // an unmodifiableMap so we can't shuttle data through it directly.
+        // Both writer (RemoteToolCallback) and reader (here) read the same
+        // userId/sessionId from the per-call ToolContext, so the key matches.
         Map<String, Object> ctx = extractToolContext(prompt);
-        if (ctx == null) return result;
+        String stashKey = RemoteToolCallback.pendingKey(ctx);
+        if (stashKey == null) return result;
 
-        Object raw = ctx.remove(RemoteToolCallback.PENDING_IMAGES_KEY);
-        if (!(raw instanceof List<?> rawList) || rawList.isEmpty()) {
-            return result;
-        }
-
-        List<RemoteToolCallback.PendingImage> imgs = new ArrayList<>(rawList.size());
-        for (Object o : rawList) {
-            if (o instanceof RemoteToolCallback.PendingImage pi) imgs.add(pi);
-        }
-        if (imgs.isEmpty()) return result;
+        List<RemoteToolCallback.PendingImage> imgs = RemoteToolCallback.PENDING_BY_KEY.remove(stashKey);
+        if (imgs == null || imgs.isEmpty()) return result;
 
         UserMessage visionMsg = buildVisionUserMessage(imgs);
         List<Message> history = new ArrayList<>(result.conversationHistory());

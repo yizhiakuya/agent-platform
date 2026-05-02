@@ -32,6 +32,10 @@ export async function streamChat(opts: ChatStreamOptions): Promise<void> {
     },
     body: JSON.stringify(body),
     signal,
+    // Keep streaming when the tab is backgrounded — without this the lib
+    // closes on visibilitychange=hidden and tries to reconnect on return,
+    // which on a POST endpoint means re-submitting the original body.
+    openWhenHidden: true,
     onmessage(ev) {
       try {
         const parsed = ev.data ? JSON.parse(ev.data) : null;
@@ -41,6 +45,9 @@ export async function streamChat(opts: ChatStreamOptions): Promise<void> {
       }
     },
     onclose() { onClose?.(); },
+    // Throwing from onerror disables fetchEventSource's automatic retry.
+    // Without this, transient network blips on background tabs would
+    // POST the user's message a second time.
     onerror(err) { onError?.(err); throw err; }
   });
 }
