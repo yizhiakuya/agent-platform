@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { streamChat } from '../api/sse';
 
 interface ChatEvent {
@@ -13,12 +13,48 @@ export default function ChatPage() {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Stash of the just-sent message so a Stop / ESC can put it back into the input.
+  const lastSentRef = useRef<string>('');
+  // Index where the just-sent user_message was pushed; used to truncate
+  // the in-flight events on cancel so the screen doesn't keep an orphan
+  // half-streamed assistant bubble.
+  const sentEventsIdxRef = useRef<number>(-1);
+
+  function handleStop() {
+    if (!busy) return;
+    abortRef.current?.abort();
+    // Put the message back into the input so the user can edit and resend.
+    if (lastSentRef.current && !input) setInput(lastSentRef.current);
+    // Drop the user_message + any partial assistant/tool events from this turn.
+    const cutoff = sentEventsIdxRef.current;
+    if (cutoff >= 0) setEvents(prev => prev.slice(0, cutoff));
+    setBusy(false);
+  }
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape' && busy) {
+        e.preventDefault();
+        handleStop();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
 
   async function send() {
     if (!input.trim() || busy) return;
     const message = input;
     setInput('');
+    lastSentRef.current = message;
     setBusy(true);
+    // Capture the index where this turn's events will start so handleStop
+    // can roll back to here.
+    setEvents(prev => {
+      sentEventsIdxRef.current = prev.length;
+      return prev;
+    });
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
@@ -93,15 +129,24 @@ export default function ChatPage() {
           type="text"
           value={input}
           onChange={e => setInput(e.target.value)}
-          placeholder="输入消息…"
+          placeholder={busy ? '生成中… 按 Esc 或点"停止"中断' : '输入消息…'}
           className="flex-1 border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
           disabled={busy}
         />
-        <button
-          type="submit"
-          disabled={busy || !input.trim()}
-          className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded"
-        >发送</button>
+        {busy ? (
+          <button
+            type="button"
+            onClick={handleStop}
+            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded"
+            title="按 Esc 也可中断"
+          >停止</button>
+        ) : (
+          <button
+            type="submit"
+            disabled={!input.trim()}
+            className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded"
+          >发送</button>
+        )}
       </form>
     </div>
   );

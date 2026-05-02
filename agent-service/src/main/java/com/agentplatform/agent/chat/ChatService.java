@@ -41,6 +41,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.Disposable;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -238,7 +239,7 @@ public class ChatService {
         boolean started = false;
         for (ChatClient cc : chatClients) {
             try {
-                cc.prompt()
+                Disposable disp = cc.prompt()
                         .messages(buildSystemMessages(stableSystemText, history))
                         .user(userText)
                         .toolCallbacks(allTools.toArray(new ToolCallback[0]))
@@ -280,6 +281,21 @@ public class ChatService {
                             emitter.complete();
                         })
                         .subscribe();
+
+                // Tie the reactor pipeline lifetime to the SSE emitter — when
+                // the client disconnects (browser closed, abort signal, fetch
+                // error, or normal completion), cancel the upstream LLM stream
+                // so we stop burning Anthropic tokens / running tool calls
+                // for an answer nobody's listening for.
+                Runnable cancel = () -> {
+                    if (!disp.isDisposed()) {
+                        log.info("emitter ended — disposing LLM stream for user {}", userId);
+                        disp.dispose();
+                    }
+                };
+                emitter.onCompletion(cancel);
+                emitter.onTimeout(cancel);
+                emitter.onError(t -> cancel.run());
                 started = true;
                 break;
             } catch (RuntimeException e) {
