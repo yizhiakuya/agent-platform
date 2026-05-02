@@ -270,7 +270,16 @@ public class AgentBeans {
 
     @Bean
     public WebClient hubWebClient(@LoadBalanced WebClient.Builder builder) {
-        return builder.build();
+        // Default Spring WebClient caps in-memory response decode at 256KB,
+        // which trips the moment a tool returns a high-res image (vision_b64
+        // alone is ~300-500KB at 2048px). Bump to 16MB — covers a single
+        // 5MB-base64 image plus headroom; anything bigger should already be
+        // going through the side-channel upload endpoint.
+        return builder
+                .exchangeStrategies(org.springframework.web.reactive.function.client.ExchangeStrategies.builder()
+                        .codecs(c -> c.defaultCodecs().maxInMemorySize(16 * 1024 * 1024))
+                        .build())
+                .build();
     }
 
     /**
