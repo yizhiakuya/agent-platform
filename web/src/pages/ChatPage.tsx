@@ -198,29 +198,114 @@ function ToolResult({ tool, result, onOpenImage }: {
   result: any;
   onOpenImage: OpenImage;
 }) {
-  // Special-case photo results so we render thumbnails instead of raw JSON.
-  if (tool === 'photos.list_recent' && Array.isArray(result?.photos)) {
+  // Photo list-style tools all return { photos: [{id, name, thumb_b64, ...}] }
+  if (Array.isArray(result?.photos) &&
+      (tool === 'photos.list_recent' ||
+       tool === 'photos.list_by_album' ||
+       tool === 'photos.recent_screenshots')) {
+    return <ThumbGrid items={result.photos} onOpenImage={onOpenImage} />;
+  }
+
+  // Single full-resolution image (photos.get_full).
+  // The tool returns both vision_b64 (high-res, for LLM) and thumb_b64
+  // (256px, cheap). Prefer vision_b64 here so the user can actually see
+  // detail when they click to zoom; fall back to thumb if vision is missing.
+  if (tool === 'photos.get_full' && (result?.vision_b64 || result?.thumb_b64)) {
+    const big = result.vision_b64 ? `data:image/jpeg;base64,${result.vision_b64}` : null;
+    const small = result.thumb_b64 ? `data:image/jpeg;base64,${result.thumb_b64}` : big;
+    const w = result.vision_width ?? result.source_width;
+    const h = result.vision_height ?? result.source_height;
     return (
-      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-        {result.photos.map((p: any) => {
-          if (!p.thumb_b64) {
-            return <div key={p.id} className="w-full h-32 bg-slate-200 rounded text-xs flex items-center justify-center">{p.name}</div>;
-          }
-          const src = `data:image/jpeg;base64,${p.thumb_b64}`;
+      <div className="max-w-md">
+        <img src={small ?? ''} alt={result.name}
+             title={result.name}
+             onClick={() => big && onOpenImage(big)}
+             className="w-full max-h-96 object-contain rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+        <div className="text-xs text-slate-500 mt-1">
+          {result.name}{w && h ? ` · ${w}×${h}` : ''}
+        </div>
+      </div>
+    );
+  }
+
+  // Album grouping: { albums: [{bucket_id, name, photo_count, cover_thumb_b64}] }
+  if (tool === 'photos.list_albums' && Array.isArray(result?.albums)) {
+    return (
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {result.albums.map((a: any) => {
+          const src = a.cover_thumb_b64 ? `data:image/jpeg;base64,${a.cover_thumb_b64}` : null;
           return (
-            <img key={p.id} src={src} alt={p.name}
-                 title={p.name}
-                 onClick={() => onOpenImage(src)}
-                 className="w-full h-32 object-cover rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+            <div key={a.bucket_id} className="border rounded overflow-hidden">
+              {src ? (
+                <img src={src} alt={a.name}
+                     onClick={() => onOpenImage(src)}
+                     className="w-full h-32 object-cover cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+              ) : (
+                <div className="w-full h-32 bg-slate-200" />
+              )}
+              <div className="px-2 py-1 text-xs">
+                <div className="font-medium truncate" title={a.name}>{a.name}</div>
+                <div className="text-slate-500">{a.photo_count} 张</div>
+              </div>
+            </div>
           );
         })}
       </div>
     );
   }
+
+  // Videos: { videos: [{id, name, duration_ms, thumb_b64}] }
+  if (tool === 'videos.list_recent' && Array.isArray(result?.videos)) {
+    return (
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+        {result.videos.map((v: any) => {
+          const src = v.thumb_b64 ? `data:image/jpeg;base64,${v.thumb_b64}` : null;
+          const sec = v.duration_ms ? Math.round(v.duration_ms / 1000) : 0;
+          const m = Math.floor(sec / 60);
+          const s = sec % 60;
+          const dur = `${m}:${String(s).padStart(2, '0')}`;
+          return (
+            <div key={v.id} className="relative">
+              {src ? (
+                <img src={src} alt={v.name}
+                     title={v.name}
+                     onClick={() => onOpenImage(src)}
+                     className="w-full h-32 object-cover rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+              ) : (
+                <div className="w-full h-32 bg-slate-200 rounded" />
+              )}
+              <span className="absolute bottom-1 right-1 bg-black/70 text-white text-[10px] px-1 rounded">▶ {dur}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // Default: collapsed JSON for tools without dedicated rendering (metadata etc).
   return (
     <details className="text-xs text-slate-600">
       <summary>工具 {tool} 返回结果</summary>
       <pre className="mt-1 bg-slate-100 p-2 rounded overflow-x-auto">{JSON.stringify(result, null, 2)}</pre>
     </details>
+  );
+}
+
+function ThumbGrid({ items, onOpenImage }: { items: any[]; onOpenImage: OpenImage }) {
+  return (
+    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+      {items.map((p: any) => {
+        if (!p.thumb_b64) {
+          return <div key={p.id} className="w-full h-32 bg-slate-200 rounded text-xs flex items-center justify-center">{p.name}</div>;
+        }
+        const src = `data:image/jpeg;base64,${p.thumb_b64}`;
+        return (
+          <img key={p.id} src={src} alt={p.name}
+               title={p.name}
+               onClick={() => onOpenImage(src)}
+               className="w-full h-32 object-cover rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+        );
+      })}
+    </div>
   );
 }

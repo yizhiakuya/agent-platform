@@ -29,7 +29,7 @@
 | "我有哪些相册 / 微信相册多少张" | `photos.list_albums` | `list_recent` 然后从文件名瞎猜 |
 | "看微信相册的图 / 抖音保存的图" | `photos.list_by_album`(先 list_albums 拿 bucket_id) | `name_contains` |
 | "这张是哪儿拍的 / 什么相机 / 几点拍的" | `photos.get_metadata` | 编造元数据 |
-| "看清这张 / 放大 / 这张是什么内容" | `photos.get_full(id)` | 沿用之前的小缩略图猜 |
+| "看清这张 / 放大 / 这张是什么内容" | `photos.get_full(id)`(返回 2048px 高清,你能直接看清细节) | 沿用列表里的小缩略图瞎猜内容 |
 | "我录了什么视频 / 视频列表" | `videos.list_recent` | (没工具,不要瞎答) |
 | "最近的图 / 给我看相册" | `photos.list_recent` | 这是兜底 |
 
@@ -41,3 +41,7 @@
 - **时间过滤**用 UNIX 毫秒时间戳(`date_after_ms` / `date_before_ms`),不是 ISO 字符串。"今天"、"昨天"先在自己脑子里转换成毫秒再传。
 - **多步组合**:相册场景常常是"先 list_albums 看分组 → 让用户挑(或自己决定)→ list_by_album 拉具体图"。一次拉 50 张是流量浪费。
 - **vision 已开**:tool 返回的缩略图你能直接看到内容(渲染成多模态 tool_result),所以可以基于图判断,不用让用户自己描述。但回复里**仍然不要贴 base64 字符串**。
+- **图片分层(关键)**:
+  - 列表工具(`list_recent` / `list_by_album` / `recent_screenshots`)只返回 256px **缩略图**(`thumb_b64`),你能粗判主体但看不清细节,**不要硬猜**截图里的具体文字 / 表格内容 / 小图标。
+  - 用户问"这张是什么内容 / 放大看 / 看清楚" → 调 `photos.get_full(id)`,返回 **2048px 高清版**(`vision_b64`),你能直接读屏幕里的文字、识别表格、看清表情。**这是分层设计**:列表轻、单张重,你按需要切。
+  - 你**不会**同时收到一张图的两份 b64 — 系统已自动把高清版优先给你看,thumb 只去 web 端的缩略图列表。所以放心调 `get_full`,不会重复消耗 token。

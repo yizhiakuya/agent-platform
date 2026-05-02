@@ -246,6 +246,24 @@ public class RemoteToolCallback implements ToolCallback {
     private JsonNode stripB64ForLlmAndCollect(JsonNode node, String pathPrefix, List<PendingImage> out) {
         if (node instanceof ObjectNode obj) {
             ObjectNode copy = obj.objectNode();
+            // Layered b64 priority within ONE object: when a tool returns BOTH
+            // a high-resolution `vision_b64` (for the LLM to see clearly) and
+            // a small `thumb_b64` (for the web bubble), the LLM only needs the
+            // vision copy. Skip thumb_b64 collection in that case so we don't
+            // waste tokens / context on a duplicate at lower fidelity.
+            // The thumb_b64 is still placeholdered (so its bytes don't leak
+            // into the LLM as text) but not emitted as an image.
+            boolean hasVisionSibling = false;
+            for (java.util.Iterator<String> it = obj.fieldNames(); it.hasNext(); ) {
+                String fn = it.next();
+                JsonNode fv = obj.get(fn);
+                if (fn.endsWith("_b64") && fv != null && fv.isTextual()
+                        && fn.startsWith("vision") && !fv.asText().isEmpty()) {
+                    hasVisionSibling = true;
+                    break;
+                }
+            }
+            final boolean hasVision = hasVisionSibling;
             obj.fields().forEachRemaining(e -> {
                 String k = e.getKey();
                 String childPath = pathPrefix.isEmpty() ? k : pathPrefix + "." + k;
@@ -253,9 +271,14 @@ public class RemoteToolCallback implements ToolCallback {
                 if (k.endsWith("_b64") && v.isTextual()) {
                     String b64 = v.asText();
                     int len = b64.length();
-                    copy.put(k, "<binary " + len + "B attached as image; rendered to user>");
-                    if (len > 0 && len < 7_000_000) {  // Anthropic per-image cap ~5MB binary; b64 is ~4/3 of binary
+                    boolean isVision = k.startsWith("vision");
+                    boolean shouldCollect = len > 0 && len < 7_000_000   // Anthropic per-image cap ~5MB binary
+                            && (isVision || !hasVision);                  // skip thumb when vision sibling present
+                    if (shouldCollect) {
+                        copy.put(k, "<binary " + len + "B attached as image; rendered to user>");
                         out.add(new PendingImage(spec.name(), childPath, sniffMime(k, b64), b64));
+                    } else {
+                        copy.put(k, "<binary " + len + "B omitted; vision sibling preferred>");
                     }
                 } else {
                     copy.set(k, stripB64ForLlmAndCollect(v, childPath, out));
