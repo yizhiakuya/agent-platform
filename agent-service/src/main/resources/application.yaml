@@ -69,6 +69,12 @@ agent-platform:
       # Flip false to fall back to the legacy "<binary NB omitted>" stub —
       # use that for non-vision endpoints or cost-conscious deploys.
       enableVisionToolResults: ${AGENT_ENABLE_VISION_TOOL_RESULTS:true}
+      # Anthropic Extended Thinking budget (tokens). >= 1024 enables a hidden
+      # thinking content block — the model reasons internally before emitting
+      # any visible output, which structurally suppresses the "X… no, Y…
+      # actually Z" stream pattern. 0 disables. 2048 is a sane default for
+      # mostly Q&A; raise for heavy multi-step reasoning, lower to save cost.
+      thinkingBudgetTokens: ${AGENT_THINKING_BUDGET:2048}
 
 logging:
   level:

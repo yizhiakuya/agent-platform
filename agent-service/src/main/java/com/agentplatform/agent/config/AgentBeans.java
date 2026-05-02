@@ -111,6 +111,7 @@ public class AgentBeans {
         List<AgentProperties.Provider> configured = props.agent().providers();
         boolean cacheOn = Boolean.TRUE.equals(props.agent().memory().enablePromptCache());
         boolean visionOn = Boolean.TRUE.equals(props.agent().memory().enableVisionToolResults());
+        int thinkingBudget = props.agent().memory().thinkingBudgetTokens();
         List<ChatClient> out = new ArrayList<>();
         if (configured != null) {
             for (AgentProperties.Provider p : configured) {
@@ -123,10 +124,11 @@ public class AgentBeans {
                 switch (kind) {
                     case "anthropic-messages" -> {
                         try {
-                            ChatClient cc = buildAnthropicClient(p, cacheOn, visionOn);
+                            ChatClient cc = buildAnthropicClient(p, cacheOn, visionOn, thinkingBudget);
                             out.add(cc);
-                            log.info("[agent] provider '{}' ready: kind=anthropic-messages model={} baseUrl={} promptCache={} vision={}",
-                                    p.name(), p.model(), p.baseUrl(), cacheOn, visionOn);
+                            log.info("[agent] provider '{}' ready: kind=anthropic-messages model={} baseUrl={} promptCache={} vision={} thinking={}",
+                                    p.name(), p.model(), p.baseUrl(), cacheOn, visionOn,
+                                    thinkingBudget >= 1024 ? thinkingBudget + " tokens" : "off");
                         } catch (RuntimeException ex) {
                             log.warn("[agent] provider '{}' build failed: {}; skipping", p.name(), ex.getMessage());
                         }
@@ -162,19 +164,29 @@ public class AgentBeans {
      * volatile RAG context routed to the user message instead) so only the
      * stable head consumes a breakpoint.
      */
-    private static ChatClient buildAnthropicClient(AgentProperties.Provider p, boolean cacheOn, boolean visionOn) {
+    private static ChatClient buildAnthropicClient(AgentProperties.Provider p, boolean cacheOn, boolean visionOn,
+                                                   int thinkingBudgetTokens) {
         AnthropicApi api = AnthropicApi.builder()
                 .baseUrl(p.baseUrl() == null || p.baseUrl().isBlank() ? "https://api.anthropic.com" : p.baseUrl())
                 .apiKey(p.apiKey())
                 .build();
-        AnthropicChatOptions options = AnthropicChatOptions.builder()
+        // Extended Thinking moves the model's reasoning into a hidden
+        // thinking content block emitted before any visible output, which
+        // structurally prevents the "is X… no wait, Y… actually Z" stream
+        // pattern (the model thinks first, then writes the answer).
+        // budgetTokens=0 disables; sonnet/opus need >= 1024 when enabled.
+        // Ignored when budget is below the API's 1024-token floor or 0.
+        AnthropicChatOptions.Builder optsBuilder = AnthropicChatOptions.builder()
                 .model(p.model() == null || p.model().isBlank() ? "claude-sonnet-4-6" : p.model())
-                .maxTokens(4096)
+                .maxTokens(Math.max(4096, thinkingBudgetTokens + 2048))
                 .temperature(null)
                 .topK(null)
                 .topP(null)
-                .cacheOptions(cacheOn ? buildSystemCacheOptions() : AnthropicCacheOptions.DISABLED)
-                .build();
+                .cacheOptions(cacheOn ? buildSystemCacheOptions() : AnthropicCacheOptions.DISABLED);
+        if (thinkingBudgetTokens >= 1024) {
+            optsBuilder.thinking(AnthropicApi.ThinkingType.ENABLED, thinkingBudgetTokens);
+        }
+        AnthropicChatOptions options = optsBuilder.build();
         AnthropicChatModel.Builder builder = AnthropicChatModel.builder()
                 .anthropicApi(api)
                 .defaultOptions(options)

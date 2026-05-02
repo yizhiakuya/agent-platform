@@ -33,7 +33,7 @@ public record AgentProperties(
     ) {
         public Agent {
             if (memory == null) {
-                memory = new Memory(null, 0, 0, null, null, 0, null);
+                memory = new Memory(null, 0, 0, null, null, 0, null, 0);
             }
         }
     }
@@ -67,7 +67,8 @@ public record AgentProperties(
             String factExtractorModel,
             Boolean enablePromptCache,
             int factBatchSize,
-            Boolean enableVisionToolResults
+            Boolean enableVisionToolResults,
+            int thinkingBudgetTokens
     ) {
         public Memory {
             if (embeddingModel == null || embeddingModel.isBlank()) {
@@ -101,6 +102,13 @@ public record AgentProperties(
             // (e.g. cost-conscious deploys or non-vision LLM endpoints).
             if (enableVisionToolResults == null) {
                 enableVisionToolResults = Boolean.TRUE;
+            }
+            // Anthropic Extended Thinking budget. >= 1024 enables; 0 disables.
+            // The model's reasoning is hidden from the user, which structurally
+            // prevents the "is X… no wait, Y… actually Z" stream pattern —
+            // not a prompt-level patch but an API-level mode change.
+            if (thinkingBudgetTokens < 0) {
+                thinkingBudgetTokens = 0;
             }
         }
     }
