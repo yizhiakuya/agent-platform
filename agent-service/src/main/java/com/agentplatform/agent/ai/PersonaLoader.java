@@ -29,9 +29,6 @@ import java.nio.charset.StandardCharsets;
  * every request. Missing files log a warning and fall through to either a
  * minimal SOUL fallback or empty string for the others, so the agent can still
  * boot in degraded form.
- *
- * <p>{@link #getPersona()} is preserved for backwards compatibility and
- * returns {@code bundle.soul()} so older call sites keep working.
  */
 @Component
 public class PersonaLoader {
@@ -83,14 +80,5 @@ public class PersonaLoader {
     /** The full layered persona set. Never null; missing files yield empty fields. */
     public PersonaBundle getBundle() {
         return bundle;
-    }
-
-    /**
-     * Backwards-compatible accessor — returns the SOUL section only. New code
-     * should use {@link #getBundle()} so it can place each section under the
-     * right header.
-     */
-    public String getPersona() {
-        return bundle.soul();
     }
 }

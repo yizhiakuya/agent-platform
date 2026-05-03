@@ -27,9 +27,9 @@ import java.util.UUID;
  * {@code MessageCreateParams.tools}) and a name-keyed dispatch map (for
  * routing {@code tool_use} blocks back to the matching callback).
  *
- * <p>For PR 8 only the first online device is used (single-device bias keeps
- * tool names un-namespaced). Multi-device support with alias prefixes lands in
- * PR 13/14.
+ * <p>v0: only the first online device of the user is used (single-device
+ * bias keeps tool names un-namespaced). Multi-device with alias prefixes is
+ * not yet wired in — see plan stage 2 roadmap.
  */
 @Component
 public class RemoteDeviceToolCallbackProvider {

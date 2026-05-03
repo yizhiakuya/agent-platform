@@ -100,11 +100,10 @@ public class RemoteToolCallback {
 
     /**
      * Execute the device tool in response to one LLM-issued
-     * {@link ToolUseBlock}. Mirrors what the legacy Spring AI {@code call(String)}
-     * path used to do, minus the {@code ToolContext} side-channel:
+     * {@link ToolUseBlock}:
      *
      * <ol>
-     *   <li>Parse {@code tu.input()} into a {@link JsonNode} of args.</li>
+     *   <li>Parse {@code tu._input()} into a {@link JsonNode} of args.</li>
      *   <li>Run {@link ToolPreInterceptor}s — may rewrite args or throw
      *       {@link ToolBlockedException} to abort with a structured error.</li>
      *   <li>Emit {@code tool_call_started} SSE.</li>

@@ -15,15 +15,14 @@ import java.util.UUID;
 
 /**
  * Synchronous wrapper around {@code POST /internal/tools/call} on device-hub.
+ * Called from {@link com.agentplatform.agent.ai.RemoteToolCallback#executeToolUse}
+ * inside the SDK agentic loop.
  *
- * <p>This is the bridge that PR 8's Spring AI {@code RemoteToolCallback.call()}
- * will call from inside the LLM tool-calling loop. PR 7 calls it from
- * {@code ChatService} directly with a hard-coded tool/args.
- *
- * <p>Internally non-blocking (WebClient + reactor), but {@code .block()} fits
- * Spring AI's synchronous {@code ToolCallback#call(String)} signature; the
- * Tomcat thread that calls us is freed via the chat executor in
- * {@code AgentBeans} so this {@code .block()} doesn't starve the request pool.
+ * <p>Internally non-blocking (WebClient + reactor), but the loop owner needs
+ * a synchronous result to feed back to the next LLM turn, so we
+ * {@code .block(timeout)} here. The blocking call runs on the
+ * {@code chatExecutor} pool from {@link com.agentplatform.agent.config.AgentBeans},
+ * so it doesn't starve Tomcat request threads.
  */
 @Component
 public class DeviceToolDispatcher {

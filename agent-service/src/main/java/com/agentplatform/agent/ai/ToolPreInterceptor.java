@@ -15,9 +15,9 @@ import java.util.UUID;
  * Examples: PII redaction, sensitive-tool gating, args validation.
  *
  * <p>{@code requestCtx} carries per-request scalars contributed by
- * {@code ChatService} (today: {@code userId}, {@code sessionId}). The Spring AI
- * {@code ToolContext} wrapper is gone — interceptors that need request-scope
- * state read it out of this map by string key.
+ * {@code ChatService} (today: {@code userId}, {@code sessionId}).
+ * Interceptors that need request-scope state read it out of this map by
+ * string key.
  */
 public interface ToolPreInterceptor {
     JsonNode before(UUID userId, UUID deviceId, ToolSpec spec, JsonNode args, Map<String, Object> requestCtx);

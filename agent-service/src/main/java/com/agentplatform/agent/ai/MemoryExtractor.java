@@ -120,11 +120,10 @@ public class MemoryExtractor {
                     %s
                     """.formatted(turns.size(), body.toString());
 
-            // Use the configured fact-extractor model (cheap Haiku by default),
-            // NOT the main-conversation model (Opus). This was a long-standing
-            // bug: the previous Spring AI ChatClient call ignored the
-            // factExtractorModel property and ran on whatever model the
-            // primary ChatClient was wired to.
+            // Run extraction on the cheap fact-extractor model (Haiku by
+            // default), not the main conversation model (Opus). The cost
+            // delta on a busy chat dwarfs the chat itself if you ever skip
+            // this — Opus is ~30x the per-token price.
             String factModel = props.agent().memory().factExtractorModel();
             ConfiguredProvider provider = chatClients.isEmpty() ? null : chatClients.get(0);
             if (provider == null) {

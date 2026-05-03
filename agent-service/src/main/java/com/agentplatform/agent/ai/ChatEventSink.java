@@ -3,18 +3,14 @@ package com.agentplatform.agent.ai;
 import com.agentplatform.agent.chat.SseEvent;
 
 /**
- * Functional bridge between Spring AI tool callbacks and the per-request
- * {@code SseEmitter}. We don't pass {@code SseEmitter} directly into
- * {@code ToolContext} so the AI layer stays free of Spring MVC types.
- *
- * <p>The implementation lives inside {@code ChatService} as a lambda that
- * wraps the current request's {@code SseEmitter}.
+ * Per-request channel for tool execution to push SSE events back to the web
+ * client without depending on {@code SseEmitter} directly. {@code ChatService}
+ * supplies a lambda wrapping the current request's emitter; tool callbacks
+ * (device tools, skill_load) accept a sink param and emit
+ * {@code tool_call_started} / {@code tool_call_result} through it.
  */
 @FunctionalInterface
 public interface ChatEventSink {
-
-    /** Key under which the sink is placed into Spring AI's {@code ToolContext}. */
-    String KEY = "agent.event.sink";
 
     void emit(SseEvent event);
 }
