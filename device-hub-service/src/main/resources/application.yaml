@@ -19,7 +19,7 @@ agent-platform:
   jwt:
     # Same secret as auth-service / gateway use to sign device JWTs. WS handshake
     # verifies the bearer locally rather than calling auth-service per connect.
-    secret: ${JWT_SECRET:ZGV2LW9ubHktZG8tbm90LXVzZS1pbi1wcm9kdWN0aW9uLWRldi1vbmx5LWRldi1lbnY=}
+    secret: ${JWT_SECRET:?JWT_SECRET must be set (base64-encoded, >= 32 raw bytes)}
     issuer: agent-platform
   hub:
     # Default tool-call timeout. Per-call override via InternalCallRequest.timeoutMs.

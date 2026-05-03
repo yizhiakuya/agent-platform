@@ -268,7 +268,7 @@ public class RemoteToolCallback {
      * @param pathPrefix dotted JSON pointer accumulated so far, used only for
      *                   diagnostic logging.
      */
-    private JsonNode stripB64ForLlmAndCollect(JsonNode node, String pathPrefix, List<PendingImage> out) {
+    static JsonNode stripB64ForLlmAndCollect(JsonNode node, String pathPrefix, List<PendingImage> out) {
         if (node instanceof ObjectNode obj) {
             ObjectNode copy = obj.objectNode();
             // Layered b64 priority within ONE object: when a tool returns BOTH

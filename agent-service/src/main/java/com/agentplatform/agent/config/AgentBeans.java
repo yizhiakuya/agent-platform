@@ -53,11 +53,16 @@ public class AgentBeans {
                 log.warn("[agent] skipping provider '{}': empty/placeholder apiKey", p.name());
                 continue;
             }
+            // SDK-level retries disabled: ChatService.handleWithLlm wraps the
+            // whole agent loop in an outer try/catch and falls over to the
+            // next ConfiguredProvider. Stacking SDK retries on top of that
+            // multiplies billed requests on every transient 5xx / 429 (worst
+            // case 6× billed for one user-visible failure).
             AnthropicClient client = AnthropicOkHttpClient.builder()
                     .apiKey(p.apiKey())
                     .baseUrl(p.baseUrl() == null || p.baseUrl().isBlank()
                             ? "https://api.anthropic.com" : p.baseUrl())
-                    .maxRetries(2)
+                    .maxRetries(0)
                     .build();
             out.add(new ConfiguredProvider(p.name(), client, p.model()));
             log.info("[agent] provider '{}' ready: model={} baseUrl={}",

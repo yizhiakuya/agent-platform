@@ -32,7 +32,7 @@ agent-platform:
   jwt:
     # Dev fallback — decoded value is 50 bytes of "dev-only-..." text. NEVER use in production.
     # Override via JWT_SECRET env var (must be base64, >= 32 raw bytes).
-    secret: ${JWT_SECRET:ZGV2LW9ubHktZG8tbm90LXVzZS1pbi1wcm9kdWN0aW9uLWRldi1vbmx5LWRldi1lbnY=}
+    secret: ${JWT_SECRET:?JWT_SECRET must be set (base64-encoded, >= 32 raw bytes)}
     issuer: agent-platform
     user-token-ttl-hours: ${JWT_USER_TOKEN_TTL_HOURS:24}
     device-token-ttl-days: ${JWT_DEVICE_TOKEN_TTL_DAYS:365}

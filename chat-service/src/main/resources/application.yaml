@@ -29,7 +29,7 @@ spring:
 
 agent-platform:
   jwt:
-    secret: ${JWT_SECRET:ZGV2LW9ubHktZG8tbm90LXVzZS1pbi1wcm9kdWN0aW9uLWRldi1vbmx5LWRldi1lbnY=}
+    secret: ${JWT_SECRET:?JWT_SECRET must be set (base64-encoded, >= 32 raw bytes)}
     issuer: agent-platform
   chat:
     # Truncate message bodies bigger than this on write (PII sanitiser).

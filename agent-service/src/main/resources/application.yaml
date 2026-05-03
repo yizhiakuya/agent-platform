@@ -20,7 +20,7 @@ spring:
 
 agent-platform:
   jwt:
-    secret: ${JWT_SECRET:ZGV2LW9ubHktZG8tbm90LXVzZS1pbi1wcm9kdWN0aW9uLWRldi1vbmx5LWRldi1lbnY=}
+    secret: ${JWT_SECRET:?JWT_SECRET must be set (base64-encoded, >= 32 raw bytes)}
     issuer: agent-platform
   agent:
     # PR 7: hard-coded tool the mock LLM always picks. PR 8 swaps in Spring AI.
