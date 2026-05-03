@@ -124,7 +124,8 @@ services:
       SERVER_PORT: 8083
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
-      HUB_MOCK_MODE: ${HUB_MOCK_MODE:-true}
+      # Default false — see device-hub application.yaml comment.
+      HUB_MOCK_MODE: ${HUB_MOCK_MODE:-false}
     expose: ["8083"]
 
   agent-service:

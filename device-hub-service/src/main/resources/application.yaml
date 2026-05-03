@@ -24,11 +24,13 @@ agent-platform:
   hub:
     # Default tool-call timeout. Per-call override via InternalCallRequest.timeoutMs.
     tool-call-timeout-ms: ${HUB_TOOL_TIMEOUT_MS:30000}
-    # When true, InternalToolController auto-provisions a MockDeviceSession for
-    # any unknown deviceId (so agent-service can run end-to-end without a real
-    # Android device). PR 6 keeps it ON so real WS + mock fallback co-exist.
-    # Set false in production once the Android app is the source of truth.
-    mock-mode: ${HUB_MOCK_MODE:true}
+    # When true, InternalToolController auto-provisions a MockDeviceSession
+    # for any unknown deviceId (so agent-service can run end-to-end without
+    # a real Android device). DEFAULT FALSE — when on, mock provisioning
+    # trusts the userId in the request body, which lets any caller in the
+    # docker network fabricate a deviceId and impersonate arbitrary users.
+    # Flip true via env only for dev runs without a bound Android.
+    mock-mode: ${HUB_MOCK_MODE:false}
     # MockDeviceSession sleeps this long before returning a fake result.
     mock-fake-latency-ms: ${HUB_MOCK_LATENCY_MS:100}
     # WebSocket Origin whitelist. Empty/missing = "*" (allow any). In prod

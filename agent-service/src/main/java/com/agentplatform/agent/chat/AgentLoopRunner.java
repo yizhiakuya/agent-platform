@@ -36,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -74,27 +75,32 @@ public class AgentLoopRunner {
 
     /**
      * Run the loop. Mutates {@code messages} (appending assistant + tool_result
-     * turns) and {@code textBuf} (accumulating visible text) in place, and
-     * captures the last seen {@link Usage} into {@code lastUsage[0]}.
+     * turns) in place; collects the streamed assistant text + last-seen
+     * {@link Usage} + cancellation flag into the returned {@link RunResult}.
+     *
+     * <p>Returns {@code cancelled=true} when the SSE emitter ended mid-stream
+     * (esc / tab close / async timeout). The caller must NOT persist the
+     * partial assistant text in that case — replaying truncated text on the
+     * next turn pollutes LLM context.
      */
-    public void run(ConfiguredProvider provider,
-                    UUID sessionId,
-                    UUID userId,
-                    ResolvedTools resolved,
-                    List<TextBlockParam> systemBlocks,
-                    List<ToolUnion> tools,
-                    @Nullable ThinkingConfigEnabled thinking,
-                    List<MessageParam> messages,
-                    StringBuilder textBuf,
-                    Usage[] lastUsage,
-                    ChatEventSink sink,
-                    SseEmitter emitter) {
+    public RunResult run(ConfiguredProvider provider,
+                         UUID sessionId,
+                         UUID userId,
+                         ResolvedTools resolved,
+                         List<TextBlockParam> systemBlocks,
+                         List<ToolUnion> tools,
+                         @Nullable ThinkingConfigEnabled thinking,
+                         List<MessageParam> messages,
+                         ChatEventSink sink,
+                         SseEmitter emitter) {
         // Hold the active stream so emitter cancellation can close it from
         // another thread — SDK forEach is blocking on the worker thread, the
         // close() interrupts the iterator and forEach unwinds with an IO error
         // which we catch and treat as a clean cancel.
         AtomicReference<StreamResponse<RawMessageStreamEvent>> currentStream = new AtomicReference<>();
+        AtomicBoolean cancelled = new AtomicBoolean(false);
         Runnable cancel = () -> {
+            cancelled.set(true);
             StreamResponse<RawMessageStreamEvent> s = currentStream.getAndSet(null);
             if (s != null) {
                 log.info("emitter ended — closing SDK stream for user {}", userId);
@@ -109,7 +115,16 @@ public class AgentLoopRunner {
         emitter.onTimeout(cancel);
         emitter.onError(t -> cancel.run());
 
+        StringBuilder textBuf = new StringBuilder();
+        Usage lastUsage = null;
+
         for (int iter = 0; iter < MAX_ITERATIONS; iter++) {
+            // If a previous iteration drained without erroring but cancel
+            // already fired, bail before opening another (billed) stream.
+            if (cancelled.get()) {
+                return new RunResult(textBuf.toString(), lastUsage, true);
+            }
+
             MessageCreateParams.Builder pb = MessageCreateParams.builder()
                     .model(provider.model())
                     .maxTokens(props.agent().maxTokens())
@@ -141,11 +156,20 @@ public class AgentLoopRunner {
                     });
                 });
                 finalMsg = acc.message();
+            } catch (RuntimeException e) {
+                if (cancelled.get()) {
+                    // Emitter cancelled the stream — normal interruption,
+                    // not a setup/transport failure. Don't propagate (would
+                    // trigger provider failover for nothing) and don't let
+                    // the partial text get persisted downstream.
+                    return new RunResult(textBuf.toString(), lastUsage, true);
+                }
+                throw e;
             } finally {
                 currentStream.set(null);
             }
             if (finalMsg.usage() != null) {
-                lastUsage[0] = finalMsg.usage();
+                lastUsage = finalMsg.usage();
             }
 
             // Append assistant turn — Message.toParam() converts the SDK Message
@@ -157,7 +181,12 @@ public class AgentLoopRunner {
             // reference compare with `!=` was never matching and aborted the
             // agent loop on every tool_use turn, so device tools never fired.
             if (stop.isEmpty() || !StopReason.TOOL_USE.equals(stop.get())) {
-                return;  // end_turn / max_tokens / stop_sequence / refusal: done
+                // Clean finish (end_turn / max_tokens / stop_sequence / refusal).
+                // If cancel fired AFTER the stream drained naturally, the text
+                // is still complete — flag it cancelled so caller skips persist
+                // anyway (user may have walked away; saving the reply they
+                // never read pollutes future history with stale Q/A).
+                return new RunResult(textBuf.toString(), lastUsage, cancelled.get());
             }
 
             // Run every tool_use block produced by the assistant; pack results
@@ -182,7 +211,7 @@ public class AgentLoopRunner {
                 // Assistant said tool_use but emitted no tool_use blocks (rare).
                 // Bail rather than loop forever on identical request.
                 log.warn("stop_reason=tool_use but no tool_use blocks present — aborting loop");
-                return;
+                return new RunResult(textBuf.toString(), lastUsage, cancelled.get());
             }
             messages.add(MessageParam.builder()
                     .role(MessageParam.Role.USER)
@@ -190,6 +219,7 @@ public class AgentLoopRunner {
                     .build());
         }
         log.warn("agentic loop hit MAX_ITERATIONS={} for user {}", MAX_ITERATIONS, userId);
+        return new RunResult(textBuf.toString(), lastUsage, cancelled.get());
     }
 
     /**

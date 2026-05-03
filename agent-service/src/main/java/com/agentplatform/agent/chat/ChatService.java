@@ -200,36 +200,42 @@ public class ChatService {
         ChatEventSink sink = ev -> safeSend(emitter, ev);
 
         long t0 = System.currentTimeMillis();
-        StringBuilder textBuf = new StringBuilder();
-        Usage[] lastUsage = new Usage[1];
 
         // Provider failover — synchronous setup only. If the SDK throws on
         // createStreaming we try the next provider; once stream events start
         // flowing we don't switch (TODO P2: mid-stream failover).
+        RunResult result = null;
         RuntimeException lastErr = null;
-        boolean ran = false;
         for (ConfiguredProvider provider : chatClients) {
             try {
-                agentLoopRunner.run(provider, sessionId, userId, resolved,
-                        systemBlocks, tools, thinking, messages,
-                        textBuf, lastUsage, sink, emitter);
-                ran = true;
+                result = agentLoopRunner.run(provider, sessionId, userId, resolved,
+                        systemBlocks, tools, thinking, messages, sink, emitter);
                 break;
             } catch (RuntimeException e) {
                 lastErr = e;
                 log.warn("[agent] provider '{}' failed: {} — trying next", provider.name(), e.getMessage());
             }
         }
-        if (!ran) {
+        if (result == null) {
             String msg = lastErr == null ? "no provider available" : lastErr.getMessage();
             safeSend(emitter, SseEvent.error(mapper, "All providers failed: " + msg));
             emitter.complete();
             return;
         }
 
-        String fullReply = textBuf.toString();
+        if (result.cancelled()) {
+            // SSE emitter ended (esc / tab close / async timeout). The text
+            // buffer may be partial — persisting it would replay a truncated
+            // assistant turn next session and pollute LLM context. Skip
+            // persist + memory extraction; emitter is already closed by the
+            // cancel callback so there's no SSE work left.
+            log.info("Chat cancelled mid-stream for user {} session {} — skipping persist", userId, sessionId);
+            return;
+        }
+
+        String fullReply = result.assistantText();
         persist(sessionId, userId, MessageRole.ASSISTANT, fullReply, null);
-        AgentLoopRunner.logCacheUsage(userId, lastUsage[0], System.currentTimeMillis() - t0);
+        AgentLoopRunner.logCacheUsage(userId, result.usage(), System.currentTimeMillis() - t0);
         try {
             memoryExtractor.extractAsync(userId, sessionId, req.message(), fullReply);
         } catch (Exception ex) {

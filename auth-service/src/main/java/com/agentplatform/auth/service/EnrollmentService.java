@@ -72,7 +72,11 @@ public class EnrollmentService {
 
     @Transactional
     public RedeemResponse redeem(String token, RedeemRequest req) {
-        Enrollment e = enrollments.findById(sha256Hex(token))
+        // SELECT ... FOR UPDATE — without this row lock two concurrent
+        // redeems on the same token would each observe usedAt=null under
+        // READ_COMMITTED, both create a Device, both sign a 365-day JWT.
+        // With the lock the second request blocks until the first commits.
+        Enrollment e = enrollments.findByTokenHashForUpdate(sha256Hex(token))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Token not found"));
         if (e.getUsedAt() != null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Token already used");
