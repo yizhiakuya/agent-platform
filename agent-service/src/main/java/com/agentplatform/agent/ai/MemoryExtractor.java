@@ -3,11 +3,13 @@ package com.agentplatform.agent.ai;
 import com.agentplatform.agent.client.InternalChatFeignClient;
 import com.agentplatform.agent.config.AgentProperties;
 import com.agentplatform.api.chat.SaveFactRequest;
+import com.anthropic.models.messages.ContentBlock;
+import com.anthropic.models.messages.Message;
+import com.anthropic.models.messages.MessageCreateParams;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -25,13 +27,19 @@ import java.util.concurrent.ExecutorService;
  * <p>Runs entirely off the SSE response path on the {@code chatExecutor} thread
  * pool — the user never waits for it, and any failure is logged at WARN and
  * dropped (memory is a best-effort enrichment, not a contract).
+ *
+ * <p>Calls the Anthropic SDK directly with {@code factExtractorModel} (cheap
+ * Haiku by default) — independent of the main-conversation provider's model
+ * choice. v0 fallback: if the first provider's call fails we just drop the
+ * batch (best-effort), since fact extraction shouldn't dominate cost or
+ * latency budgets.
  */
 @Service
 public class MemoryExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryExtractor.class);
 
-    private final List<ChatClient> chatClients;
+    private final List<ConfiguredProvider> chatClients;
     private final EmbeddingService embeddingService;
     private final InternalChatFeignClient chatFeign;
     private final ExecutorService chatExecutor;
@@ -44,7 +52,7 @@ public class MemoryExtractor {
     // (1 stream + 1 embed) most turns and (+1 extract) only every Nth turn.
     private final Map<UUID, List<String>> pending = new ConcurrentHashMap<>();
 
-    public MemoryExtractor(List<ChatClient> chatClients,
+    public MemoryExtractor(List<ConfiguredProvider> chatClients,
                            EmbeddingService embeddingService,
                            InternalChatFeignClient chatFeign,
                            ExecutorService chatExecutor,
@@ -112,8 +120,39 @@ public class MemoryExtractor {
                     %s
                     """.formatted(turns.size(), body.toString());
 
-            String reply = chatClients.get(0).prompt().user(prompt).call().content();
-            if (reply == null) return;
+            // Use the configured fact-extractor model (cheap Haiku by default),
+            // NOT the main-conversation model (Opus). This was a long-standing
+            // bug: the previous Spring AI ChatClient call ignored the
+            // factExtractorModel property and ran on whatever model the
+            // primary ChatClient was wired to.
+            String factModel = props.agent().memory().factExtractorModel();
+            ConfiguredProvider provider = chatClients.isEmpty() ? null : chatClients.get(0);
+            if (provider == null) {
+                log.warn("[memory-extract] no provider configured, skip fact extraction");
+                return;
+            }
+
+            MessageCreateParams params = MessageCreateParams.builder()
+                    .model(factModel)
+                    .maxTokens(1024L)
+                    .addUserMessage(prompt)
+                    .build();
+
+            String reply;
+            try {
+                Message msg = provider.client().messages().create(params);
+                StringBuilder sb = new StringBuilder();
+                for (ContentBlock cb : msg.content()) {
+                    cb.text().ifPresent(t -> sb.append(t.text()));
+                }
+                reply = sb.toString();
+            } catch (Exception e) {
+                log.warn("[memory-extract] fact extraction LLM call failed for user {}: {}",
+                        userId, e.getMessage());
+                return;
+            }
+
+            if (reply.isBlank()) return;
             String arr = sliceFirstArray(reply);
             if (arr == null) {
                 log.debug("[memory-extract] no JSON array in extractor reply for user {}", userId);
@@ -139,8 +178,8 @@ public class MemoryExtractor {
                 }
             }
             if (saved > 0) {
-                log.info("[memory-extract] saved {} fact(s) for user {} session {} (batch of {} turns)",
-                        saved, userId, sessionId, turns.size());
+                log.info("[memory-extract] saved {} fact(s) for user {} session {} (batch of {} turns, model={})",
+                        saved, userId, sessionId, turns.size(), factModel);
             }
         } catch (Exception ex) {
             log.warn("[memory-extract] batch extraction failed for user {}: {}", userId, ex.getMessage());
