@@ -66,9 +66,13 @@ public class SkillLoadCallback {
                 "type", "string",
                 "description", "Skill name from the available skills listing"
         );
+        Tool.InputSchema.Properties properties = Tool.InputSchema.Properties.builder()
+                .putAdditionalProperty("name", JsonValue.from(nameProp))
+                .build();
         Tool.InputSchema schema = Tool.InputSchema.builder()
-                .properties(JsonValue.from(Map.of("name", nameProp)))
-                .putAdditionalProperty("required", JsonValue.from(List.of("name")))
+                .type(JsonValue.from("object"))
+                .properties(properties)
+                .required(List.of("name"))
                 .build();
         return Tool.builder()
                 .name(TOOL_NAME)

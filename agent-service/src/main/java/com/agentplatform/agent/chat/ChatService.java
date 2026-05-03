@@ -375,7 +375,10 @@ public class ChatService {
             messages.add(finalMsg.toParam());
 
             Optional<StopReason> stop = finalMsg.stopReason();
-            if (stop.isEmpty() || stop.get() != StopReason.TOOL_USE) {
+            // StopReason is an SDK value object, not an enum — must use equals(),
+            // reference compare with `!=` was never matching and aborted the
+            // agent loop on every tool_use turn, so device tools never fired.
+            if (stop.isEmpty() || !StopReason.TOOL_USE.equals(stop.get())) {
                 return;  // end_turn / max_tokens / stop_sequence / refusal: done
             }
 
@@ -388,7 +391,13 @@ public class ChatService {
                 Optional<ToolUseBlock> tuOpt = cb.toolUse();
                 if (tuOpt.isEmpty()) continue;
                 ToolUseBlock tu = tuOpt.get();
-                ExecutionResult er = executeOneToolUse(tu, resolved, userId, sessionId, sink);
+                ExecutionResult er;
+                try {
+                    er = executeOneToolUse(tu, resolved, userId, sessionId, sink);
+                } catch (Throwable t) {
+                    log.error("tool_use threw name={} err={}", tu.name(), t.toString(), t);
+                    er = ExecutionResult.error("tool execution failed: " + t.getMessage());
+                }
                 toolResults.add(ContentBlockParam.ofToolResult(buildToolResultBlock(tu, er)));
             }
             if (toolResults.isEmpty()) {
