@@ -17,17 +17,6 @@ spring:
   mvc:
     async:
       request-timeout: 600000   # 10 min — SSE streams can run long
-  ai:
-    anthropic:
-      # When this is empty/blank/PLACEHOLDER, ChatService falls back to the PR 7
-      # mock LLM path so the rest of the platform stays runnable.
-      api-key: ${ANTHROPIC_API_KEY:}
-      base-url: ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
-      chat:
-        options:
-          model: ${LLM_CHAT_MODEL:claude-sonnet-4-6}
-          max-tokens: 4096
-          # temperature removed — Opus 4.7 (reasoning model) rejects the param.
 
 agent-platform:
   jwt:
@@ -41,6 +30,7 @@ agent-platform:
     tool-call-timeout-ms: ${AGENT_TOOL_TIMEOUT_MS:35000}
     # Where to find device-hub (load-balanced via Nacos by service name)
     hub-base-uri: lb://device-hub-service
+    maxTokens: ${AGENT_MAX_TOKENS:4096}
     # LLM provider pool. ChatService tries each in order, fails over to next on RuntimeException
     # at the synchronous setup stage. Reuses ANTHROPIC_API_KEY/BASE_URL/LLM_CHAT_MODEL env vars
     # so existing deployments stay drop-in compatible. v0 only honours kind=anthropic-messages.
@@ -75,6 +65,8 @@ agent-platform:
       # actually Z" stream pattern. 0 disables. 2048 is a sane default for
       # mostly Q&A; raise for heavy multi-step reasoning, lower to save cost.
       thinkingBudgetTokens: ${AGENT_THINKING_BUDGET:2048}
+      enableWebSearch: ${AGENT_ENABLE_WEB_SEARCH:true}
+      webSearchMaxUses: ${AGENT_WEB_SEARCH_MAX_USES:5}
 
 logging:
   level:

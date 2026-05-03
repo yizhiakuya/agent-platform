@@ -28,12 +28,16 @@ public record AgentProperties(
             String mockToolArgsJson,
             long toolCallTimeoutMs,
             String hubBaseUri,
+            int maxTokens,
             List<Provider> providers,
             Memory memory
     ) {
         public Agent {
+            if (maxTokens <= 0) {
+                maxTokens = 4096;
+            }
             if (memory == null) {
-                memory = new Memory(null, 0, 0, null, null, 0, null, 0);
+                memory = new Memory(null, 0, 0, null, null, 0, null, 0, null, 0);
             }
         }
     }
@@ -68,7 +72,9 @@ public record AgentProperties(
             Boolean enablePromptCache,
             int factBatchSize,
             Boolean enableVisionToolResults,
-            int thinkingBudgetTokens
+            int thinkingBudgetTokens,
+            Boolean enableWebSearch,
+            int webSearchMaxUses
     ) {
         public Memory {
             if (embeddingModel == null || embeddingModel.isBlank()) {
@@ -109,6 +115,12 @@ public record AgentProperties(
             // not a prompt-level patch but an API-level mode change.
             if (thinkingBudgetTokens < 0) {
                 thinkingBudgetTokens = 0;
+            }
+            if (enableWebSearch == null) {
+                enableWebSearch = Boolean.TRUE;
+            }
+            if (webSearchMaxUses <= 0) {
+                webSearchMaxUses = 5;
             }
         }
     }
