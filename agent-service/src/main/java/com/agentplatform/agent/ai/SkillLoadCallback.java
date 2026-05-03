@@ -105,7 +105,7 @@ public class SkillLoadCallback {
 
     private String parseName(ToolUseBlock tu) {
         try {
-            Object raw = tu.input();
+            Object raw = tu._input();
             if (raw == null) return null;
             JsonNode node = mapper.valueToTree(raw);
             if (node != null && node.isTextual()) {

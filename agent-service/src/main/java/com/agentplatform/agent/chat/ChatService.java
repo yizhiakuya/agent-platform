@@ -1,11 +1,16 @@
 package com.agentplatform.agent.chat;
 
 import com.agentplatform.agent.ai.ChatEventSink;
+import com.agentplatform.agent.ai.ConfiguredProvider;
 import com.agentplatform.agent.ai.EmbeddingService;
+import com.agentplatform.agent.ai.ExecutionResult;
 import com.agentplatform.agent.ai.MemoryExtractor;
+import com.agentplatform.agent.ai.PendingImage;
 import com.agentplatform.agent.ai.PersonaBundle;
 import com.agentplatform.agent.ai.PersonaLoader;
 import com.agentplatform.agent.ai.RemoteDeviceToolCallbackProvider;
+import com.agentplatform.agent.ai.RemoteToolCallback;
+import com.agentplatform.agent.ai.ResolvedTools;
 import com.agentplatform.agent.ai.SkillDef;
 import com.agentplatform.agent.ai.SkillLoadCallback;
 import com.agentplatform.agent.ai.SkillRegistry;
@@ -24,34 +29,43 @@ import com.agentplatform.api.chat.SessionDto;
 import com.agentplatform.api.chat.WriteMessageRequest;
 import com.agentplatform.api.hub.OnlineDeviceDto;
 import com.agentplatform.protocol.ToolResult;
+import com.anthropic.core.http.StreamResponse;
+import com.anthropic.helpers.MessageAccumulator;
+import com.anthropic.models.messages.Base64ImageSource;
+import com.anthropic.models.messages.CacheControlEphemeral;
+import com.anthropic.models.messages.ContentBlock;
+import com.anthropic.models.messages.ContentBlockParam;
+import com.anthropic.models.messages.ImageBlockParam;
+import com.anthropic.models.messages.Message;
+import com.anthropic.models.messages.MessageCreateParams;
+import com.anthropic.models.messages.MessageParam;
+import com.anthropic.models.messages.RawMessageStreamEvent;
+import com.anthropic.models.messages.StopReason;
+import com.anthropic.models.messages.TextBlockParam;
+import com.anthropic.models.messages.ThinkingConfigEnabled;
+import com.anthropic.models.messages.Tool;
+import com.anthropic.models.messages.ToolResultBlockParam;
+import com.anthropic.models.messages.ToolUnion;
+import com.anthropic.models.messages.ToolUseBlock;
+import com.anthropic.models.messages.Usage;
+import com.anthropic.models.messages.WebSearchTool20250305;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.metadata.ChatResponseMetadata;
-import org.springframework.ai.chat.metadata.Usage;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.tool.ToolCallback;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import reactor.core.Disposable;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
-import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Streaming chat handler — the platform's main LLM front door.
@@ -60,10 +74,11 @@ import java.util.concurrent.ExecutorService;
  * ({@code user_message} → {@code tool_call_started} → {@code tool_call_result}
  * → {@code assistant_message}):
  * <ul>
- *   <li><b>Real LLM</b>: Spring AI {@link ChatClient}.stream() drives a
- *       function-calling loop with {@link com.agentplatform.agent.ai.RemoteToolCallback}s
- *       and the {@link SkillLoadCallback} meta-tool. Provider pool is iterated
- *       in order — first one whose synchronous setup succeeds streams.</li>
+ *   <li><b>Real LLM</b>: drives an explicit Anthropic Java SDK agentic loop —
+ *       {@link com.anthropic.client.AnthropicClient#messages()} streaming with
+ *       a {@link MessageAccumulator}, tool_use → local executor → tool_result
+ *       blocks fed back as the next turn's user message, until
+ *       {@link StopReason#TOOL_USE} no longer fires.</li>
  *   <li><b>Mock LLM</b>: hard-coded tool call when no provider / no tool
  *       available, kept for dev-time runs without an API key.</li>
  * </ul>
@@ -73,7 +88,8 @@ import java.util.concurrent.ExecutorService;
  *   <li>Persona — {@link PersonaLoader}</li>
  *   <li>User preferences — {@link AuthInternalClient#getPreferences(UUID)}</li>
  *   <li>Skill index (name + description, body loaded on demand via skill_load)</li>
- *   <li>Memory recall block (top-K vector hits wrapped in [UNTRUSTED] markers)</li>
+ *   <li>Memory recall block (top-K vector hits wrapped in [UNTRUSTED] markers,
+ *       carried on the user message so the stable system prefix stays cache-stable)</li>
  * </ol>
  *
  * <p>Failure modes degrade gracefully — preference / memory load errors return
@@ -86,6 +102,12 @@ public class ChatService {
 
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
 
+    /** Hard cap on agentic loop iterations — guard against runaway tool_use cycles. */
+    private static final int MAX_AGENT_ITERATIONS = 10;
+
+    /** Cache breakpoint floor — Anthropic ignores cache_control on blocks under ~1 KiB. */
+    private static final int PROMPT_CACHE_MIN_CHARS = 1024;
+
     private final DeviceHubClient deviceHubClient;
     private final DeviceToolDispatcher dispatcher;
     private final RemoteDeviceToolCallbackProvider toolProvider;
@@ -93,7 +115,7 @@ public class ChatService {
     private final ExecutorService chatExecutor;
     private final ObjectMapper mapper;
     private final AgentProperties props;
-    private final List<ChatClient> chatClients;
+    private final List<ConfiguredProvider> chatClients;
     private final PersonaLoader personaLoader;
     private final SkillRegistry skillRegistry;
     private final SkillLoadCallback skillLoadCallback;
@@ -108,7 +130,7 @@ public class ChatService {
                        ExecutorService chatExecutor,
                        ObjectMapper mapper,
                        AgentProperties props,
-                       List<ChatClient> chatClients,
+                       List<ConfiguredProvider> chatClients,
                        PersonaLoader personaLoader,
                        SkillRegistry skillRegistry,
                        SkillLoadCallback skillLoadCallback,
@@ -157,11 +179,11 @@ public class ChatService {
         }
     }
 
-    /* -------------------- real LLM path (B1) -------------------- */
+    /* -------------------- real LLM path (B1, SDK agentic loop) -------------------- */
 
     private void handleWithLlm(UUID userId, UUID sessionId, ChatRequest req, SseEmitter emitter) {
-        ToolCallback[] deviceTools = toolProvider.getForUser(userId);
-        if (deviceTools.length == 0) {
+        ResolvedTools resolved = toolProvider.getForUser(userId);
+        if (resolved.definitions().isEmpty()) {
             // No tools registered yet (no real device bound). Fall back to the
             // mock path so we still emit a useful SSE response — InternalToolController
             // will auto-provision a MockDeviceSession when mock-mode is on.
@@ -177,18 +199,12 @@ public class ChatService {
 
         // ---- Prompt assembly: layered persona + prefs + skills + memory ----
         //
-        // PR-cache layout — split the system prompt into a STABLE HEAD that
-        // survives across requests (persona + user prefs + skill index) and
-        // route the per-request RAG memory block onto the user message. Why?
-        // Spring AI's SYSTEM_ONLY cache strategy with multiBlockSystemCaching
-        // walks every system block and resolves a cache_control breakpoint
-        // for each one that meets the size floor. If memories sat in system,
-        // a long memory recall would consume a 2nd breakpoint AND its content
-        // changes every turn, causing repeated cache_creation churn. Putting
-        // memories into the user-side keeps the system prefix bit-identical
-        // for repeat hits, and the user message was never going to be cached
-        // anyway. The [UNTRUSTED] markers carry over so the LLM still treats
-        // recalled facts as inert context, not instructions.
+        // Cache layout — split system into a STABLE HEAD (persona + user prefs +
+        // skill index + current time) and route the per-request RAG memory block
+        // onto the user message. Keeps the system prefix bit-identical across
+        // requests so the ephemeral cache breakpoint hits cleanly within the 5
+        // minute TTL. Memories ride the user message so they don't burn a 2nd
+        // cache_control breakpoint that would churn every turn anyway.
         PersonaBundle pb = personaLoader.getBundle();
         String userPrefs = loadUserPrefs(userId);
         String skillIndex = formatSkillIndex(skillRegistry.all());
@@ -216,108 +232,244 @@ public class ChatService {
                 ? req.message()
                 : memoryBlock + "\n" + req.message();
 
-        // skill_load + device tools combined.
-        List<ToolCallback> allTools = new ArrayList<>();
-        Collections.addAll(allTools, deviceTools);
-        allTools.add(skillLoadCallback);
+        boolean cacheEnabled = Boolean.TRUE.equals(props.agent().memory().enablePromptCache())
+                && stableSystemText.length() >= PROMPT_CACHE_MIN_CHARS;
+        List<TextBlockParam> systemBlocks = buildSystemBlocks(stableSystemText, cacheEnabled);
+
+        List<ToolUnion> tools = buildToolUnionList(resolved.definitions());
+
+        ThinkingConfigEnabled thinking = null;
+        int budget = props.agent().memory().thinkingBudgetTokens();
+        if (budget >= 1024) {
+            thinking = ThinkingConfigEnabled.builder().budgetTokens(budget).build();
+        }
+
+        // History from chat-service → SDK MessageParam list. Tool-call audit rows
+        // are filtered out — only USER/ASSISTANT text turns get replayed.
+        List<MessageParam> messages = loadHistoryAsParams(sessionId, userId, req.message());
+        messages.add(MessageParam.builder()
+                .role(MessageParam.Role.USER)
+                .content(userText)
+                .build());
 
         ChatEventSink sink = ev -> safeSend(emitter, ev);
-        StringBuilder textBuf = new StringBuilder();
 
-        // Pull prior turns from chat-service so the LLM sees conversation history.
-        // Only USER and ASSISTANT roles go in (TOOL_CALL/TOOL_RESULT are audit
-        // rows, not part of the conversational context the LLM should replay).
-        List<Message> history = loadHistory(sessionId, userId, req.message());
-
-        // Provider failover — synchronous setup only. Once .stream().subscribe()
-        // succeeds, subsequent async errors flow through doOnError below; we
-        // do NOT switch providers mid-stream in v0 (TODO P2: reactor onErrorResume chain).
-        //
-        // Stream uses .chatResponse() instead of .content() so we can read the
-        // Anthropic Usage record (cache_creation_input_tokens / cache_read_input_tokens)
-        // off the final ChatResponseMetadata for cache observability — without
-        // it there's no way to confirm prompt caching actually fires.
         long t0 = System.currentTimeMillis();
-        // Use single-element arrays to capture the final usage from the
-        // streaming pipeline — the trailing ChatResponse carries it.
-        final Usage[] lastUsage = new Usage[1];
-        RuntimeException lastSetupError = null;
-        boolean started = false;
-        for (ChatClient cc : chatClients) {
+        StringBuilder textBuf = new StringBuilder();
+        Usage[] lastUsage = new Usage[1];
+
+        // Provider failover — synchronous setup only. If the SDK throws on
+        // createStreaming we try the next provider; once stream events start
+        // flowing we don't switch (TODO P2: mid-stream failover).
+        RuntimeException lastErr = null;
+        boolean ran = false;
+        for (ConfiguredProvider provider : chatClients) {
             try {
-                // VisionAwareToolCallingManager / RemoteToolCallback need to
-                // mutate this map (push/drain pending image attachments), so
-                // it MUST be a mutable Map — Map.of(...) would NPE/throw on put.
-                Map<String, Object> toolCtx = new ConcurrentHashMap<>();
-                toolCtx.put(ChatEventSink.KEY, sink);
-                toolCtx.put("userId", userId);
-                toolCtx.put("sessionId", sessionId);
-                Disposable disp = cc.prompt()
-                        .messages(buildSystemMessages(stableSystemText, history))
-                        .user(userText)
-                        .toolCallbacks(allTools.toArray(new ToolCallback[0]))
-                        .toolContext(toolCtx)
-                        .stream()
-                        .chatResponse()
-                        .doOnNext(resp -> {
-                            String chunk = extractChunk(resp);
+                runAgentLoop(provider, sessionId, userId, resolved,
+                        systemBlocks, tools, thinking, messages,
+                        textBuf, lastUsage, sink, emitter);
+                ran = true;
+                break;
+            } catch (RuntimeException e) {
+                lastErr = e;
+                log.warn("[agent] provider '{}' failed: {} — trying next", provider.name(), e.getMessage());
+            }
+        }
+        if (!ran) {
+            String msg = lastErr == null ? "no provider available" : lastErr.getMessage();
+            safeSend(emitter, SseEvent.error(mapper, "All providers failed: " + msg));
+            emitter.complete();
+            return;
+        }
+
+        // Persist + memory + complete — only if the loop ran cleanly.
+        String fullReply = textBuf.toString();
+        persist(sessionId, userId, MessageRole.ASSISTANT, fullReply, null);
+        logCacheUsage(userId, lastUsage[0], System.currentTimeMillis() - t0);
+        try {
+            memoryExtractor.extractAsync(userId, sessionId, req.message(), fullReply);
+        } catch (Exception ex) {
+            log.warn("memoryExtractor.extractAsync failed: {}", ex.getMessage());
+        }
+        emitter.complete();
+    }
+
+    /**
+     * One full agentic loop on a single provider. Throws RuntimeException on
+     * setup failure (caught for failover); IO errors mid-stream are propagated
+     * to the SSE emitter and re-thrown so the caller can record completion.
+     */
+    private void runAgentLoop(ConfiguredProvider provider,
+                              UUID sessionId,
+                              UUID userId,
+                              ResolvedTools resolved,
+                              List<TextBlockParam> systemBlocks,
+                              List<ToolUnion> tools,
+                              @Nullable ThinkingConfigEnabled thinking,
+                              List<MessageParam> messages,
+                              StringBuilder textBuf,
+                              Usage[] lastUsage,
+                              ChatEventSink sink,
+                              SseEmitter emitter) {
+        // Hold the active stream so emitter cancellation can close it from
+        // another thread — SDK forEach is blocking on the worker thread, the
+        // close() interrupts the iterator and forEach unwinds with an IO error
+        // which we catch and treat as a clean cancel.
+        AtomicReference<StreamResponse<RawMessageStreamEvent>> currentStream = new AtomicReference<>();
+        Runnable cancel = () -> {
+            StreamResponse<RawMessageStreamEvent> s = currentStream.getAndSet(null);
+            if (s != null) {
+                log.info("emitter ended — closing SDK stream for user {}", userId);
+                try {
+                    s.close();
+                } catch (Exception ignore) {
+                    // close-on-already-closed is fine
+                }
+            }
+        };
+        emitter.onCompletion(cancel);
+        emitter.onTimeout(cancel);
+        emitter.onError(t -> cancel.run());
+
+        for (int iter = 0; iter < MAX_AGENT_ITERATIONS; iter++) {
+            MessageCreateParams.Builder pb = MessageCreateParams.builder()
+                    .model(provider.model())
+                    .maxTokens(props.agent().maxTokens())
+                    .systemOfTextBlockParams(systemBlocks)
+                    .messages(messages)
+                    .tools(tools);
+            if (thinking != null) {
+                pb.thinking(thinking);
+            }
+            MessageCreateParams params = pb.build();
+
+            Message finalMsg;
+            MessageAccumulator acc = MessageAccumulator.create();
+            try (StreamResponse<RawMessageStreamEvent> stream =
+                         provider.client().messages().createStreaming(params)) {
+                currentStream.set(stream);
+                stream.stream().forEach(event -> {
+                    acc.accumulate(event);
+                    event.contentBlockDelta().ifPresent(d -> {
+                        d.delta().text().ifPresent(t -> {
+                            String chunk = t.text();
                             if (chunk != null && !chunk.isEmpty()) {
                                 textBuf.append(chunk);
                                 safeSend(emitter, SseEvent.assistantMessage(mapper, chunk));
                             }
-                            // Each streamed ChatResponse carries the cumulative
-                            // usage so far; keep the latest reference and log
-                            // once on complete (not per chunk — would spam).
-                            ChatResponseMetadata md = resp.getMetadata();
-                            if (md != null && md.getUsage() != null) {
-                                lastUsage[0] = md.getUsage();
-                            }
-                        })
-                        .doOnError(t -> {
-                            log.warn("LLM stream error for user {}", userId, t);
-                            safeSend(emitter, SseEvent.error(mapper, "LLM error: " + t.getMessage()));
-                            emitter.completeWithError(t);
-                        })
-                        .doOnComplete(() -> {
-                            String fullReply = textBuf.toString();
-                            persist(sessionId, userId, MessageRole.ASSISTANT, fullReply, null);
-                            logCacheUsage(userId, lastUsage[0], System.currentTimeMillis() - t0);
-                            // B2: async fact extraction off the response path.
-                            try {
-                                memoryExtractor.extractAsync(userId, sessionId, req.message(), fullReply);
-                            } catch (Exception ex) {
-                                log.warn("memoryExtractor.extractAsync failed: {}", ex.getMessage());
-                            }
-                            emitter.complete();
-                        })
-                        .subscribe();
-
-                // Tie the reactor pipeline lifetime to the SSE emitter — when
-                // the client disconnects (browser closed, abort signal, fetch
-                // error, or normal completion), cancel the upstream LLM stream
-                // so we stop burning Anthropic tokens / running tool calls
-                // for an answer nobody's listening for.
-                Runnable cancel = () -> {
-                    if (!disp.isDisposed()) {
-                        log.info("emitter ended — disposing LLM stream for user {}", userId);
-                        disp.dispose();
-                    }
-                };
-                emitter.onCompletion(cancel);
-                emitter.onTimeout(cancel);
-                emitter.onError(t -> cancel.run());
-                started = true;
-                break;
-            } catch (RuntimeException e) {
-                lastSetupError = e;
-                log.warn("Chat client setup failed (will try next provider): {}", e.getMessage());
+                        });
+                        // input_json_delta: SDK accumulator handles tool_use args.
+                        // thinking delta: hidden from the web client by design.
+                    });
+                });
+                finalMsg = acc.message();
+            } finally {
+                currentStream.set(null);
             }
+            if (finalMsg.usage() != null) {
+                lastUsage[0] = finalMsg.usage();
+            }
+
+            // Append assistant turn — Message.toParam() converts the SDK Message
+            // (List<ContentBlock>) into the MessageParam shape ready for replay.
+            messages.add(finalMsg.toParam());
+
+            Optional<StopReason> stop = finalMsg.stopReason();
+            if (stop.isEmpty() || stop.get() != StopReason.TOOL_USE) {
+                return;  // end_turn / max_tokens / stop_sequence / refusal: done
+            }
+
+            // Run every tool_use block produced by the assistant; pack results
+            // into one user-role message of tool_result blocks. Server-side
+            // tools (web_search) won't appear here — SDK already resolves them
+            // server-side and surfaces only the results in finalMsg.content().
+            List<ContentBlockParam> toolResults = new ArrayList<>();
+            for (ContentBlock cb : finalMsg.content()) {
+                Optional<ToolUseBlock> tuOpt = cb.toolUse();
+                if (tuOpt.isEmpty()) continue;
+                ToolUseBlock tu = tuOpt.get();
+                ExecutionResult er = executeOneToolUse(tu, resolved, userId, sessionId, sink);
+                toolResults.add(ContentBlockParam.ofToolResult(buildToolResultBlock(tu, er)));
+            }
+            if (toolResults.isEmpty()) {
+                // Assistant said tool_use but emitted no tool_use blocks (rare).
+                // Bail rather than loop forever on identical request.
+                log.warn("stop_reason=tool_use but no tool_use blocks present — aborting loop");
+                return;
+            }
+            messages.add(MessageParam.builder()
+                    .role(MessageParam.Role.USER)
+                    .contentOfBlockParams(toolResults)
+                    .build());
         }
-        if (!started) {
-            String msg = lastSetupError == null ? "no provider available" : lastSetupError.getMessage();
-            safeSend(emitter, SseEvent.error(mapper, "All providers failed: " + msg));
-            emitter.complete();
+        log.warn("agentic loop hit MAX_AGENT_ITERATIONS={} for user {}", MAX_AGENT_ITERATIONS, userId);
+    }
+
+    private ExecutionResult executeOneToolUse(ToolUseBlock tu, ResolvedTools resolved,
+                                              UUID userId, UUID sessionId, ChatEventSink sink) {
+        String name = tu.name();
+        if (SkillLoadCallback.TOOL_NAME.equals(name)) {
+            return skillLoadCallback.executeToolUse(tu, userId, sessionId, sink);
         }
+        RemoteToolCallback rt = resolved.dispatch().get(name);
+        if (rt == null) {
+            return ExecutionResult.error("unknown tool: " + name);
+        }
+        return rt.executeToolUse(tu, userId, sessionId, sink);
+    }
+
+    /**
+     * Build one tool_result block for the next user turn. Text + 0..N image
+     * sub-blocks (Anthropic native multimodal tool_result, no more vision hack).
+     */
+    private static ToolResultBlockParam buildToolResultBlock(ToolUseBlock tu, ExecutionResult er) {
+        List<ToolResultBlockParam.Content.Block> blocks = new ArrayList<>();
+        blocks.add(ToolResultBlockParam.Content.Block.ofText(
+                TextBlockParam.builder().text(er.jsonText()).build()));
+        for (PendingImage img : er.images()) {
+            blocks.add(ToolResultBlockParam.Content.Block.ofImage(
+                    ImageBlockParam.builder()
+                            .source(Base64ImageSource.builder()
+                                    .mediaType(Base64ImageSource.MediaType.of(img.mimeType()))
+                                    .data(img.b64())
+                                    .build())
+                            .build()));
+        }
+        return ToolResultBlockParam.builder()
+                .toolUseId(tu.id())
+                .content(ToolResultBlockParam.Content.ofBlocks(blocks))
+                .build();
+    }
+
+    private List<ToolUnion> buildToolUnionList(List<Tool> deviceTools) {
+        List<ToolUnion> out = new ArrayList<>(deviceTools.size() + 2);
+        for (Tool t : deviceTools) {
+            out.add(ToolUnion.ofTool(t));
+        }
+        out.add(ToolUnion.ofTool(skillLoadCallback.toAnthropicTool()));
+        if (Boolean.TRUE.equals(props.agent().memory().enableWebSearch())) {
+            out.add(ToolUnion.ofWebSearchTool20250305(
+                    WebSearchTool20250305.builder()
+                            .maxUses((long) props.agent().memory().webSearchMaxUses())
+                            .build()));
+        }
+        return out;
+    }
+
+    /**
+     * Pack the stable system text into TextBlockParams. When prompt-cache is
+     * enabled and the text crosses the SDK floor, tag the (single) block with
+     * cache_control: ephemeral so repeat requests in the 5 min TTL pay 10% input.
+     */
+    private static List<TextBlockParam> buildSystemBlocks(String stableSystemText, boolean cacheEnabled) {
+        if (stableSystemText == null || stableSystemText.isBlank()) {
+            return List.of();
+        }
+        TextBlockParam.Builder b = TextBlockParam.builder().text(stableSystemText);
+        if (cacheEnabled) {
+            b.cacheControl(CacheControlEphemeral.builder().build());
+        }
+        return List.of(b.build());
     }
 
     /* -------------------- mock path (PR 7 fallback) -------------------- */
@@ -365,26 +517,38 @@ public class ChatService {
      * Best-effort history load. Failures degrade to an empty list — LLM just
      * loses the prior context for this turn rather than blocking the stream.
      * The current user message (already persisted) is filtered out by exact
-     * content match against the most-recent USER row.
+     * content match against the most-recent USER row. Tool-call audit rows are
+     * skipped — only the user/assistant text turns get replayed to the LLM.
      */
-    private List<Message> loadHistory(UUID sessionId, UUID userId, String currentMessage) {
-        if (sessionId == null) return List.of();
+    private List<MessageParam> loadHistoryAsParams(UUID sessionId, UUID userId, String currentMessage) {
+        if (sessionId == null) return new ArrayList<>();
         try {
             List<MessageDto> rows = chatClientFeign.listMessages(sessionId, userId);
-            if (rows == null || rows.isEmpty()) return List.of();
-            // chat-service returns oldest-first. Drop the just-persisted USER message at the tail.
+            if (rows == null || rows.isEmpty()) return new ArrayList<>();
             int n = rows.size();
             if (rows.get(n - 1).role() == MessageRole.USER
                     && currentMessage.equals(rows.get(n - 1).content())) {
                 rows = rows.subList(0, n - 1);
             }
-            List<Message> out = new ArrayList<>(rows.size());
+            List<MessageParam> out = new ArrayList<>(rows.size());
             for (MessageDto m : rows) {
                 String content = m.content() == null ? "" : m.content();
                 switch (m.role()) {
-                    case USER -> out.add(new UserMessage(content));
+                    case USER -> {
+                        if (!content.isBlank()) {
+                            out.add(MessageParam.builder()
+                                    .role(MessageParam.Role.USER)
+                                    .content(content)
+                                    .build());
+                        }
+                    }
                     case ASSISTANT -> {
-                        if (!content.isBlank()) out.add(new AssistantMessage(content));
+                        if (!content.isBlank()) {
+                            out.add(MessageParam.builder()
+                                    .role(MessageParam.Role.ASSISTANT)
+                                    .content(content)
+                                    .build());
+                        }
                     }
                     case TOOL_CALL, TOOL_RESULT -> { /* skip — audit only */ }
                 }
@@ -392,31 +556,16 @@ public class ChatService {
             return out;
         } catch (Exception e) {
             log.warn("Failed to load history for session {}: {}", sessionId, e.getMessage());
-            return List.of();
+            return new ArrayList<>();
         }
     }
 
     /* -------------------- cache-observability helpers -------------------- */
 
     /**
-     * Pull text content off a streaming ChatResponse chunk. Spring AI's
-     * AnthropicChatModel emits incremental AssistantMessage deltas; mid-tool-
-     * call frames have no text and we just skip them.
-     */
-    private static String extractChunk(ChatResponse resp) {
-        if (resp == null) return null;
-        var gen = resp.getResult();
-        if (gen == null) return null;
-        AssistantMessage am = gen.getOutput();
-        if (am == null) return null;
-        return am.getText();
-    }
-
-    /**
-     * Log the Anthropic prompt-cache stats for this turn. Pulls the native
-     * AnthropicApi.Usage off the Spring AI Usage wrapper so we can read the
-     * cache_creation_input_tokens / cache_read_input_tokens fields the
-     * standard Spring AI Usage interface doesn't expose.
+     * Log the Anthropic prompt-cache stats for this turn. Reads
+     * cache_creation_input_tokens / cache_read_input_tokens directly off the
+     * SDK Usage record — no more reflective unwrap, native fields.
      *
      * <p>Format chosen so a docker-logs grep on "promptCache user=" picks
      * up exactly one line per request:
@@ -432,62 +581,15 @@ public class ChatService {
             log.info("promptCache user={} usage=unavailable dur={}ms", userId, durMs);
             return;
         }
-        Integer input = usage.getPromptTokens();
-        Integer output = usage.getCompletionTokens();
-        Integer create = null;
-        Integer read = null;
-        Object native_ = usage.getNativeUsage();
-        // Reflective unwrap rather than a hard import on AnthropicApi.Usage
-        // — keeps this code path safe to compile if a future provider returns
-        // a non-Anthropic Usage shape (e.g. when openai-responses lands).
-        if (native_ != null) {
-            try {
-                var cls = native_.getClass();
-                var m1 = cls.getMethod("cacheCreationInputTokens");
-                var m2 = cls.getMethod("cacheReadInputTokens");
-                Object cv = m1.invoke(native_);
-                Object rv = m2.invoke(native_);
-                if (cv instanceof Integer i) create = i;
-                if (rv instanceof Integer i) read = i;
-            } catch (NoSuchMethodException ignored) {
-                // Non-Anthropic provider — leave nulls, logged as 0.
-            } catch (ReflectiveOperationException e) {
-                log.debug("usage reflective unwrap failed: {}", e.getMessage());
-            }
-        }
+        long create = usage.cacheCreationInputTokens().orElse(0L);
+        long read = usage.cacheReadInputTokens().orElse(0L);
+        long input = usage.inputTokens();
+        long output = usage.outputTokens();
         log.info("promptCache user={} cache_create={} cache_read={} input={} output={} dur={}ms",
-                userId,
-                create == null ? 0 : create,
-                read == null ? 0 : read,
-                input == null ? 0 : input,
-                output == null ? 0 : output,
-                durMs);
+                userId, create, read, input, output, durMs);
     }
 
     /* -------------------- prompt-assembly helpers -------------------- */
-
-    /**
-     * Builds the message list passed to ChatClient.prompt().messages(...).
-     * One SystemMessage at the head holds the cache-eligible stable prompt
-     * (persona + prefs + skills); history follows untouched. The current
-     * user message is added separately by the caller via .user(...).
-     *
-     * <p>Spring AI's AnthropicChatModel pulls all SYSTEM-typed messages out
-     * of this list and rebuilds them as Anthropic system content blocks; with
-     * multiBlockSystemCaching=true the final stable block carries the cache
-     * breakpoint. We could put memories in a 2nd SystemMessage but that would
-     * also be cache-eligible (every system block over the size floor consumes
-     * a breakpoint), which would defeat the optimization on every recall.
-     */
-    private static List<Message> buildSystemMessages(String stableSystemText, List<Message> history) {
-        List<Message> out = new ArrayList<>(history.size() + 1);
-        if (stableSystemText != null && !stableSystemText.isBlank()) {
-            out.add(new SystemMessage(stableSystemText));
-        }
-        out.addAll(history);
-        return out;
-    }
-
 
     /**
      * Appends a {@code # NAME\n\n<content>\n\n} section to {@code sb} iff

@@ -357,7 +357,7 @@ public class RemoteToolCallback {
      */
     private JsonNode parseArgs(ToolUseBlock tu) {
         try {
-            Object raw = tu.input();
+            Object raw = tu._input();
             if (raw == null) return mapper.createObjectNode();
             // SDK JsonValue serializes cleanly via the standard Jackson
             // configuration the SDK ships; convertValue handles both cases
