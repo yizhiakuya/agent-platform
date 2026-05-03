@@ -4,10 +4,10 @@ import com.agentplatform.protocol.ToolSpec;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -21,7 +21,7 @@ public class LoggingPreInterceptor implements ToolPreInterceptor {
     private static final Logger log = LoggerFactory.getLogger("ToolPre");
 
     @Override
-    public JsonNode before(UUID userId, UUID deviceId, ToolSpec spec, JsonNode args, ToolContext ctx) {
+    public JsonNode before(UUID userId, UUID deviceId, ToolSpec spec, JsonNode args, Map<String, Object> requestCtx) {
         log.debug("user={} device={} tool={} args={}", userId, deviceId, spec.name(), args);
         return args;
     }

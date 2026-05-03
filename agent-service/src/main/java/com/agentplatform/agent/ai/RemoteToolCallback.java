@@ -4,59 +4,45 @@ import com.agentplatform.agent.chat.SseEvent;
 import com.agentplatform.agent.client.DeviceToolDispatcher;
 import com.agentplatform.protocol.ToolResult;
 import com.agentplatform.protocol.ToolSpec;
+import com.anthropic.core.JsonValue;
+import com.anthropic.models.messages.Tool;
+import com.anthropic.models.messages.ToolUseBlock;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.model.ToolContext;
-import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Spring AI {@link ToolCallback} that maps a single device tool to a
- * {@link DeviceToolDispatcher} HTTP call against device-hub.
+ * Adapter that maps a single device tool to a {@link DeviceToolDispatcher}
+ * HTTP call against device-hub, exposed to the Anthropic Java SDK as a native
+ * {@link Tool} definition + {@link #executeToolUse} callback.
  *
  * <p>Closure-captures the target {@code deviceId} / {@code userId} / spec at
  * construction time. {@link RemoteDeviceToolCallbackProvider} re-creates these
  * on every chat request (so the LLM sees only the *currently* online tools).
  *
- * <p>Side-emits {@code tool_call_started} / {@code tool_call_result} SSE events
- * via the {@link ChatEventSink} stashed in Spring AI's {@link ToolContext} —
- * the controller path therefore sees all three of LLM text, tool calls, and
- * tool results interleaved correctly on the wire.
- *
- * <p>Hook chain (A2): {@link ToolPreInterceptor}s run synchronously before
- * dispatch (may rewrite args or throw {@link ToolBlockedException} to abort).
- * After dispatch a {@link ToolPostEvent} is published asynchronously for
- * audit / metrics consumers.
+ * <p>{@link #executeToolUse} is invoked from the agentic loop in
+ * {@code ChatService} once per LLM-issued {@link ToolUseBlock}. It runs the
+ * pre-interceptor chain, dispatches to device-hub, emits SSE
+ * {@code tool_call_started} / {@code tool_call_result} for the web client,
+ * publishes a {@link ToolPostEvent} for audit listeners, and returns the
+ * {@link ExecutionResult} (text + any vision images) the caller folds back
+ * into the next turn's {@code tool_result} message.
  */
-public class RemoteToolCallback implements ToolCallback {
+public class RemoteToolCallback {
 
     private static final Logger log = LoggerFactory.getLogger(RemoteToolCallback.class);
-
-    /**
-     * ToolContext key under which RemoteToolCallback stashes any base64 images
-     * extracted from a device tool's response. {@code VisionAwareToolCallingManager}
-     * drains this list after each batch of tool calls and appends a sibling
-     * UserMessage with {@code Media} attachments — so a vision-capable LLM
-     * actually sees the bytes, not just a {@code <binary omitted>} stub.
-     *
-     * <p>Value type: {@code List<PendingImage>} (declared in this class).
-     * The map itself must be mutable — see {@code ChatService} for the
-     * {@code ConcurrentHashMap} wiring.
-     */
-    public static final String PENDING_IMAGES_KEY = "agent.pending.vision.images";
 
     private final UUID deviceId;
     private final UUID userId;
@@ -90,54 +76,69 @@ public class RemoteToolCallback implements ToolCallback {
     }
 
     /**
-     * Carrier struct for one base64-encoded image extracted from a tool result.
-     * The {@code path} is only used for diagnostics — Anthropic's tool_result
-     * doesn't take a "field name" hint, but we keep it to log exactly which
-     * field on which tool produced each image.
+     * Wire-level tool name as the LLM sees it. Anthropic restricts tool names
+     * to {@code [a-zA-Z0-9_-]{1,128}}; our protocol-layer names (e.g.
+     * {@code photos.list_recent}) use dots for namespacing, so the {@code .}
+     * is rewritten to {@code _} for the LLM. Used both as the {@link Tool#name}
+     * and the dispatch-map key in {@link ResolvedTools#dispatch}.
      */
-    public record PendingImage(String toolName, String path, String mimeType, String b64) {}
+    public String name() {
+        return sanitizeForLlm(spec.name());
+    }
 
-    @Override
-    public ToolDefinition getToolDefinition() {
-        String schemaJson = spec.schema() == null ? "{}" : spec.schema().toString();
-        return ToolDefinition.builder()
-                // Anthropic restricts tool names to [a-zA-Z0-9_-]{1,128}; our
-                // protocol-layer names (e.g. "photos.list_recent") use dots
-                // for namespacing, so sanitize for the LLM but keep the
-                // canonical name when dispatching to the device.
-                .name(sanitizeForLlm(spec.name()))
+    /**
+     * SDK form of this tool. Drop straight into {@code MessageCreateParams.tools}
+     * (typically wrapped in a {@code ToolUnion}).
+     */
+    public Tool toAnthropicTool() {
+        return Tool.builder()
+                .name(name())
                 .description(spec.description())
-                .inputSchema(schemaJson)
+                .inputSchema(buildInputSchema())
                 .build();
     }
 
-    /** Replace characters Anthropic's API rejects (only "." in our scheme so far). */
-    private static String sanitizeForLlm(String toolName) {
-        return toolName.replace('.', '_');
-    }
-
-    @Override
-    public String call(String toolInput) {
-        return call(toolInput, null);
-    }
-
-    @Override
-    public String call(String toolInput, ToolContext toolContext) {
-        ChatEventSink sink = sinkFrom(toolContext);
-        JsonNode args = parseArgs(toolInput);
+    /**
+     * Execute the device tool in response to one LLM-issued
+     * {@link ToolUseBlock}. Mirrors what the legacy Spring AI {@code call(String)}
+     * path used to do, minus the {@code ToolContext} side-channel:
+     *
+     * <ol>
+     *   <li>Parse {@code tu.input()} into a {@link JsonNode} of args.</li>
+     *   <li>Run {@link ToolPreInterceptor}s — may rewrite args or throw
+     *       {@link ToolBlockedException} to abort with a structured error.</li>
+     *   <li>Emit {@code tool_call_started} SSE.</li>
+     *   <li>POST to device-hub via {@link DeviceToolDispatcher}.</li>
+     *   <li>Publish {@link ToolPostEvent} for audit/metrics.</li>
+     *   <li>Emit {@code tool_call_result} (or {@code error}) SSE.</li>
+     *   <li>Strip {@code *_b64} fields from the JSON for the LLM, optionally
+     *       collecting them as {@link PendingImage}s for native multimodal
+     *       {@code tool_result}.</li>
+     * </ol>
+     *
+     * @param tu        tool_use block from the LLM (carries id / name / args)
+     * @param userId    chat user (must match the constructor-bound user)
+     * @param sessionId chat session — fed to listeners only
+     * @param sink      per-request SSE sink (may be null in tests)
+     */
+    public ExecutionResult executeToolUse(ToolUseBlock tu, UUID userId, UUID sessionId, ChatEventSink sink) {
+        JsonNode args = parseArgs(tu);
+        Map<String, Object> requestCtx = new HashMap<>();
+        requestCtx.put("userId", userId);
+        if (sessionId != null) requestCtx.put("sessionId", sessionId);
 
         // PRE: chain — each interceptor may return rewritten args, or throw
         // ToolBlockedException to abort with a structured error.
         try {
             for (ToolPreInterceptor pre : preInterceptors) {
-                args = pre.before(userId, deviceId, spec, args, toolContext);
+                args = pre.before(this.userId, deviceId, spec, args, requestCtx);
             }
         } catch (ToolBlockedException blocked) {
             if (sink != null) {
                 sink.emit(SseEvent.error(mapper, "Tool blocked: " + blocked.getReason()));
             }
-            return "{\"error\":{\"code\":-32099,\"message\":"
-                    + mapper.valueToTree("blocked: " + blocked.getReason()).toString() + "}}";
+            return ExecutionResult.text("{\"error\":{\"code\":-32099,\"message\":"
+                    + mapper.valueToTree("blocked: " + blocked.getReason()).toString() + "}}");
         }
 
         if (sink != null) {
@@ -147,21 +148,25 @@ public class RemoteToolCallback implements ToolCallback {
         long t0 = System.currentTimeMillis();
         ToolResult result;
         try {
-            result = dispatcher.dispatch(deviceId, userId, spec.name(), args);
+            result = dispatcher.dispatch(deviceId, this.userId, spec.name(), args);
         } catch (RuntimeException e) {
             long dur = System.currentTimeMillis() - t0;
             if (events != null) {
-                events.publishEvent(new ToolPostEvent(userId, deviceId, spec.name(), args,
+                events.publishEvent(new ToolPostEvent(this.userId, deviceId, spec.name(), args,
                         null, e.getMessage(), dur, Instant.now()));
             }
-            throw e;
+            if (sink != null) {
+                sink.emit(SseEvent.error(mapper,
+                        "Tool '" + spec.name() + "' failed: " + e.getMessage()));
+            }
+            return ExecutionResult.error(e.getMessage());
         }
         long dur = System.currentTimeMillis() - t0;
 
         // POST: emit event regardless of success/error so audit/metrics
         // listeners observe both outcomes uniformly.
         if (events != null) {
-            events.publishEvent(new ToolPostEvent(userId, deviceId, spec.name(), args,
+            events.publishEvent(new ToolPostEvent(this.userId, deviceId, spec.name(), args,
                     result.hasError() ? null : result.value(),
                     result.hasError() ? result.error().message() : null,
                     dur, Instant.now()));
@@ -176,83 +181,82 @@ public class RemoteToolCallback implements ToolCallback {
             }
         }
 
-        // Spring AI expects the tool's textual return value (will be fed back
-        // into the LLM as a tool_result message). Both success and error are
-        // surfaced as JSON so the LLM can react to either.
-        //
-        // Two paths for *_b64 base64 fields:
+        // Tool result text/JSON for the LLM. Two paths for *_b64 base64 fields:
         //   - vision DISABLED (legacy): replace each *_b64 with a
         //     "<binary NB omitted>" placeholder — keeps a non-vision LLM from
         //     echoing 50-100KB strings into its reply.
-        //   - vision ENABLED: same placeholder in the JSON BUT we also stash
-        //     the raw bytes into {@link #PENDING_IMAGES_KEY} on the shared
-        //     ToolContext, so {@code VisionAwareToolCallingManager} can
-        //     append a sibling user message carrying real Media attachments
-        //     for the LLM's next turn. Either way the web client still gets
-        //     the full payload via the tool_call_result SSE event above.
+        //   - vision ENABLED: same placeholder in the JSON BUT we also collect
+        //     the raw bytes into PendingImage records so ChatService can fold
+        //     them into the SDK ToolResultBlockParam content as native
+        //     ImageBlockParams. Either way the web client still gets the full
+        //     payload via the tool_call_result SSE event above.
         if (result.hasError()) {
-            return wireError(result);
+            return ExecutionResult.text(wireError(result));
         }
         JsonNode raw = result.value();
         if (raw == null) {
-            return "null";
+            return ExecutionResult.text("null");
         }
         if (visionEnabled) {
             List<PendingImage> imgs = new ArrayList<>();
             JsonNode stripped = stripB64ForLlmAndCollect(raw, "", imgs);
-            if (!imgs.isEmpty() && toolContext != null) {
-                stashPendingImages(toolContext, imgs);
-                if (stripped instanceof ObjectNode obj) {
-                    obj.put("_vision_attached_count", imgs.size());
-                }
+            if (!imgs.isEmpty() && stripped instanceof ObjectNode obj) {
+                obj.put("_vision_attached_count", imgs.size());
             }
-            return stripped.toString();
+            return new ExecutionResult(stripped.toString(), imgs);
         }
-        return stripB64ForLlm(raw).toString();
+        return ExecutionResult.text(stripB64ForLlm(raw).toString());
     }
 
-    @SuppressWarnings("unchecked")
-    private void stashPendingImages(ToolContext ctx, List<PendingImage> imgs) {
-        Map<String, Object> shared = ctx == null ? null : ctx.getContext();
-        // Spring AI 1.1.5 ToolContext.getContext() returns a Collections.unmodifiableMap
-        // wrapper, so even when ChatService passes in a ConcurrentHashMap
-        // we can't write through it. Use a static side-channel keyed on
-        // (userId, sessionId) which both RemoteToolCallback (writer) and
-        // VisionAwareToolCallingManager (reader) can read out of the same
-        // ToolContext. Within one chat turn the (user, session) pair is
-        // stable and the front-end blocks parallel sends, so collisions
-        // are not a concern.
-        String key = pendingKey(shared);
-        if (key == null) {
-            log.debug("no userId/sessionId in tool context — skipping vision stash");
-            return;
-        }
-        PENDING_BY_KEY
-                .computeIfAbsent(key, k -> Collections.synchronizedList(new ArrayList<>()))
-                .addAll(imgs);
+    /** Replace characters Anthropic's API rejects (only "." in our scheme so far). */
+    private static String sanitizeForLlm(String toolName) {
+        return toolName.replace('.', '_');
     }
 
-    /** Static side-channel for vision images, keyed by {@code userId:sessionId}. */
-    static final Map<String, List<PendingImage>> PENDING_BY_KEY = new ConcurrentHashMap<>();
-
-    static String pendingKey(Map<String, Object> ctx) {
-        if (ctx == null) return null;
-        Object u = ctx.get("userId");
-        Object s = ctx.get("sessionId");
-        if (u == null || s == null) return null;
-        return u + ":" + s;
+    /**
+     * Convert this tool's JSON Schema (a {@link JsonNode}) into the SDK's
+     * {@link Tool.InputSchema}. The schema is always an object schema in our
+     * protocol; we forward {@code properties} as-is (verbatim object map) and
+     * {@code required} as a list. Anything else on the schema (e.g. {@code $defs},
+     * {@code additionalProperties: false}) is preserved via
+     * {@link Tool.InputSchema.Builder#putAdditionalProperty}.
+     */
+    private Tool.InputSchema buildInputSchema() {
+        Tool.InputSchema.Builder b = Tool.InputSchema.builder();
+        JsonNode schema = spec.schema();
+        if (schema == null || schema.isNull() || !schema.isObject()) {
+            return b.properties(JsonValue.from(Map.of())).build();
+        }
+        // properties — typed builder field
+        JsonNode properties = schema.get("properties");
+        if (properties != null && properties.isObject()) {
+            Map<String, Object> propsMap = mapper.convertValue(properties,
+                    new TypeReference<Map<String, Object>>() {});
+            b.properties(JsonValue.from(propsMap));
+        } else {
+            b.properties(JsonValue.from(Map.of()));
+        }
+        // Forward every other top-level key (required, additionalProperties,
+        // $schema, etc.) onto the SDK schema as additional properties so they
+        // round-trip into the Anthropic request body unchanged.
+        schema.fields().forEachRemaining(e -> {
+            String k = e.getKey();
+            if (k.equals("type") || k.equals("properties")) return;
+            Object val = mapper.convertValue(e.getValue(), Object.class);
+            b.putAdditionalProperty(k, JsonValue.from(val));
+        });
+        return b.build();
     }
 
     /**
      * Vision-aware variant of {@link #stripB64ForLlm}. Walks the tree just
      * like the legacy path (replacing every {@code *_b64} string with a stub),
-     * but also collects each base64 string into {@code out} so the caller can
-     * forward them to the LLM as Media attachments. The MIME type is inferred
-     * from the field name and the raw bytes — JPEG and PNG cover all device
-     * tools we ship today.
+     * but also collects each base64 string into {@code out} as a
+     * {@link PendingImage}. The MIME type is inferred from the field name and
+     * the raw bytes — JPEG and PNG cover all device tools we ship today.
      *
      * @param pathPrefix dotted JSON pointer accumulated so far, used only for
-     *                   diagnostic logging in {@code VisionAwareToolCallingManager}.
+     *                   diagnostic logging.
      */
     private JsonNode stripB64ForLlmAndCollect(JsonNode node, String pathPrefix, List<PendingImage> out) {
         if (node instanceof ObjectNode obj) {
@@ -287,7 +291,7 @@ public class RemoteToolCallback implements ToolCallback {
                             && (isVision || !hasVision);                  // skip thumb when vision sibling present
                     if (shouldCollect) {
                         copy.put(k, "<binary " + len + "B attached as image; rendered to user>");
-                        out.add(new PendingImage(spec.name(), childPath, sniffMime(k, b64), b64));
+                        out.add(new PendingImage(sniffMime(k, b64), b64));
                     } else {
                         copy.put(k, "<binary " + len + "B omitted; vision sibling preferred>");
                     }
@@ -313,9 +317,7 @@ public class RemoteToolCallback implements ToolCallback {
      * {@code image_b64} come from Android device tools that always emit JPEG;
      * for safety we also peek at the base64 prefix — JPEG starts with "/9j/",
      * PNG with "iVBORw0KGgo". Default to JPEG since Anthropic accepts both
-     * and our existing photos.list_recent path emits JPEG. (PDFs are not
-     * supported via this path; if a tool ever returns one it would still
-     * be stripped but not attached.)
+     * and our existing photos.list_recent path emits JPEG.
      */
     private static String sniffMime(String fieldName, String b64) {
         if (b64 == null || b64.length() < 8) return "image/jpeg";
@@ -347,13 +349,33 @@ public class RemoteToolCallback implements ToolCallback {
         return node;
     }
 
-    private JsonNode parseArgs(String toolInput) {
+    /**
+     * Pull args out of the SDK {@link ToolUseBlock}. {@code tu.input()} is a
+     * {@link JsonValue} (the SDK's JSON wrapper); we round-trip it through
+     * Jackson so the rest of this class — and the tool hook chain — keeps
+     * working off plain {@link JsonNode}.
+     */
+    private JsonNode parseArgs(ToolUseBlock tu) {
         try {
-            return (toolInput == null || toolInput.isBlank())
-                    ? mapper.createObjectNode()
-                    : mapper.readTree(toolInput);
+            Object raw = tu.input();
+            if (raw == null) return mapper.createObjectNode();
+            // SDK JsonValue serializes cleanly via the standard Jackson
+            // configuration the SDK ships; convertValue handles both cases
+            // where input() returns a JsonValue or already a Map.
+            JsonNode node = mapper.valueToTree(raw);
+            // valueToTree on a JsonValue that wraps a map produces an object
+            // node directly. If the SDK ever returns a string-encoded JSON,
+            // try to re-parse.
+            if (node != null && node.isTextual()) {
+                try {
+                    return mapper.readTree(node.asText());
+                } catch (Exception ignored) {
+                    return node;
+                }
+            }
+            return node == null ? mapper.createObjectNode() : node;
         } catch (Exception e) {
-            log.warn("Failed to parse toolInput JSON for {}: {}", spec.name(), e.getMessage());
+            log.warn("Failed to parse ToolUseBlock input for {}: {}", spec.name(), e.getMessage());
             return mapper.createObjectNode();
         }
     }
@@ -361,11 +383,5 @@ public class RemoteToolCallback implements ToolCallback {
     private String wireError(ToolResult result) {
         return "{\"error\":{\"code\":" + result.error().code()
                 + ",\"message\":" + mapper.valueToTree(result.error().message()).toString() + "}}";
-    }
-
-    private static ChatEventSink sinkFrom(ToolContext ctx) {
-        if (ctx == null) return null;
-        Object o = ctx.getContext().get(ChatEventSink.KEY);
-        return (o instanceof ChatEventSink s) ? s : null;
     }
 }
