@@ -41,8 +41,8 @@ agent-platform:
         model: ${LLM_CHAT_MODEL:claude-sonnet-4-6}
         kind: anthropic-messages
     memory:
-      embeddingModel: ${MEMORY_EMBEDDING_MODEL:text-embedding-3-small}
-      embeddingDim: ${MEMORY_EMBEDDING_DIM:1536}
+      embeddingModel: ${MEMORY_EMBEDDING_MODEL:jina-embeddings-v3}
+      embeddingDim: ${MEMORY_EMBEDDING_DIM:1024}
       topK: ${MEMORY_TOP_K:5}
       factExtractorModel: ${MEMORY_FACT_MODEL:claude-haiku-4-5}
       # Anthropic prompt-cache toggle. true (default) tags the stable head of
@@ -67,6 +67,17 @@ agent-platform:
       thinkingBudgetTokens: ${AGENT_THINKING_BUDGET:2048}
       enableWebSearch: ${AGENT_ENABLE_WEB_SEARCH:true}
       webSearchMaxUses: ${AGENT_WEB_SEARCH_MAX_USES:5}
+      # Dedicated embedding provider. When both are set, EmbeddingService uses
+      # them; otherwise it falls back to providers[0] (which fails on sub2api
+      # — sub2api is anthropic-only and has no /v1/embeddings). Point at
+      # https://api.openai.com (text-embedding-3-small, 1536 dim, matches
+      # chat.memory_embeddings schema) or a self-hosted TEI / ollama gateway.
+      embeddingBaseUrl: ${MEMORY_EMBEDDING_BASE_URL:}
+      embeddingApiKey: ${MEMORY_EMBEDDING_API_KEY:}
+      # Jina v3 requires `task` in the request body (OpenAI rejects it).
+      # `retrieval.passage` is a safe one-size-fits-all for both store + recall;
+      # asymmetric retrieval would split into query/passage but adds complexity.
+      embeddingTask: ${MEMORY_EMBEDDING_TASK:retrieval.passage}
 
 logging:
   level:

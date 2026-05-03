@@ -147,6 +147,14 @@ services:
       # Default https://api.anthropic.com when this env var isn't set.
       ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
       LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:-claude-sonnet-4-6}
+      # Dedicated embedding provider (memory recall + fact storage). Required
+      # when ANTHROPIC_BASE_URL points at an anthropic-only relay like sub2api,
+      # which has no /v1/embeddings. Leave blank to fall back to providers[0].
+      MEMORY_EMBEDDING_BASE_URL: ${MEMORY_EMBEDDING_BASE_URL:-}
+      MEMORY_EMBEDDING_API_KEY: ${MEMORY_EMBEDDING_API_KEY:-}
+      MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-jina-embeddings-v3}
+      MEMORY_EMBEDDING_DIM: ${MEMORY_EMBEDDING_DIM:-1024}
+      MEMORY_EMBEDDING_TASK: ${MEMORY_EMBEDDING_TASK:-retrieval.passage}
     expose: ["8082"]
 
   chat-service:

@@ -25,11 +25,16 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>{@link MemoryExtractor} for storing extracted facts.</li>
  * </ul>
  *
- * <p>v0 reuses the first configured chat provider's {@code baseUrl + apiKey};
- * a sub2api-style proxy speaks the OpenAI embeddings format even when the
- * primary chat protocol is Anthropic. If your primary provider doesn't expose
- * embeddings, point a future {@code MEMORY_EMBEDDING_*} env vars at a separate
- * provider — left as a TODO for after B1.
+ * <p>Provider selection:
+ * <ol>
+ *   <li>If {@code agent.memory.embeddingBaseUrl} + {@code embeddingApiKey} are
+ *       set, use them. This is the production path — anthropic-only relays
+ *       (sub2api) don't expose {@code /v1/embeddings}, point at
+ *       {@code https://api.openai.com} or a self-hosted TEI / ollama gateway.</li>
+ *   <li>Otherwise fall back to the first configured chat provider's baseUrl +
+ *       apiKey. Convenient for dev when the chat relay also speaks OpenAI
+ *       embeddings.</li>
+ * </ol>
  */
 @Service
 public class EmbeddingService {
@@ -41,6 +46,7 @@ public class EmbeddingService {
     private final String apiKey;
     private final String embeddingModel;
     private final int embeddingDim;
+    private final String embeddingTask;  // null/blank = omit (OpenAI doesn't take it; Jina v3 requires it)
 
     // LRU cache by raw input text. Most embeddings come from (a) the current
     // user message during memory recall and (b) extracted fact contents during
@@ -59,18 +65,37 @@ public class EmbeddingService {
 
     public EmbeddingService(WebClient.Builder defaultWebClientBuilder, AgentProperties props) {
         this.props = props;
-        AgentProperties.Provider primary = primaryProvider(props);
-        String baseUrl = primary == null || primary.baseUrl() == null || primary.baseUrl().isBlank()
-                ? "https://api.openai.com"
-                : primary.baseUrl();
-        this.apiKey = primary == null ? "" : (primary.apiKey() == null ? "" : primary.apiKey());
-        this.embeddingModel = props.agent().memory().embeddingModel();
-        this.embeddingDim = props.agent().memory().embeddingDim();
+        AgentProperties.Memory mem = props.agent().memory();
+        String configuredBase = mem.embeddingBaseUrl();
+        String configuredKey = mem.embeddingApiKey();
+        boolean useDedicated = configuredBase != null && !configuredBase.isBlank()
+                && configuredKey != null && !configuredKey.isBlank();
+
+        String baseUrl;
+        String source;
+        if (useDedicated) {
+            baseUrl = configuredBase;
+            this.apiKey = configuredKey;
+            source = "dedicated";
+        } else {
+            AgentProperties.Provider primary = primaryProvider(props);
+            baseUrl = primary == null || primary.baseUrl() == null || primary.baseUrl().isBlank()
+                    ? "https://api.openai.com"
+                    : primary.baseUrl();
+            this.apiKey = primary == null ? "" : (primary.apiKey() == null ? "" : primary.apiKey());
+            source = "fallback-to-chat-provider";
+        }
+
+        this.embeddingModel = mem.embeddingModel();
+        this.embeddingDim = mem.embeddingDim();
+        this.embeddingTask = mem.embeddingTask();
         this.webClient = defaultWebClientBuilder
                 .baseUrl(baseUrl)
                 .build();
-        log.info("[embed] EmbeddingService configured: baseUrl={} model={} dim={}",
-                baseUrl, embeddingModel, embeddingDim);
+        log.info("[embed] EmbeddingService configured: baseUrl={} model={} dim={} task={} source={}",
+                baseUrl, embeddingModel, embeddingDim,
+                embeddingTask == null || embeddingTask.isBlank() ? "(none)" : embeddingTask,
+                source);
     }
 
     private static AgentProperties.Provider primaryProvider(AgentProperties props) {
@@ -99,11 +124,20 @@ public class EmbeddingService {
             return cached;
         }
         try {
+            // Jina v3 requires `task` (retrieval.passage / retrieval.query /
+            // text-matching / classification / separation); OpenAI rejects it.
+            // Build the body conditionally based on whether one is configured.
+            Map<String, Object> body;
+            if (embeddingTask == null || embeddingTask.isBlank()) {
+                body = Map.of("input", text, "model", embeddingModel);
+            } else {
+                body = Map.of("input", text, "model", embeddingModel, "task", embeddingTask);
+            }
             JsonNode resp = webClient.post()
                     .uri("/v1/embeddings")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
                     .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(Map.of("input", text, "model", embeddingModel))
+                    .bodyValue(body)
                     .retrieve()
                     .bodyToMono(JsonNode.class)
                     .block(Duration.ofSeconds(20));

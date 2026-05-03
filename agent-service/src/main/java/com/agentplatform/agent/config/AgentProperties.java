@@ -37,7 +37,7 @@ public record AgentProperties(
                 maxTokens = 4096;
             }
             if (memory == null) {
-                memory = new Memory(null, 0, 0, null, null, 0, null, 0, null, 0);
+                memory = new Memory(null, 0, 0, null, null, 0, null, 0, null, 0, null, null, null);
             }
         }
     }
@@ -74,7 +74,10 @@ public record AgentProperties(
             Boolean enableVisionToolResults,
             int thinkingBudgetTokens,
             Boolean enableWebSearch,
-            int webSearchMaxUses
+            int webSearchMaxUses,
+            String embeddingBaseUrl,
+            String embeddingApiKey,
+            String embeddingTask
     ) {
         public Memory {
             if (embeddingModel == null || embeddingModel.isBlank()) {
