@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <queries>
+        <package android:name="com.tencent.mm" />
+        <package android:name="com.tencent.mobileqq" />
+    </queries>
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -9,14 +14,22 @@
          own backend). Requires PROPERTY_SPECIAL_USE_FGS_SUBTYPE below. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- QR scanning during enrollment -->
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Photo access — Android 13+ scoped media -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <!-- Video access — Android 13+ scoped media (separate from images) -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- Android 14 partial photo/video access state. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <!-- Battery whitelist prompt redirect (XXPermissions / vendor-specific) -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- MediaProjection foreground service type — required from API 34 to
+         hold a MediaProjection token. Used by UiCaptureForegroundService
+         for ui.screen_capture. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <application
         android:name=".AgentApplication"
@@ -48,6 +61,10 @@
             android:launchMode="singleTask"
             android:excludeFromRecents="true" />
 
+        <receiver
+            android:name=".confirm.ToolConfirmationReceiver"
+            android:exported="false" />
+
         <service
             android:name=".service.AgentForegroundService"
             android:exported="false"
@@ -55,6 +72,31 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="agent-platform background WebSocket to a user-controlled self-hosted server. Required for instant tool dispatch without push." />
+        </service>
+
+        <!-- MediaProjection-typed FGS that holds the screen-capture token
+             for ui.screen_capture. Started on demand from MainActivity
+             after the user grants the system consent dialog. -->
+        <service
+            android:name=".ui.capture.UiCaptureForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- AccessibilityService that exposes ui.tap / ui.swipe / ui.type_text
+             / ui.global / ui.dump_tree to the agent. Must be enabled by the
+             user in Settings → Accessibility → Agent Platform. The platform
+             cannot enable it programmatically (correct: this would be a
+             malware vector). -->
+        <service
+            android:name=".ui.accessibility.UiAccessibilityService"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
         </service>
 
     </application>

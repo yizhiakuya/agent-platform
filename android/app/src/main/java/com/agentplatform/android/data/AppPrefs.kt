@@ -26,6 +26,10 @@ class AppPrefs(context: Context) {
         get() = prefs.getString(KEY_DEVICE, null)
         set(value) { prefs.edit().putString(KEY_DEVICE, value).apply() }
 
+    var autoApproveUiTools: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_APPROVE_UI_TOOLS, false)
+        set(value) { prefs.edit().putBoolean(KEY_AUTO_APPROVE_UI_TOOLS, value).apply() }
+
     fun isBound(): Boolean = !serverUrl.isNullOrBlank() && !token.isNullOrBlank()
 
     fun save(serverUrl: String, token: String, deviceId: String) {
@@ -45,5 +49,6 @@ class AppPrefs(context: Context) {
         private const val KEY_SERVER = "serverUrl"
         private const val KEY_TOKEN = "token"
         private const val KEY_DEVICE = "deviceId"
+        private const val KEY_AUTO_APPROVE_UI_TOOLS = "autoApproveUiTools"
     }
 }

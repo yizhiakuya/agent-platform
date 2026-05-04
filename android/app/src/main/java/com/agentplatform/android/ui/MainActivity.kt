@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -15,8 +16,16 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.agentplatform.android.data.AppPrefs
 import com.agentplatform.android.service.AgentForegroundService
+import com.agentplatform.android.ui.capture.UiCaptureForegroundService
+import com.agentplatform.android.ui.capture.UiCaptureManager
 
 class MainActivity : ComponentActivity() {
+    private val screenCaptureLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data ?: return@registerForActivityResult
+        UiCaptureForegroundService.startWithGrantedProjection(this, result.resultCode, data)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,8 +37,12 @@ class MainActivity : ComponentActivity() {
                     if (bound) {
                         BoundScreen(
                             prefs = prefs,
+                            onRequestScreenCapture = {
+                                screenCaptureLauncher.launch(UiCaptureManager.requestProjectionIntent(this))
+                            },
                             onUnbind = {
                                 stopAgentService()
+                                UiCaptureForegroundService.stopService(this)
                                 prefs.clear()
                                 bound = false
                             }

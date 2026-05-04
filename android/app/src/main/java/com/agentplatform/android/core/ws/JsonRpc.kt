@@ -40,6 +40,8 @@ data class JsonRpcError(val code: Int, val message: String, val data: JsonNode? 
         const val INTERNAL_ERROR = -32603
         const val INVALID_PARAMS = -32602
         const val TOOL_NOT_FOUND = -32001
+        const val TOOL_CANCELLED = -32003
+        const val CONFIRMATION_REJECTED = -32004
     }
 }
 

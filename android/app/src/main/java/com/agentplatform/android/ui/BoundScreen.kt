@@ -9,7 +9,6 @@ import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +22,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -32,7 +32,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -41,6 +40,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.agentplatform.android.data.AppPrefs
 import com.agentplatform.android.service.AgentForegroundService
+import com.agentplatform.android.ui.accessibility.UiAccessibilityService
+import com.agentplatform.android.ui.capture.UiCaptureManager
 
 /**
  * Status / management screen shown after the device is bound. Shows live WS
@@ -48,7 +49,11 @@ import com.agentplatform.android.service.AgentForegroundService
  * one-tap shortcuts to permission settings + unbind.
  */
 @Composable
-fun BoundScreen(prefs: AppPrefs, onUnbind: () -> Unit) {
+fun BoundScreen(
+    prefs: AppPrefs,
+    onRequestScreenCapture: () -> Unit,
+    onUnbind: () -> Unit
+) {
     val ctx = LocalContext.current
     val status by AgentForegroundService.status.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -71,6 +76,9 @@ fun BoundScreen(prefs: AppPrefs, onUnbind: () -> Unit) {
     var notifGranted by remember { mutableStateOf(checkNotif()) }
     var photosGranted by remember { mutableStateOf(checkPhotos()) }
     var videosGranted by remember { mutableStateOf(checkVideos()) }
+    var accessibilityReady by remember { mutableStateOf(UiAccessibilityService.isAvailable()) }
+    var captureReady by remember { mutableStateOf(UiCaptureManager.isReady()) }
+    var autoApproveUiTools by remember { mutableStateOf(prefs.autoApproveUiTools) }
 
     // 用户从系统设置改完权限切回 app 时,Compose 默认不会重新检查 —
     // 监听 ON_RESUME 重算这三个状态,UI 自动重渲染。
@@ -80,6 +88,9 @@ fun BoundScreen(prefs: AppPrefs, onUnbind: () -> Unit) {
                 notifGranted = checkNotif()
                 photosGranted = checkPhotos()
                 videosGranted = checkVideos()
+                accessibilityReady = UiAccessibilityService.isAvailable()
+                captureReady = UiCaptureManager.isReady()
+                autoApproveUiTools = prefs.autoApproveUiTools
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -128,6 +139,38 @@ fun BoundScreen(prefs: AppPrefs, onUnbind: () -> Unit) {
             ) { openAppSettings(ctx as Activity) }
         }
 
+        CapabilityCard(
+            title = "屏幕操作",
+            enabled = accessibilityReady,
+            desc = if (accessibilityReady) {
+                "已启用无障碍服务,agent 可以读取界面结构并执行点击、滑动、输入和系统返回等操作。"
+            } else {
+                "需要手动开启无障碍服务后,agent 才能操作其他应用。"
+            },
+            actionLabel = "打开无障碍设置"
+        ) { openAccessibilitySettings(ctx as Activity) }
+
+        CapabilityCard(
+            title = "屏幕识别",
+            enabled = accessibilityReady || captureReady,
+            desc = if (accessibilityReady) {
+                "已启用无障碍截图,agent 可按需获取当前屏幕截图用于视觉理解。"
+            } else if (captureReady) {
+                "已授权屏幕录制,agent 可按需获取当前屏幕截图用于视觉理解。"
+            } else {
+                "建议先开启无障碍服务；也可授权系统屏幕录制弹窗作为截图兜底。"
+            },
+            actionLabel = "允许屏幕识别"
+        ) { onRequestScreenCapture() }
+
+        AutoApproveCard(
+            enabled = autoApproveUiTools,
+            onChange = {
+                prefs.autoApproveUiTools = it
+                autoApproveUiTools = it
+            }
+        )
+
         Spacer(Modifier.height(8.dp))
 
         Row(
@@ -150,6 +193,43 @@ fun BoundScreen(prefs: AppPrefs, onUnbind: () -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+@Composable
+private fun AutoApproveCard(
+    enabled: Boolean,
+    onChange: (Boolean) -> Unit
+) {
+    val container = if (enabled) {
+        MaterialTheme.colorScheme.tertiaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
+    }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = container),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text("自动批准屏幕操作", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    if (enabled) {
+                        "已开启: ui.tap / ui.swipe / ui.type_text / ui.global 不再逐次弹确认。"
+                    } else {
+                        "未开启: 敏感屏幕操作会逐次弹出确认。"
+                    },
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            Switch(checked = enabled, onCheckedChange = onChange)
+        }
     }
 }
 
@@ -202,11 +282,40 @@ private fun PermissionCard(
     }
 }
 
+@Composable
+private fun CapabilityCard(
+    title: String,
+    enabled: Boolean,
+    desc: String,
+    actionLabel: String,
+    onAction: () -> Unit
+) {
+    val container = if (enabled) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.secondaryContainer
+    }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = container),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(desc, style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = onAction) { Text(actionLabel) }
+        }
+    }
+}
+
 private fun openAppSettings(activity: Activity) {
     val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
         data = Uri.fromParts("package", activity.packageName, null)
     }
     activity.startActivity(intent)
+}
+
+private fun openAccessibilitySettings(activity: Activity) {
+    activity.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
 }
 
 private fun openBatterySettings(activity: Activity) {

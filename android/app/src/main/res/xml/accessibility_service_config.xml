@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Config for UiAccessibilityService. The service is the single way the
+     agent platform can drive other apps' UI on Android: tap / swipe / type
+     / global gestures, and dump the AccessibilityNodeInfo tree of the
+     foreground window so the LLM can read text+id without screen capture.
+
+     - canPerformGestures="true"             → required for dispatchGesture()
+     - flagRetrieveInteractiveWindows         → expose interactive windows in
+       findFocus() / getRootInActiveWindow()
+     - notificationTimeout=100                → minimal latency for events we
+       might subscribe to later (we don't currently watch events, but a low
+       value avoids the system batching things up if we add observers).
+     - description string explains to the user what the service does in
+       Settings → Accessibility (mandatory text). -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds"
+    android:canTakeScreenshot="true"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:packageNames=""
+    android:settingsActivity="com.agentplatform.android.ui.MainActivity" />

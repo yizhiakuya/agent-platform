@@ -11,4 +11,6 @@
     <string name="enroll_submit">绑定</string>
     <string name="fgs_running">Agent Platform 已连接</string>
     <string name="fgs_offline">Agent Platform — 连接中…</string>
+    <string name="accessibility_service_description">允许 Agent Platform 代你操作其他应用的界面 — 点击、滑动、输入文字、读屏。仅当 LLM 通过你的对话明确要求时触发。</string>
+    <string name="ui_capture_running">Agent Platform — 屏幕识别中</string>
 </resources>

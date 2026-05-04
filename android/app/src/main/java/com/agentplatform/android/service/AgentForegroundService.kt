@@ -10,6 +10,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.agentplatform.android.AgentApplication
+import com.agentplatform.android.confirm.ToolConfirmation
 import com.agentplatform.android.core.tool.ToolRegistry
 import com.agentplatform.android.core.ws.JsonRpcMethods
 import com.agentplatform.android.core.ws.JsonRpcNotification
@@ -25,6 +26,13 @@ import com.agentplatform.android.tools.photos.PhotosListAlbumsTool
 import com.agentplatform.android.tools.photos.PhotosListByAlbumTool
 import com.agentplatform.android.tools.photos.PhotosListRecentTool
 import com.agentplatform.android.tools.photos.PhotosRecentScreenshotsTool
+import com.agentplatform.android.tools.ui.UiDumpTreeTool
+import com.agentplatform.android.tools.ui.UiGlobalTool
+import com.agentplatform.android.tools.ui.UiOpenAppTool
+import com.agentplatform.android.tools.ui.UiScreenCaptureTool
+import com.agentplatform.android.tools.ui.UiSwipeTool
+import com.agentplatform.android.tools.ui.UiTapTool
+import com.agentplatform.android.tools.ui.UiTypeTextTool
 import com.agentplatform.android.tools.videos.VideosListRecentTool
 import com.agentplatform.android.ui.MainActivity
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -65,6 +73,13 @@ class AgentForegroundService : Service() {
         toolRegistry.register(PhotosListByAlbumTool(applicationContext, mapper))
         toolRegistry.register(PhotosRecentScreenshotsTool(applicationContext, mapper))
         toolRegistry.register(VideosListRecentTool(applicationContext, mapper))
+        toolRegistry.register(UiDumpTreeTool(mapper))
+        toolRegistry.register(UiScreenCaptureTool(mapper))
+        toolRegistry.register(UiOpenAppTool(applicationContext, mapper))
+        toolRegistry.register(UiTapTool(mapper))
+        toolRegistry.register(UiSwipeTool(mapper))
+        toolRegistry.register(UiTypeTextTool(mapper))
+        toolRegistry.register(UiGlobalTool(mapper))
 
         val prefs = AppPrefs(this)
         if (!prefs.isBound()) {
@@ -166,6 +181,19 @@ class AgentForegroundService : Service() {
 
         scope.launch {
             try {
+                if (tool.confirmRequired && !AppPrefs(applicationContext).autoApproveUiTools) {
+                    val approved = ToolConfirmation.request(applicationContext, tool.name, args)
+                    if (!approved) {
+                        wsClient.send(JsonRpcResponse(
+                            id = req.id,
+                            error = JsonRpcError(
+                                JsonRpcError.CONFIRMATION_REJECTED,
+                                "user rejected tool '${tool.name}'"
+                            )
+                        ))
+                        return@launch
+                    }
+                }
                 val result = tool.execute(args)
                 wsClient.send(JsonRpcResponse(id = req.id, result = result))
             } catch (e: Exception) {
