@@ -98,6 +98,10 @@ public class RemoteToolCallback {
                 .build();
     }
 
+    public ToolSpec spec() {
+        return spec;
+    }
+
     /**
      * Execute the device tool in response to one LLM-issued
      * {@link ToolUseBlock}:
@@ -121,7 +125,13 @@ public class RemoteToolCallback {
      * @param sink      per-request SSE sink (may be null in tests)
      */
     public ExecutionResult executeToolUse(ToolUseBlock tu, UUID userId, UUID sessionId, ChatEventSink sink) {
-        JsonNode args = parseArgs(tu);
+        return executeJsonToolUse(parseArgs(tu), userId, sessionId, sink);
+    }
+
+    public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
+        if (args == null || args.isNull()) {
+            args = mapper.createObjectNode();
+        }
         Map<String, Object> requestCtx = new HashMap<>();
         requestCtx.put("userId", userId);
         if (sessionId != null) requestCtx.put("sessionId", sessionId);

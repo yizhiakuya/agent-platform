@@ -125,9 +125,12 @@ public class MemoryExtractor {
             // delta on a busy chat dwarfs the chat itself if you ever skip
             // this — Opus is ~30x the per-token price.
             String factModel = props.agent().memory().factExtractorModel();
-            ConfiguredProvider provider = chatClients.isEmpty() ? null : chatClients.get(0);
+            ConfiguredProvider provider = chatClients.stream()
+                    .filter(ConfiguredProvider::isAnthropicMessages)
+                    .findFirst()
+                    .orElse(null);
             if (provider == null) {
-                log.warn("[memory-extract] no provider configured, skip fact extraction");
+                log.warn("[memory-extract] no anthropic-messages provider configured, skip fact extraction");
                 return;
             }
 

@@ -94,7 +94,11 @@ public class SkillLoadCallback {
      *                  aren't broadcast to the web client)
      */
     public ExecutionResult executeToolUse(ToolUseBlock tu, UUID userId, UUID sessionId, ChatEventSink sink) {
-        String name = parseName(tu);
+        return executeJsonToolUse(parseArgs(tu), userId, sessionId, sink);
+    }
+
+    public ExecutionResult executeJsonToolUse(JsonNode input, UUID userId, UUID sessionId, ChatEventSink sink) {
+        String name = parseName(input);
         if (name == null || name.isBlank()) {
             return ExecutionResult.text("Error: 'name' is required. Available skills: " + availableNames());
         }
@@ -107,7 +111,7 @@ public class SkillLoadCallback {
         return ExecutionResult.text(hit.get().body());
     }
 
-    private String parseName(ToolUseBlock tu) {
+    private JsonNode parseArgs(ToolUseBlock tu) {
         try {
             Object raw = tu._input();
             if (raw == null) return null;
@@ -121,13 +125,17 @@ public class SkillLoadCallback {
                     return null;
                 }
             }
-            if (node == null || !node.isObject()) return null;
-            JsonNode n = node.get("name");
-            return (n != null && n.isTextual()) ? n.asText() : null;
+            return node;
         } catch (Exception e) {
             log.warn("skill_load failed to parse ToolUseBlock input: {}", e.getMessage());
             return null;
         }
+    }
+
+    private String parseName(JsonNode node) {
+        if (node == null || !node.isObject()) return null;
+        JsonNode n = node.get("name");
+        return (n != null && n.isTextual()) ? n.asText() : null;
     }
 
     private String availableNames() {

@@ -30,9 +30,8 @@ public class AgentBeans {
 
     /**
      * Provider pool. ChatService iterates this in order, falling over to the
-     * next on synchronous setup failure. Providers with blank/placeholder
-     * apiKey are skipped with a warn — better to ship a degraded list than
-     * crash startup. v0 only honours kind=anthropic-messages.
+     * next provider on synchronous setup failure. Providers with blank or
+     * placeholder apiKey are skipped with a warning.
      */
     @Bean
     public List<ConfiguredProvider> chatClients(AgentProperties props) {
@@ -43,9 +42,11 @@ public class AgentBeans {
         List<ConfiguredProvider> out = new ArrayList<>(defs.size());
         for (AgentProperties.Provider p : defs) {
             if (p == null) continue;
-            if (!"anthropic-messages".equals(p.kind())) {
-                log.warn("[agent] skipping provider '{}' kind={} (only anthropic-messages supported in v0)",
-                        p.name(), p.kind());
+            String kind = p.kind() == null || p.kind().isBlank()
+                    ? "anthropic-messages" : p.kind().trim();
+            if (!"anthropic-messages".equals(kind) && !"codex-responses".equals(kind)) {
+                log.warn("[agent] skipping provider '{}' kind={} (unsupported)",
+                        p.name(), kind);
                 continue;
             }
             if (p.apiKey() == null || p.apiKey().isBlank() ||
@@ -53,20 +54,21 @@ public class AgentBeans {
                 log.warn("[agent] skipping provider '{}': empty/placeholder apiKey", p.name());
                 continue;
             }
-            // SDK-level retries disabled: ChatService.handleWithLlm wraps the
-            // whole agent loop in an outer try/catch and falls over to the
-            // next ConfiguredProvider. Stacking SDK retries on top of that
-            // multiplies billed requests on every transient 5xx / 429 (worst
-            // case 6× billed for one user-visible failure).
-            AnthropicClient client = AnthropicOkHttpClient.builder()
-                    .apiKey(p.apiKey())
-                    .baseUrl(p.baseUrl() == null || p.baseUrl().isBlank()
-                            ? "https://api.anthropic.com" : p.baseUrl())
-                    .maxRetries(0)
-                    .build();
-            out.add(new ConfiguredProvider(p.name(), client, p.model()));
-            log.info("[agent] provider '{}' ready: model={} baseUrl={}",
-                    p.name(), p.model(), p.baseUrl());
+            String baseUrl = p.baseUrl() == null || p.baseUrl().isBlank()
+                    ? defaultBaseUrl(kind) : p.baseUrl();
+            AnthropicClient client = null;
+            if ("anthropic-messages".equals(kind)) {
+                // SDK-level retries disabled: ChatService wraps the whole
+                // provider call in an outer failover loop.
+                client = AnthropicOkHttpClient.builder()
+                        .apiKey(p.apiKey())
+                        .baseUrl(baseUrl)
+                        .maxRetries(0)
+                        .build();
+            }
+            out.add(new ConfiguredProvider(p.name(), kind, client, baseUrl, p.apiKey(), p.model()));
+            log.info("[agent] provider '{}' ready: kind={} model={} baseUrl={}",
+                    p.name(), kind, p.model(), baseUrl);
         }
         if (out.isEmpty()) {
             throw new IllegalStateException(
@@ -75,11 +77,17 @@ public class AgentBeans {
         return out;
     }
 
+    private static String defaultBaseUrl(String kind) {
+        return "codex-responses".equals(kind)
+                ? "https://api.openai.com"
+                : "https://api.anthropic.com";
+    }
+
     /**
      * {@code @LoadBalanced} marks this builder so {@code WebClient.build()}
      * resolves {@code lb://service-name} URIs against Spring Cloud LoadBalancer
-     * (which talks to Nacos discovery). Used only by {@code DeviceToolDispatcher}
-     * and {@code DeviceHubClient} via explicit {@code @LoadBalanced} qualifier.
+     * (which talks to Nacos discovery). Used only by DeviceToolDispatcher and
+     * DeviceHubClient via explicit {@code @LoadBalanced} qualifier.
      */
     @Bean
     @LoadBalanced
@@ -102,10 +110,7 @@ public class AgentBeans {
     @Bean
     public WebClient hubWebClient(@LoadBalanced WebClient.Builder builder) {
         // Default Spring WebClient caps in-memory response decode at 256KB,
-        // which trips the moment a tool returns a high-res image (vision_b64
-        // alone is ~300-500KB at 2048px). Bump to 16MB — covers a single
-        // 5MB-base64 image plus headroom; anything bigger should already be
-        // going through the side-channel upload endpoint.
+        // which trips the moment a tool returns a high-res image. Bump to 16MB.
         return builder
                 .exchangeStrategies(org.springframework.web.reactive.function.client.ExchangeStrategies.builder()
                         .codecs(c -> c.defaultCodecs().maxInMemorySize(16 * 1024 * 1024))
@@ -114,9 +119,8 @@ public class AgentBeans {
     }
 
     /**
-     * Dedicated pool for SSE streaming work — each chat request blocks on a
-     * tool call, so we don't want to tie up Tomcat workers. Daemon threads so
-     * shutdown is clean.
+     * Dedicated pool for SSE streaming work. Each chat request may block on a
+     * tool call, so we don't want to tie up Tomcat workers.
      */
     @Bean(destroyMethod = "shutdown")
     public ExecutorService chatExecutor() {

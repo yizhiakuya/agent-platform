@@ -93,6 +93,9 @@ public class AgentLoopRunner {
                          List<MessageParam> messages,
                          ChatEventSink sink,
                          SseEmitter emitter) {
+        if (!provider.isAnthropicMessages() || provider.client() == null) {
+            throw new IllegalArgumentException("AgentLoopRunner requires anthropic-messages provider");
+        }
         // Hold the active stream so emitter cancellation can close it from
         // another thread — SDK forEach is blocking on the worker thread, the
         // close() interrupts the iterator and forEach unwinds with an IO error

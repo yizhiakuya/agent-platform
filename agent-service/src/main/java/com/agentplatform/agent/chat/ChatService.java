@@ -86,6 +86,7 @@ public class ChatService {
     private final MemoryExtractor memoryExtractor;
     private final HistoryReplayer historyReplayer;
     private final AgentLoopRunner agentLoopRunner;
+    private final CodexResponsesLoopRunner codexResponsesLoopRunner;
 
     public ChatService(DeviceHubClient deviceHubClient,
                        DeviceToolDispatcher dispatcher,
@@ -102,7 +103,8 @@ public class ChatService {
                        EmbeddingService embeddingService,
                        MemoryExtractor memoryExtractor,
                        HistoryReplayer historyReplayer,
-                       AgentLoopRunner agentLoopRunner) {
+                       AgentLoopRunner agentLoopRunner,
+                       CodexResponsesLoopRunner codexResponsesLoopRunner) {
         this.deviceHubClient = deviceHubClient;
         this.dispatcher = dispatcher;
         this.toolProvider = toolProvider;
@@ -119,6 +121,7 @@ public class ChatService {
         this.memoryExtractor = memoryExtractor;
         this.historyReplayer = historyReplayer;
         this.agentLoopRunner = agentLoopRunner;
+        this.codexResponsesLoopRunner = codexResponsesLoopRunner;
     }
 
     public void handle(UUID userId, ChatRequest req, SseEmitter emitter) {
@@ -208,8 +211,9 @@ public class ChatService {
         RuntimeException lastErr = null;
         for (ConfiguredProvider provider : chatClients) {
             try {
-                result = agentLoopRunner.run(provider, sessionId, userId, resolved,
-                        systemBlocks, tools, thinking, messages, sink, emitter);
+                result = runProvider(provider, sessionId, userId, resolved,
+                        stableSystemText, systemBlocks, tools, thinking,
+                        messages, req.message(), userText, sink, emitter);
                 break;
             } catch (RuntimeException e) {
                 lastErr = e;
@@ -235,13 +239,48 @@ public class ChatService {
 
         String fullReply = result.assistantText();
         persist(sessionId, userId, MessageRole.ASSISTANT, fullReply, null);
-        AgentLoopRunner.logCacheUsage(userId, result.usage(), System.currentTimeMillis() - t0);
+        logUsage(userId, result.usage(), System.currentTimeMillis() - t0);
         try {
             memoryExtractor.extractAsync(userId, sessionId, req.message(), fullReply);
         } catch (Exception ex) {
             log.warn("memoryExtractor.extractAsync failed: {}", ex.getMessage());
         }
         emitter.complete();
+    }
+
+    private RunResult runProvider(ConfiguredProvider provider,
+                                  UUID sessionId,
+                                  UUID userId,
+                                  ResolvedTools resolved,
+                                  String stableSystemText,
+                                  List<TextBlockParam> systemBlocks,
+                                  List<ToolUnion> tools,
+                                  ThinkingConfigEnabled thinking,
+                                  List<MessageParam> messages,
+                                  String currentMessage,
+                                  String userText,
+                                  ChatEventSink sink,
+                                  SseEmitter emitter) {
+        if (provider.isAnthropicMessages()) {
+            return agentLoopRunner.run(provider, sessionId, userId, resolved,
+                    systemBlocks, tools, thinking, messages, sink, emitter);
+        }
+        if (provider.isCodexResponses()) {
+            return codexResponsesLoopRunner.run(provider, sessionId, userId, resolved,
+                    stableSystemText,
+                    historyReplayer.loadRows(sessionId, userId, currentMessage),
+                    userText, sink, emitter);
+        }
+        throw new IllegalArgumentException("unsupported provider kind: " + provider.kind());
+    }
+
+    private void logUsage(UUID userId, Object usage, long durMs) {
+        if (usage instanceof Usage anthropicUsage) {
+            AgentLoopRunner.logCacheUsage(userId, anthropicUsage, durMs);
+        } else {
+            log.info("promptUsage user={} provider=codex usage={} dur={}ms",
+                    userId, usage == null ? "unavailable" : usage, durMs);
+        }
     }
 
     /* -------------------- mock path -------------------- */

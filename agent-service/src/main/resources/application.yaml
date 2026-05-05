@@ -33,8 +33,14 @@ agent-platform:
     maxTokens: ${AGENT_MAX_TOKENS:4096}
     # LLM provider pool. ChatService tries each in order, fails over to next on RuntimeException
     # at the synchronous setup stage. Reuses ANTHROPIC_API_KEY/BASE_URL/LLM_CHAT_MODEL env vars
-    # so existing deployments stay drop-in compatible. v0 only honours kind=anthropic-messages.
+    # so existing deployments stay drop-in compatible. Set CODEX_API_KEY to enable Codex via
+    # an OpenAI-compatible Responses API relay (for example sub2api).
     providers:
+      - name: ${CODEX_PROVIDER_NAME:codex-sub2api}
+        baseUrl: ${CODEX_BASE_URL:https://subapi.rainaki.top}
+        apiKey: ${CODEX_API_KEY:${OPENAI_API_KEY:}}
+        model: ${CODEX_CHAT_MODEL:${OPENAI_CHAT_MODEL:gpt-5.5}}
+        kind: codex-responses
       - name: ${LLM_PRIMARY_NAME:primary-anthropic}
         baseUrl: ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
         apiKey: ${ANTHROPIC_API_KEY:}

@@ -143,6 +143,11 @@ services:
       SERVER_PORT: 8082
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
+      # Codex provider through an OpenAI-compatible Responses API relay.
+      # Leave CODEX_API_KEY blank to skip this provider and use Anthropic below.
+      CODEX_API_KEY: ${CODEX_API_KEY:-${OPENAI_API_KEY:-}}
+      CODEX_BASE_URL: ${CODEX_BASE_URL:-https://subapi.rainaki.top}
+      CODEX_CHAT_MODEL: ${CODEX_CHAT_MODEL:-gpt-5.5}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       # Override to point at sub2api (cc.rainaki.top) or any Anthropic-compatible relay.
       # Default https://api.anthropic.com when this env var isn't set.
