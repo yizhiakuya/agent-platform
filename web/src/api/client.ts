@@ -62,6 +62,9 @@ export const api = {
   createSession: () =>
     request<SessionDto>('/api/sessions', { method: 'POST' }),
 
+  deleteSession: (sessionId: string) =>
+    request<void>(`/api/sessions/${sessionId}`, { method: 'DELETE' }),
+
   getPreferences: () =>
     request<UserPreferenceDto>('/api/me/preferences'),
 

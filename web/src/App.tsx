@@ -14,7 +14,7 @@ function Shell() {
   return (
     <div className="min-h-screen flex flex-col">
       <header className="border-b bg-white">
-        <div className="max-w-5xl mx-auto px-6 py-3 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
           <Link to="/chat" className="font-semibold">Agent Platform</Link>
           <nav className="flex items-center gap-4 text-sm">
             <Link to="/devices" className="text-slate-600 hover:text-slate-900">设备</Link>
@@ -27,7 +27,7 @@ function Shell() {
           </nav>
         </div>
       </header>
-      <main className="flex-1 max-w-5xl mx-auto w-full px-6 py-6">
+      <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-6">
         <Outlet />
       </main>
     </div>
