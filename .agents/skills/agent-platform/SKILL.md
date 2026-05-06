@@ -169,6 +169,7 @@ Web at `http://localhost` (or whatever `WEB_PUBLIC_URL` is); first user register
 - Web changes: run `npm run build` in `web/`.
 - Android ADB path on this machine is `C:\Users\admin\AppData\Local\Android\Sdk\platform-tools\adb.exe`; `adb` is not necessarily on PATH.
 - Android builds should use process-local `JAVA_HOME=C:\Users\admin\.jdks\ms-21.0.10`. Do not use `C:\Users\admin\.jdks\openjdk-26`; Gradle/AGP fails with a bare `* What went wrong: 26`.
+- The Android Gradle wrapper lives under `android/`, not the repository root. Run `.\gradlew.bat assembleDebug` with `workdir=D:\agent-platform\android`.
 - For quote-heavy Android shell edits, pipe a script into `adb shell run-as com.agentplatform.android sh`; PowerShell plus inline `adb shell ... sh -c` quoting is fragile and can corrupt commands.
 - Agent-service targeted tests from Windows/Docker:
 
