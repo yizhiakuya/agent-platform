@@ -20,12 +20,14 @@ import com.agentplatform.android.core.ws.WsClient
 import com.agentplatform.android.core.ws.decodeJsonRpc
 import com.agentplatform.android.core.ws.JsonRpcError
 import com.agentplatform.android.data.AppPrefs
+import com.agentplatform.android.photos.PhotoIndexUploader
 import com.agentplatform.android.tools.photos.PhotosGetFullTool
 import com.agentplatform.android.tools.photos.PhotosGetMetadataTool
 import com.agentplatform.android.tools.photos.PhotosListAlbumsTool
 import com.agentplatform.android.tools.photos.PhotosListByAlbumTool
 import com.agentplatform.android.tools.photos.PhotosListRecentTool
 import com.agentplatform.android.tools.photos.PhotosRecentScreenshotsTool
+import com.agentplatform.android.tools.photos.PhotosSemanticCandidatesTool
 import com.agentplatform.android.tools.ui.UiDumpTreeTool
 import com.agentplatform.android.tools.ui.UiGlobalTool
 import com.agentplatform.android.tools.ui.UiOpenAppTool
@@ -41,6 +43,8 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -72,6 +76,7 @@ class AgentForegroundService : Service() {
         toolRegistry.register(PhotosListAlbumsTool(applicationContext, mapper))
         toolRegistry.register(PhotosListByAlbumTool(applicationContext, mapper))
         toolRegistry.register(PhotosRecentScreenshotsTool(applicationContext, mapper))
+        toolRegistry.register(PhotosSemanticCandidatesTool(applicationContext, mapper))
         toolRegistry.register(VideosListRecentTool(applicationContext, mapper))
         toolRegistry.register(UiDumpTreeTool(mapper))
         toolRegistry.register(UiScreenCaptureTool(mapper))
@@ -97,6 +102,7 @@ class AgentForegroundService : Service() {
             onClosed = { code, reason -> updateNotification("连接已关闭 $code: ${reason.take(40)}") }
         )
         wsClient.connect()
+        startPhotoIndexSync()
     }
 
     /** Tracks the last server-pushed frame for visibility in the FGS notification. */
@@ -206,12 +212,30 @@ class AgentForegroundService : Service() {
         }
     }
 
+    private fun startPhotoIndexSync() {
+        scope.launch {
+            val uploader = PhotoIndexUploader(applicationContext, mapper)
+            while (true) {
+                try {
+                    val result = uploader.syncOnce()
+                    Log.i(TAG, "photo index sync ${result.status}: scanned=${result.scanned} uploaded=${result.uploaded}")
+                    val nextDelay = if (result.uploaded > 0) PHOTO_INDEX_ACTIVE_DELAY_MS else PHOTO_INDEX_IDLE_DELAY_MS
+                    delay(nextDelay)
+                } catch (e: Exception) {
+                    Log.w(TAG, "photo index sync failed: ${e.message}", e)
+                    delay(PHOTO_INDEX_ERROR_DELAY_MS)
+                }
+            }
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return START_STICKY
     }
 
     override fun onDestroy() {
         if (::wsClient.isInitialized) wsClient.close("service destroyed")
+        scope.cancel()
         _status.value = "已停止"
         super.onDestroy()
     }
@@ -244,6 +268,9 @@ class AgentForegroundService : Service() {
     companion object {
         private const val TAG = "AgentFGS"
         private const val NOTI_ID = 1001
+        private const val PHOTO_INDEX_ACTIVE_DELAY_MS = 5_000L
+        private const val PHOTO_INDEX_IDLE_DELAY_MS = 15 * 60_000L
+        private const val PHOTO_INDEX_ERROR_DELAY_MS = 60_000L
 
         /**
          * Single shared status string updated alongside the foreground notification.
