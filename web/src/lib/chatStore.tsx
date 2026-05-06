@@ -19,6 +19,8 @@ interface ChatStore {
   abortRef: MutableRefObject<AbortController | null>;
   lastSentRef: MutableRefObject<string>;
   sentEventsIdxRef: MutableRefObject<number>;
+  turnStartedAtRef: MutableRefObject<number>;
+  eventCacheRef: MutableRefObject<Record<string, ChatEvent[]>>;
 }
 
 const ChatStoreContext = createContext<ChatStore | null>(null);
@@ -40,6 +42,8 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const abortRef = useRef<AbortController | null>(null);
   const lastSentRef = useRef('');
   const sentEventsIdxRef = useRef(-1);
+  const turnStartedAtRef = useRef(0);
+  const eventCacheRef = useRef<Record<string, ChatEvent[]>>({});
 
   function setSessionId(id: string | null) {
     setSessionIdState(id);
@@ -60,7 +64,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       busy, setBusy,
       sessionId: sessionIdState, setSessionId,
       input, setInput,
-      abortRef, lastSentRef, sentEventsIdxRef,
+      abortRef, lastSentRef, sentEventsIdxRef, turnStartedAtRef, eventCacheRef,
     }}>
       {children}
     </ChatStoreContext.Provider>
