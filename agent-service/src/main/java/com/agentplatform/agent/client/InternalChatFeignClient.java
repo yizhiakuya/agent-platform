@@ -3,10 +3,18 @@ package com.agentplatform.agent.client;
 import com.agentplatform.api.chat.CreateSessionRequest;
 import com.agentplatform.api.chat.MemoryFactDto;
 import com.agentplatform.api.chat.MessageDto;
+import com.agentplatform.api.chat.PendingPhotoAssetDto;
+import com.agentplatform.api.chat.PhotoAssetEmbeddingRequest;
+import com.agentplatform.api.chat.PhotoAssetSearchRequest;
+import com.agentplatform.api.chat.PhotoAssetSearchResult;
 import com.agentplatform.api.chat.PromoteRequest;
 import com.agentplatform.api.chat.QueryFactRequest;
 import com.agentplatform.api.chat.SaveFactRequest;
+import com.agentplatform.api.chat.SessionArtifactDto;
+import com.agentplatform.api.chat.SessionContextSummaryDto;
 import com.agentplatform.api.chat.SessionDto;
+import com.agentplatform.api.chat.UpsertSessionArtifactRequest;
+import com.agentplatform.api.chat.UpsertSessionContextSummaryRequest;
 import com.agentplatform.api.chat.WriteMessageRequest;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -36,6 +44,21 @@ public interface InternalChatFeignClient {
     @GetMapping("/sessions/{id}/messages")
     List<MessageDto> listMessages(@PathVariable("id") UUID sessionId, @RequestParam("userId") UUID userId);
 
+    @PostMapping("/session-artifacts")
+    SessionArtifactDto upsertArtifact(@RequestBody UpsertSessionArtifactRequest req);
+
+    @GetMapping("/sessions/{id}/artifacts")
+    List<SessionArtifactDto> listArtifacts(@PathVariable("id") UUID sessionId,
+                                           @RequestParam("userId") UUID userId,
+                                           @RequestParam("limit") int limit);
+
+    @GetMapping("/sessions/{id}/context-summary")
+    SessionContextSummaryDto getContextSummary(@PathVariable("id") UUID sessionId,
+                                              @RequestParam("userId") UUID userId);
+
+    @PostMapping("/session-context-summaries")
+    SessionContextSummaryDto upsertContextSummary(@RequestBody UpsertSessionContextSummaryRequest req);
+
     /**
      * Persist a long-term memory fact (with embedding) for a user.
      * Returns {@code {"id": <uuid>}}.
@@ -55,4 +78,13 @@ public interface InternalChatFeignClient {
      */
     @PostMapping("/memory/promote")
     Map<String, Integer> promote(@RequestBody PromoteRequest req);
+
+    @PostMapping("/photos/search")
+    List<PhotoAssetSearchResult> searchPhotos(@RequestBody PhotoAssetSearchRequest req);
+
+    @GetMapping("/photos/pending")
+    List<PendingPhotoAssetDto> listPendingPhotos(@RequestParam("limit") int limit);
+
+    @PostMapping("/photos/embedding")
+    void savePhotoEmbedding(@RequestBody PhotoAssetEmbeddingRequest req);
 }

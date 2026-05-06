@@ -4,22 +4,21 @@ import com.agentplatform.agent.ai.ChatEventSink;
 import com.agentplatform.agent.ai.ConfiguredProvider;
 import com.agentplatform.agent.ai.EmbeddingService;
 import com.agentplatform.agent.ai.MemoryExtractor;
-import com.agentplatform.agent.ai.PersonaLoader;
 import com.agentplatform.agent.ai.RemoteDeviceToolCallbackProvider;
 import com.agentplatform.agent.ai.ResolvedTools;
+import com.agentplatform.agent.ai.SessionSummaryRefresher;
 import com.agentplatform.agent.ai.SkillLoadCallback;
-import com.agentplatform.agent.ai.SkillRegistry;
-import com.agentplatform.agent.client.AuthInternalClient;
 import com.agentplatform.agent.client.DeviceHubClient;
 import com.agentplatform.agent.client.DeviceToolDispatcher;
 import com.agentplatform.agent.client.InternalChatFeignClient;
 import com.agentplatform.agent.config.AgentProperties;
-import com.agentplatform.api.auth.UserPreferenceDto;
 import com.agentplatform.api.chat.CreateSessionRequest;
 import com.agentplatform.api.chat.MemoryFactDto;
+import com.agentplatform.api.chat.MessageDto;
 import com.agentplatform.api.chat.MessageRole;
 import com.agentplatform.api.chat.QueryFactRequest;
 import com.agentplatform.api.chat.SessionDto;
+import com.agentplatform.api.chat.UpsertSessionArtifactRequest;
 import com.agentplatform.api.chat.WriteMessageRequest;
 import com.agentplatform.api.hub.OnlineDeviceDto;
 import com.agentplatform.protocol.ToolResult;
@@ -78,15 +77,14 @@ public class ChatService {
     private final ObjectMapper mapper;
     private final AgentProperties props;
     private final List<ConfiguredProvider> chatClients;
-    private final PersonaLoader personaLoader;
-    private final SkillRegistry skillRegistry;
     private final SkillLoadCallback skillLoadCallback;
-    private final AuthInternalClient authClient;
     private final EmbeddingService embeddingService;
     private final MemoryExtractor memoryExtractor;
-    private final HistoryReplayer historyReplayer;
     private final AgentLoopRunner agentLoopRunner;
     private final CodexResponsesLoopRunner codexResponsesLoopRunner;
+    private final ContextAssembler contextAssembler;
+    private final ToolArtifactExtractor artifactExtractor;
+    private final SessionSummaryRefresher sessionSummaryRefresher;
 
     public ChatService(DeviceHubClient deviceHubClient,
                        DeviceToolDispatcher dispatcher,
@@ -96,15 +94,14 @@ public class ChatService {
                        ObjectMapper mapper,
                        AgentProperties props,
                        List<ConfiguredProvider> chatClients,
-                       PersonaLoader personaLoader,
-                       SkillRegistry skillRegistry,
                        SkillLoadCallback skillLoadCallback,
-                       AuthInternalClient authClient,
                        EmbeddingService embeddingService,
                        MemoryExtractor memoryExtractor,
-                       HistoryReplayer historyReplayer,
                        AgentLoopRunner agentLoopRunner,
-                       CodexResponsesLoopRunner codexResponsesLoopRunner) {
+                       CodexResponsesLoopRunner codexResponsesLoopRunner,
+                       ContextAssembler contextAssembler,
+                       ToolArtifactExtractor artifactExtractor,
+                       SessionSummaryRefresher sessionSummaryRefresher) {
         this.deviceHubClient = deviceHubClient;
         this.dispatcher = dispatcher;
         this.toolProvider = toolProvider;
@@ -113,15 +110,14 @@ public class ChatService {
         this.mapper = mapper;
         this.props = props;
         this.chatClients = chatClients == null ? List.of() : chatClients;
-        this.personaLoader = personaLoader;
-        this.skillRegistry = skillRegistry;
         this.skillLoadCallback = skillLoadCallback;
-        this.authClient = authClient;
         this.embeddingService = embeddingService;
         this.memoryExtractor = memoryExtractor;
-        this.historyReplayer = historyReplayer;
         this.agentLoopRunner = agentLoopRunner;
         this.codexResponsesLoopRunner = codexResponsesLoopRunner;
+        this.contextAssembler = contextAssembler;
+        this.artifactExtractor = artifactExtractor;
+        this.sessionSummaryRefresher = sessionSummaryRefresher;
     }
 
     public void handle(UUID userId, ChatRequest req, SseEmitter emitter) {
@@ -145,7 +141,7 @@ public class ChatService {
             }
         } catch (Exception e) {
             log.warn("Chat handling failed for user {}", userId, e);
-            safeSend(emitter, SseEvent.error(mapper, "Failure: " + e.getMessage()));
+            safeSend(emitter, SseEvent.error(mapper, userFacingGeneralFailureMessage(e)));
             emitter.completeWithError(e);
         }
     }
@@ -172,17 +168,8 @@ public class ChatService {
         // Cache layout — system text is bit-identical across requests so the
         // ephemeral cache breakpoint hits cleanly. Per-request memories ride
         // along on the user message instead so they don't churn the cache.
-        String stableSystemText = PromptAssembler.buildSystemText(
-                personaLoader.getBundle(),
-                loadUserPrefs(userId),
-                skillRegistry.all());
         List<MemoryFactDto> memories = recallMemories(userId, req.message());
-        String userText = PromptAssembler.composeUserText(
-                PromptAssembler.formatMemoryBlock(memories), req.message());
-
-        boolean cacheEnabled = Boolean.TRUE.equals(props.agent().memory().enablePromptCache())
-                && stableSystemText.length() >= PromptAssembler.PROMPT_CACHE_MIN_CHARS;
-        List<TextBlockParam> systemBlocks = PromptAssembler.buildSystemBlocks(stableSystemText, cacheEnabled);
+        ContextBundle context = contextAssembler.assemble(userId, sessionId, req.message(), memories);
         List<ToolUnion> tools = PromptAssembler.buildToolUnionList(
                 resolved.definitions(),
                 skillLoadCallback.toAnthropicTool(),
@@ -194,13 +181,13 @@ public class ChatService {
             thinking = ThinkingConfigEnabled.builder().budgetTokens(budget).build();
         }
 
-        List<MessageParam> messages = historyReplayer.loadAsParams(sessionId, userId, req.message());
+        List<MessageParam> messages = context.anthropicMessages();
         messages.add(MessageParam.builder()
                 .role(MessageParam.Role.USER)
-                .content(userText)
+                .content(context.userText())
                 .build());
 
-        ChatEventSink sink = ev -> safeSend(emitter, ev);
+        ChatEventSink sink = ev -> emitAndPersistToolEvent(emitter, sessionId, userId, ev);
 
         long t0 = System.currentTimeMillis();
 
@@ -212,8 +199,8 @@ public class ChatService {
         for (ConfiguredProvider provider : chatClients) {
             try {
                 result = runProvider(provider, sessionId, userId, resolved,
-                        stableSystemText, systemBlocks, tools, thinking,
-                        messages, req.message(), userText, sink, emitter);
+                        context.stableSystemText(), context.systemBlocks(), tools, thinking,
+                        messages, context.historyRows(), context.userText(), sink, emitter);
                 break;
             } catch (RuntimeException e) {
                 lastErr = e;
@@ -221,8 +208,9 @@ public class ChatService {
             }
         }
         if (result == null) {
-            String msg = lastErr == null ? "no provider available" : lastErr.getMessage();
-            safeSend(emitter, SseEvent.error(mapper, "All providers failed: " + msg));
+            log.warn("[agent] all providers failed for user {} session {}",
+                    userId, sessionId, lastErr);
+            safeSend(emitter, SseEvent.error(mapper, userFacingProviderFailureMessage(lastErr)));
             emitter.complete();
             return;
         }
@@ -237,13 +225,32 @@ public class ChatService {
             return;
         }
 
+        if (result.exhausted()) {
+            String message = result.exhaustionReason() == null || result.exhaustionReason().isBlank()
+                    ? "任务还没完成，但本轮工具调用次数已达到上限。请发送“继续”，我会接着做。"
+                    : result.exhaustionReason();
+            log.info("Chat exhausted tool iterations for user {} session {}: {}", userId, sessionId, message);
+            safeSend(emitter, SseEvent.error(mapper, message));
+            long durMs = System.currentTimeMillis() - t0;
+            persist(sessionId, userId, MessageRole.ASSISTANT, message, assistantMetadata(durMs));
+            logUsage(userId, result.usage(), durMs);
+            emitter.complete();
+            return;
+        }
+
         String fullReply = result.assistantText();
-        persist(sessionId, userId, MessageRole.ASSISTANT, fullReply, null);
-        logUsage(userId, result.usage(), System.currentTimeMillis() - t0);
+        long durMs = System.currentTimeMillis() - t0;
+        persist(sessionId, userId, MessageRole.ASSISTANT, fullReply, assistantMetadata(durMs));
+        logUsage(userId, result.usage(), durMs);
         try {
             memoryExtractor.extractAsync(userId, sessionId, req.message(), fullReply);
         } catch (Exception ex) {
             log.warn("memoryExtractor.extractAsync failed: {}", ex.getMessage());
+        }
+        try {
+            sessionSummaryRefresher.refreshAsync(userId, sessionId);
+        } catch (Exception ex) {
+            log.warn("sessionSummaryRefresher.refreshAsync failed: {}", ex.getMessage());
         }
         emitter.complete();
     }
@@ -257,7 +264,7 @@ public class ChatService {
                                   List<ToolUnion> tools,
                                   ThinkingConfigEnabled thinking,
                                   List<MessageParam> messages,
-                                  String currentMessage,
+                                  List<MessageDto> historyRows,
                                   String userText,
                                   ChatEventSink sink,
                                   SseEmitter emitter) {
@@ -268,10 +275,73 @@ public class ChatService {
         if (provider.isCodexResponses()) {
             return codexResponsesLoopRunner.run(provider, sessionId, userId, resolved,
                     stableSystemText,
-                    historyReplayer.loadRows(sessionId, userId, currentMessage),
+                    historyRows,
                     userText, sink, emitter);
         }
         throw new IllegalArgumentException("unsupported provider kind: " + provider.kind());
+    }
+
+    static String userFacingProviderFailureMessage(@Nullable Throwable error) {
+        String raw = error == null || error.getMessage() == null
+                ? ""
+                : error.getMessage().toLowerCase();
+        if (raw.contains("no available accounts")
+                || raw.contains("service unavailable")
+                || raw.contains("status code 503")
+                || raw.contains("503")) {
+            return "模型服务暂时不可用，可能是上游账号池没有可用账号。请稍后再试。";
+        }
+        if (raw.contains("rate limit")
+                || raw.contains("too many requests")
+                || raw.contains("quota")
+                || raw.contains("429")) {
+            return "模型服务当前被限流或额度不足，请稍后再试。";
+        }
+        if (raw.contains("unauthorized")
+                || raw.contains("forbidden")
+                || raw.contains("invalid api key")
+                || raw.contains("401")
+                || raw.contains("403")) {
+            return "模型服务认证配置异常，请稍后联系管理员处理。";
+        }
+        if (raw.contains("timeout")
+                || raw.contains("timed out")
+                || raw.contains("connection refused")
+                || raw.contains("connection reset")) {
+            return "模型服务连接超时或网络暂时不可达，请稍后再试。";
+        }
+        return "模型服务暂时无法完成请求，请稍后再试。";
+    }
+
+    static String userFacingGeneralFailureMessage(Throwable error) {
+        if (isLikelyProviderFailure(error)) {
+            return userFacingProviderFailureMessage(error);
+        }
+        return "请求处理失败，请稍后再试。";
+    }
+
+    private static boolean isLikelyProviderFailure(@Nullable Throwable error) {
+        String raw = error == null || error.getMessage() == null
+                ? ""
+                : error.getMessage().toLowerCase();
+        return raw.contains("no available accounts")
+                || raw.contains("service unavailable")
+                || raw.contains("api_error")
+                || raw.contains("rate limit")
+                || raw.contains("too many requests")
+                || raw.contains("quota")
+                || raw.contains("unauthorized")
+                || raw.contains("forbidden")
+                || raw.contains("invalid api key")
+                || raw.contains("timeout")
+                || raw.contains("timed out")
+                || raw.contains("connection refused")
+                || raw.contains("connection reset")
+                || raw.contains("status code 503")
+                || raw.contains("503")
+                || raw.contains("429")
+                || raw.contains("401")
+                || raw.contains("403");
     }
 
     private void logUsage(UUID userId, Object usage, long durMs) {
@@ -313,9 +383,10 @@ public class ChatService {
                     "tool " + toolName + " failed: " + result.error().message(), null);
         } else {
             send(emitter, SseEvent.toolCallResult(mapper, toolName, result.value()));
-            persist(sessionId, userId, MessageRole.TOOL_RESULT,
+            MessageDto saved = persist(sessionId, userId, MessageRole.TOOL_RESULT,
                     "tool " + toolName + " returned",
                     toolResultMetadata(toolName, result.value()));
+            persistArtifacts(sessionId, userId, saved == null ? null : saved.id(), toolName, result.value());
             String reply = "[mock-llm] Tool '" + toolName + "' returned the result above. " +
                     "Set ANTHROPIC_API_KEY to use a real LLM.";
             send(emitter, SseEvent.assistantMessage(mapper, reply));
@@ -325,18 +396,6 @@ public class ChatService {
     }
 
     /* -------------------- per-request loaders -------------------- */
-
-    private String loadUserPrefs(UUID userId) {
-        try {
-            UserPreferenceDto pref = authClient.getPreferences(userId);
-            if (pref == null) return "";
-            String content = pref.content();
-            return content == null ? "" : content.trim();
-        } catch (Exception e) {
-            log.debug("loadUserPrefs failed for user {}: {}", userId, e.getMessage());
-            return "";
-        }
-    }
 
     private List<MemoryFactDto> recallMemories(UUID userId, String query) {
         if (query == null || query.isBlank()) return List.of();
@@ -372,21 +431,22 @@ public class ChatService {
         }
     }
 
-    private void persist(UUID sessionId, UUID userId, MessageRole role,
-                         String content, @Nullable JsonNode metadata) {
-        if (sessionId == null) return;  // session creation failed earlier
+    private MessageDto persist(UUID sessionId, UUID userId, MessageRole role,
+                               String content, @Nullable JsonNode metadata) {
+        if (sessionId == null) return null;  // session creation failed earlier
         try {
-            chatClientFeign.writeMessage(new WriteMessageRequest(
+            return chatClientFeign.writeMessage(new WriteMessageRequest(
                     sessionId, userId, role, content, metadata));
         } catch (Exception e) {
             log.warn("Failed to persist {} message for session {}: {}",
                     role, sessionId, e.getMessage());
+            return null;
         }
     }
 
     private JsonNode toolCallMetadata(UUID deviceId, String toolName, JsonNode args) {
         ObjectNode m = mapper.createObjectNode();
-        m.put("deviceId", deviceId.toString());
+        m.put("deviceId", deviceId == null ? null : deviceId.toString());
         m.put("tool", toolName);
         m.set("args", args == null ? mapper.createObjectNode() : args);
         return m;
@@ -397,6 +457,54 @@ public class ChatService {
         m.put("tool", toolName);
         m.set("result", result == null ? mapper.createObjectNode() : result);
         return m;
+    }
+
+    private JsonNode assistantMetadata(long durationMs) {
+        ObjectNode m = mapper.createObjectNode();
+        m.put("durationMs", Math.max(0L, durationMs));
+        return m;
+    }
+
+    private void emitAndPersistToolEvent(SseEmitter emitter, UUID sessionId, UUID userId, SseEvent event) {
+        safeSend(emitter, event);
+        if (event == null || event.data() == null || event.data().isNull()) return;
+        if ("tool_call_started".equals(event.type())) {
+            JsonNode data = event.data();
+            String tool = data.path("tool").asText("tool");
+            UUID deviceId = parseUuid(data.path("deviceId").asText(null));
+            JsonNode args = data.path("args").isMissingNode() ? mapper.createObjectNode() : data.path("args");
+            persist(sessionId, userId, MessageRole.TOOL_CALL, "calling " + tool,
+                    toolCallMetadata(deviceId, tool, args));
+        } else if ("tool_call_result".equals(event.type())) {
+            JsonNode data = event.data();
+            String tool = data.path("tool").asText("tool");
+            JsonNode result = data.path("result").isMissingNode() ? mapper.createObjectNode() : data.path("result");
+            MessageDto saved = persist(sessionId, userId, MessageRole.TOOL_RESULT, "tool " + tool + " returned",
+                    toolResultMetadata(tool, result));
+            persistArtifacts(sessionId, userId, saved == null ? null : saved.id(), tool, result);
+        }
+    }
+
+    private void persistArtifacts(UUID sessionId, UUID userId, UUID messageId, String tool, JsonNode result) {
+        List<UpsertSessionArtifactRequest> artifacts =
+                artifactExtractor.extract(sessionId, userId, messageId, tool, result);
+        for (UpsertSessionArtifactRequest artifact : artifacts) {
+            try {
+                chatClientFeign.upsertArtifact(artifact);
+            } catch (Exception e) {
+                log.debug("Failed to persist artifact {} for session {}: {}",
+                        artifact.artifactKey(), sessionId, e.getMessage());
+            }
+        }
+    }
+
+    private UUID parseUuid(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     /* -------------------- sse helpers -------------------- */

@@ -31,6 +31,11 @@ agent-platform:
     # Where to find device-hub (load-balanced via Nacos by service name)
     hub-base-uri: lb://device-hub-service
     maxTokens: ${AGENT_MAX_TOKENS:4096}
+    # Hard cap for one agentic request. UI automation can legitimately need
+    # several observe -> act -> observe cycles; when the cap is hit we surface
+    # an explicit incomplete-task message instead of silently persisting a
+    # mid-task status update as the final answer.
+    maxAgentIterations: ${AGENT_MAX_ITERATIONS:24}
     # LLM provider pool. ChatService tries each in order, fails over to next on RuntimeException
     # at the synchronous setup stage. Reuses ANTHROPIC_API_KEY/BASE_URL/LLM_CHAT_MODEL env vars
     # so existing deployments stay drop-in compatible. Set CODEX_API_KEY to enable Codex via
@@ -84,6 +89,31 @@ agent-platform:
       # `retrieval.passage` is a safe one-size-fits-all for both store + recall;
       # asymmetric retrieval would split into query/passage but adds complexity.
       embeddingTask: ${MEMORY_EMBEDDING_TASK:retrieval.passage}
+      # Context v2: keep a small verbatim tail and summarize older turns.
+      enableSessionSummary: ${CONTEXT_ENABLE_SESSION_SUMMARY:true}
+      recentHistoryMessages: ${CONTEXT_RECENT_HISTORY_MESSAGES:12}
+      summaryTriggerMessages: ${CONTEXT_SUMMARY_TRIGGER_MESSAGES:18}
+      maxInputTokens: ${CONTEXT_MAX_INPUT_TOKENS:48000}
+      summaryMaxTokens: ${CONTEXT_SUMMARY_MAX_TOKENS:1200}
+    photos:
+      # True semantic photo search needs a multimodal embedding model where
+      # text queries and image thumbnails share one vector space. Point these
+      # at a multimodal CLIP-compatible endpoint or a local sidecar. If unset,
+      # the code falls back to the memory embedding endpoint for wiring tests,
+      # but image embedding will only work if that endpoint accepts image input.
+      enabled: ${PHOTO_INDEX_ENABLED:true}
+      fallbackRealtime: ${PHOTO_INDEX_FALLBACK_REALTIME:true}
+      embeddingModel: ${PHOTO_EMBEDDING_MODEL:clip-ViT-B-32-multilingual-v1}
+      embeddingBaseUrl: ${PHOTO_EMBEDDING_BASE_URL:${MEMORY_EMBEDDING_BASE_URL:}}
+      embeddingApiKey: ${PHOTO_EMBEDDING_API_KEY:${MEMORY_EMBEDDING_API_KEY:}}
+      embeddingDim: ${PHOTO_EMBEDDING_DIM:1024}
+      textTask: ${PHOTO_EMBEDDING_TEXT_TASK:}
+      imageTask: ${PHOTO_EMBEDDING_IMAGE_TASK:}
+      inputImageField: ${PHOTO_EMBEDDING_IMAGE_FIELD:image}
+      searchTopK: ${PHOTO_SEARCH_TOP_K:8}
+      minScore: ${PHOTO_SEARCH_MIN_SCORE:0.20}
+      indexBatchSize: ${PHOTO_INDEX_BATCH_SIZE:8}
+      requestTimeoutSeconds: ${PHOTO_EMBEDDING_TIMEOUT_SECONDS:180}
 
 logging:
   level:

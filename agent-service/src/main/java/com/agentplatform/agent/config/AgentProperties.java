@@ -29,15 +29,24 @@ public record AgentProperties(
             long toolCallTimeoutMs,
             String hubBaseUri,
             int maxTokens,
+            int maxAgentIterations,
             List<Provider> providers,
-            Memory memory
+            Memory memory,
+            Photos photos
     ) {
         public Agent {
             if (maxTokens <= 0) {
                 maxTokens = 4096;
             }
+            if (maxAgentIterations <= 0) {
+                maxAgentIterations = 24;
+            }
             if (memory == null) {
-                memory = new Memory(null, 0, 0, null, null, 0, null, 0, null, 0, null, null, null);
+                memory = new Memory(null, 0, 0, null, null, 0, null, 0, null, 0, null, null, null,
+                        0, 0, 0, 0, null);
+            }
+            if (photos == null) {
+                photos = new Photos(null, null, null, 0, null, null, null, true, true, 50, 0.20d, 8, 180);
             }
         }
     }
@@ -77,7 +86,12 @@ public record AgentProperties(
             int webSearchMaxUses,
             String embeddingBaseUrl,
             String embeddingApiKey,
-            String embeddingTask
+            String embeddingTask,
+            int recentHistoryMessages,
+            int summaryTriggerMessages,
+            int maxInputTokens,
+            int summaryMaxTokens,
+            Boolean enableSessionSummary
     ) {
         public Memory {
             if (embeddingModel == null || embeddingModel.isBlank()) {
@@ -124,6 +138,80 @@ public record AgentProperties(
             }
             if (webSearchMaxUses <= 0) {
                 webSearchMaxUses = 5;
+            }
+            if (recentHistoryMessages <= 0) {
+                recentHistoryMessages = 12;
+            }
+            if (summaryTriggerMessages <= 0) {
+                summaryTriggerMessages = 18;
+            }
+            if (maxInputTokens <= 0) {
+                maxInputTokens = 48_000;
+            }
+            if (summaryMaxTokens <= 0) {
+                summaryMaxTokens = 1_200;
+            }
+            if (enableSessionSummary == null) {
+                enableSessionSummary = Boolean.TRUE;
+            }
+        }
+    }
+
+    /**
+     * Server-side photo index config. The default provider fields intentionally
+     * reuse the memory embedding endpoint, but production should point this at
+     * a multimodal image/text embedding endpoint (for example a jina-clip-v2
+     * sidecar) so text queries and image thumbnails land in the same vector
+     * space.
+     */
+    public record Photos(
+            String embeddingModel,
+            String embeddingBaseUrl,
+            String embeddingApiKey,
+            int embeddingDim,
+            String textTask,
+            String imageTask,
+            String inputImageField,
+            Boolean enabled,
+            Boolean fallbackRealtime,
+            int searchTopK,
+            double minScore,
+            int indexBatchSize,
+            int requestTimeoutSeconds
+    ) {
+        public Photos {
+            if (embeddingModel == null || embeddingModel.isBlank()) {
+                embeddingModel = "clip-ViT-B-32-multilingual-v1";
+            }
+            if (embeddingDim <= 0) {
+                embeddingDim = 1024;
+            }
+            if (textTask != null && textTask.isBlank()) {
+                textTask = null;
+            }
+            if (imageTask != null && imageTask.isBlank()) {
+                imageTask = null;
+            }
+            if (inputImageField == null || inputImageField.isBlank()) {
+                inputImageField = "image";
+            }
+            if (enabled == null) {
+                enabled = Boolean.TRUE;
+            }
+            if (fallbackRealtime == null) {
+                fallbackRealtime = Boolean.TRUE;
+            }
+            if (searchTopK <= 0) {
+                searchTopK = 8;
+            }
+            if (minScore < 0.0d || minScore >= 1.0d) {
+                minScore = 0.20d;
+            }
+            if (indexBatchSize <= 0) {
+                indexBatchSize = 8;
+            }
+            if (requestTimeoutSeconds <= 0) {
+                requestTimeoutSeconds = 180;
             }
         }
     }

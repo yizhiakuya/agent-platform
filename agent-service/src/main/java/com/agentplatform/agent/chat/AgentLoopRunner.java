@@ -56,11 +56,6 @@ public class AgentLoopRunner {
 
     private static final Logger log = LoggerFactory.getLogger(AgentLoopRunner.class);
 
-    /** Hard cap on agentic iterations per request. 10 is enough for normal
-     *  tool chains (list → get → summarise) plus a couple of skill_load
-     *  hops; cuts off pathological loops where the model keeps re-calling. */
-    private static final int MAX_ITERATIONS = 10;
-
     private final ObjectMapper mapper;
     private final AgentProperties props;
     private final SkillLoadCallback skillLoadCallback;
@@ -121,7 +116,8 @@ public class AgentLoopRunner {
         StringBuilder textBuf = new StringBuilder();
         Usage lastUsage = null;
 
-        for (int iter = 0; iter < MAX_ITERATIONS; iter++) {
+        int maxIterations = props.agent().maxAgentIterations();
+        for (int iter = 0; iter < maxIterations; iter++) {
             // If a previous iteration drained without erroring but cancel
             // already fired, bail before opening another (billed) stream.
             if (cancelled.get()) {
@@ -221,8 +217,12 @@ public class AgentLoopRunner {
                     .contentOfBlockParams(toolResults)
                     .build());
         }
-        log.warn("agentic loop hit MAX_ITERATIONS={} for user {}", MAX_ITERATIONS, userId);
-        return new RunResult(textBuf.toString(), lastUsage, cancelled.get());
+        log.warn("agentic loop hit maxAgentIterations={} for user {}", maxIterations, userId);
+        return RunResult.exhausted(
+                textBuf.toString(),
+                lastUsage,
+                "任务还没完成，但本轮工具调用次数已达到上限（" + maxIterations + " 轮）。请继续发送“继续”，我会接着当前页面状态往下做。"
+        );
     }
 
     /**

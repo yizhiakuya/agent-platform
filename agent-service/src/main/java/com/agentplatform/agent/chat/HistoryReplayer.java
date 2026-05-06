@@ -29,6 +29,10 @@ public class HistoryReplayer {
 
     public List<MessageParam> loadAsParams(UUID sessionId, UUID userId, String currentMessage) {
         List<MessageDto> rows = loadRows(sessionId, userId, currentMessage);
+        return toParams(rows);
+    }
+
+    public List<MessageParam> toParams(List<MessageDto> rows) {
         if (rows.isEmpty()) return new ArrayList<>();
         try {
             List<MessageParam> out = new ArrayList<>(rows.size());
@@ -48,7 +52,7 @@ public class HistoryReplayer {
             }
             return out;
         } catch (Exception e) {
-            log.warn("Failed to convert history for session {}: {}", sessionId, e.getMessage());
+            log.warn("Failed to convert history rows: {}", e.getMessage());
             return new ArrayList<>();
         }
     }

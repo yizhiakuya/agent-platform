@@ -3,6 +3,7 @@ package com.agentplatform.agent.chat;
 import com.agentplatform.agent.ai.ChatEventSink;
 import com.agentplatform.agent.ai.ConfiguredProvider;
 import com.agentplatform.agent.ai.ExecutionResult;
+import com.agentplatform.agent.ai.PendingImage;
 import com.agentplatform.agent.ai.RemoteToolCallback;
 import com.agentplatform.agent.ai.ResolvedTools;
 import com.agentplatform.agent.ai.SkillLoadCallback;
@@ -44,8 +45,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class CodexResponsesLoopRunner {
 
     private static final Logger log = LoggerFactory.getLogger(CodexResponsesLoopRunner.class);
-    private static final int MAX_ITERATIONS = 10;
-
     private final ObjectMapper mapper;
     private final AgentProperties props;
     private final SkillLoadCallback skillLoadCallback;
@@ -88,7 +87,8 @@ public class CodexResponsesLoopRunner {
         List<JsonNode> transcript = buildInitialInput(history, userText);
         ArrayNode tools = buildTools(resolved);
 
-        for (int iter = 0; iter < MAX_ITERATIONS; iter++) {
+        int maxIterations = props.agent().maxAgentIterations();
+        for (int iter = 0; iter < maxIterations; iter++) {
             if (cancelled.get()) {
                 return new RunResult(textBuf.toString(), lastUsage, true);
             }
@@ -141,11 +141,18 @@ public class CodexResponsesLoopRunner {
             for (FunctionCall call : calls) {
                 ExecutionResult er = executeFunctionCall(call, resolved, userId, sessionId, sink);
                 transcript.add(functionOutput(call, er));
+                if (!er.images().isEmpty()) {
+                    transcript.add(imageMessage(call, er));
+                }
             }
         }
 
-        log.warn("Codex Responses loop hit MAX_ITERATIONS={} for user {}", MAX_ITERATIONS, userId);
-        return new RunResult(textBuf.toString(), lastUsage, cancelled.get());
+        log.warn("Codex Responses loop hit maxAgentIterations={} for user {}", maxIterations, userId);
+        return RunResult.exhausted(
+                textBuf.toString(),
+                lastUsage,
+                "任务还没完成，但本轮工具调用次数已达到上限（" + maxIterations + " 轮）。请继续发送“继续”，我会接着当前页面状态往下做。"
+        );
     }
 
     private List<JsonNode> buildInitialInput(List<MessageDto> history, String userText) {
@@ -297,6 +304,29 @@ public class CodexResponsesLoopRunner {
         out.put("call_id", call.callId());
         out.put("output", er.jsonText());
         return out;
+    }
+
+    private ObjectNode imageMessage(FunctionCall call, ExecutionResult er) {
+        ObjectNode msg = mapper.createObjectNode();
+        msg.put("role", "user");
+        ArrayNode content = mapper.createArrayNode();
+
+        ObjectNode note = mapper.createObjectNode();
+        note.put("type", "input_text");
+        note.put("text", "The tool result from " + call.name()
+                + " included image attachment(s). Inspect the image pixels directly; do not rely only on OCR or metadata.");
+        content.add(note);
+
+        for (PendingImage img : er.images()) {
+            ObjectNode image = mapper.createObjectNode();
+            image.put("type", "input_image");
+            image.put("image_url", "data:" + img.mimeType() + ";base64," + img.b64());
+            image.put("detail", "high");
+            content.add(image);
+        }
+
+        msg.set("content", content);
+        return msg;
     }
 
     private static String stripTrailingSlash(String url) {
