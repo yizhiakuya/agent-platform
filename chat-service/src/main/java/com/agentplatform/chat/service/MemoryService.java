@@ -114,7 +114,7 @@ public class MemoryService {
                 FROM memory_facts mf
                 JOIN memory_embeddings me ON me.fact_id = mf.id
                 WHERE mf.user_id = ? AND mf.is_curated = true
-                ORDER BY me.embedding <=> ?::public.vector
+                ORDER BY me.embedding OPERATOR(public.<=>) ?::public.vector
                 LIMIT ?
                 """,
                 FACT_ROW_MAPPER,
@@ -136,7 +136,7 @@ public class MemoryService {
                     FROM memory_facts mf
                     JOIN memory_embeddings me ON me.fact_id = mf.id
                     WHERE mf.user_id = ?
-                    ORDER BY me.embedding <=> ?::public.vector
+                    ORDER BY me.embedding OPERATOR(public.<=>) ?::public.vector
                     LIMIT ?
                     """,
                     FACT_ROW_MAPPER,
