@@ -65,6 +65,8 @@ wstest.py
 wstest2.py
 *.bak
 *.bak-*
+.tmp/
+.learnings/
 .mvn/wrapper/maven-wrapper.jar
 
 # Plans (Claude Code session-local plan files,如果有人误置入此目录)
