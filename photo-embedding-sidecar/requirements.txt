@@ -1,0 +1,7 @@
+fastapi==0.115.14
+uvicorn[standard]==0.35.0
+sentence-transformers==3.4.1
+pillow==11.1.0
+numpy==2.2.2
+timm==1.0.19
+einops==0.8.1

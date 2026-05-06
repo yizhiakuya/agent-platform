@@ -64,6 +64,23 @@ services:
       retries: 10
       start_period: 30s
 
+  photo-embedding-sidecar:
+    profiles: ["photo-local"]
+    build:
+      context: .
+      dockerfile: photo-embedding-sidecar/Dockerfile
+    container_name: agent-platform-photo-embed
+    restart: unless-stopped
+    environment:
+      PHOTO_EMBEDDING_MODEL: ${PHOTO_LOCAL_EMBEDDING_MODEL:-clip-ViT-B-32-multilingual-v1}
+      PHOTO_EMBEDDING_TEXT_MODEL: ${PHOTO_LOCAL_TEXT_MODEL:-sentence-transformers/clip-ViT-B-32-multilingual-v1}
+      PHOTO_EMBEDDING_IMAGE_MODEL: ${PHOTO_LOCAL_IMAGE_MODEL:-sentence-transformers/clip-ViT-B-32}
+      PHOTO_EMBEDDING_DIM: ${PHOTO_EMBEDDING_DIM:-1024}
+      PHOTO_EMBEDDING_DEVICE: ${PHOTO_LOCAL_EMBEDDING_DEVICE:-cpu}
+    volumes:
+      - photo-embedding-models:/models
+    expose: ["8000"]
+
   # ───────────────────────── application services ─────────────────────────
 
   auth-service:
@@ -161,6 +178,19 @@ services:
       MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-jina-embeddings-v3}
       MEMORY_EMBEDDING_DIM: ${MEMORY_EMBEDDING_DIM:-1024}
       MEMORY_EMBEDDING_TASK: ${MEMORY_EMBEDDING_TASK:-retrieval.passage}
+      PHOTO_INDEX_ENABLED: ${PHOTO_INDEX_ENABLED:-true}
+      PHOTO_INDEX_FALLBACK_REALTIME: ${PHOTO_INDEX_FALLBACK_REALTIME:-true}
+      PHOTO_EMBEDDING_BASE_URL: ${PHOTO_EMBEDDING_BASE_URL:-${MEMORY_EMBEDDING_BASE_URL:-}}
+      PHOTO_EMBEDDING_API_KEY: ${PHOTO_EMBEDDING_API_KEY:-${MEMORY_EMBEDDING_API_KEY:-}}
+      PHOTO_EMBEDDING_MODEL: ${PHOTO_EMBEDDING_MODEL:-clip-ViT-B-32-multilingual-v1}
+      PHOTO_EMBEDDING_DIM: ${PHOTO_EMBEDDING_DIM:-1024}
+      PHOTO_EMBEDDING_TEXT_TASK: ${PHOTO_EMBEDDING_TEXT_TASK:-}
+      PHOTO_EMBEDDING_IMAGE_TASK: ${PHOTO_EMBEDDING_IMAGE_TASK:-}
+      PHOTO_EMBEDDING_IMAGE_FIELD: ${PHOTO_EMBEDDING_IMAGE_FIELD:-image}
+      PHOTO_SEARCH_TOP_K: ${PHOTO_SEARCH_TOP_K:-8}
+      PHOTO_SEARCH_MIN_SCORE: ${PHOTO_SEARCH_MIN_SCORE:-0.20}
+      PHOTO_INDEX_BATCH_SIZE: ${PHOTO_INDEX_BATCH_SIZE:-8}
+      PHOTO_EMBEDDING_TIMEOUT_SECONDS: ${PHOTO_EMBEDDING_TIMEOUT_SECONDS:-180}
     expose: ["8082"]
 
   chat-service:
@@ -204,6 +234,8 @@ services:
     restart: unless-stopped
     depends_on:
       - web
+      - gateway
+      - device-hub-service
     ports:
       - "${CADDY_HTTP_PORT:-80}:80"
       - "${CADDY_HTTPS_PORT:-443}:443"
@@ -219,3 +251,4 @@ volumes:
   nacos-logs:
   caddy-data:
   caddy-config:
+  photo-embedding-models:

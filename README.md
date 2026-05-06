@@ -105,6 +105,56 @@ open http://localhost:3000
 #    (or the mock LLM if no API key) will call photos.list_recent on your phone
 ```
 
+### Deploy from GHCR
+
+Images are published by `.github/workflows/publish-ghcr.yml` on pushes to
+`main`, version tags, and manual workflow dispatch. The workflow uses
+`GITHUB_TOKEN` with `packages: write`, so no PAT is needed inside Actions.
+
+It publishes:
+
+```text
+ghcr.io/yizhiakuya/agent-platform-auth-service:latest
+ghcr.io/yizhiakuya/agent-platform-gateway:latest
+ghcr.io/yizhiakuya/agent-platform-device-hub-service:latest
+ghcr.io/yizhiakuya/agent-platform-agent-service:latest
+ghcr.io/yizhiakuya/agent-platform-chat-service:latest
+ghcr.io/yizhiakuya/agent-platform-web:latest
+```
+
+Optional local photo embedding sidecar:
+
+```bash
+docker compose --profile default --profile photo-local up -d --build photo-embedding-sidecar
+```
+
+Then point photo indexing at it:
+
+```bash
+PHOTO_EMBEDDING_BASE_URL=http://photo-embedding-sidecar:8000
+PHOTO_EMBEDDING_API_KEY=
+PHOTO_EMBEDDING_MODEL=jina-clip-v2
+PHOTO_EMBEDDING_IMAGE_TASK=
+PHOTO_SEARCH_MIN_SCORE=0.20
+PHOTO_INDEX_BATCH_SIZE=8
+```
+
+The sidecar stores no original images. Android uploads bounded thumbnails and
+metadata; agent-service sends those thumbnails to the sidecar as
+OpenAI-style `POST /v1/embeddings` requests with `input: [{"image":
+"<base64>"}]`. Text queries use the same endpoint with `input: [{"text":
+"..."}]`, so natural image searches run against real image/text vectors in
+pgvector instead of OCR-only text guesses.
+
+For a private repository/package, login on the deployment host with a classic
+PAT that has `read:packages`:
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u yizhiakuya --password-stdin
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d --no-build
+```
+
 ### Dev workflow (infra in Docker, services in IDE)
 
 ```bash

@@ -35,7 +35,7 @@ spring:
             - id: chat-service
               uri: lb://chat-service
               predicates:
-                - Path=/api/sessions/**
+                - Path=/api/sessions/**,/api/photos/**
           globalcors:
             cors-configurations:
               '[/**]':
@@ -57,6 +57,7 @@ agent-platform:
     - /api/me
     - /api/chat
     - /api/sessions
+    - /api/photos
 
 logging:
   level:

@@ -20,7 +20,7 @@ agent.rainaki.top:443 {
     # SSE — never buffer the chat stream
     @sse path /api/chat/stream
     handle @sse {
-        reverse_proxy web:80 {
+        reverse_proxy gateway:8080 {
             flush_interval -1
             transport http {
                 response_header_timeout 1h
@@ -36,7 +36,14 @@ agent.rainaki.top:443 {
         reverse_proxy device-hub-service:8083
     }
 
-    # SPA shell + REST
+    # REST API goes to Spring Cloud Gateway. Keep this out of web/nginx so new
+    # backend routes such as /api/photos don't need web image changes.
+    @api path /api/*
+    handle @api {
+        reverse_proxy gateway:8080
+    }
+
+    # SPA shell
     handle {
         reverse_proxy web:80
     }
