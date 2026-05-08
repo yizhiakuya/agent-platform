@@ -2,5 +2,20 @@ package com.agentplatform.agent.ai;
 
 import com.anthropic.client.AnthropicClient;
 
-/** 配置好的 LLM provider:SDK 客户端 + 模型 ID + 名字。fallback chain 走这个 list。 */
-public record ConfiguredProvider(String name, AnthropicClient client, String model) {}
+/** Configured LLM provider: wire kind + client details + model ID. */
+public record ConfiguredProvider(
+        String name,
+        String kind,
+        AnthropicClient client,
+        String baseUrl,
+        String apiKey,
+        String model
+) {
+    public boolean isAnthropicMessages() {
+        return "anthropic-messages".equals(kind);
+    }
+
+    public boolean isCodexResponses() {
+        return "codex-responses".equals(kind);
+    }
+}

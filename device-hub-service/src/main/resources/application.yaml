@@ -16,6 +16,8 @@ spring:
       request-timeout: 60000
 
 agent-platform:
+  internal:
+    token: ${INTERNAL_API_TOKEN:${JWT_SECRET}}
   jwt:
     # Same secret as auth-service / gateway use to sign device JWTs. WS handshake
     # verifies the bearer locally rather than calling auth-service per connect.

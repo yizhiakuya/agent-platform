@@ -5,9 +5,13 @@ import com.agentplatform.auth.dto.EnrollmentResponse;
 import com.agentplatform.auth.service.DeviceService;
 import com.agentplatform.auth.service.EnrollmentService;
 import com.agentplatform.security.PrincipalContext;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -42,5 +46,12 @@ public class MeDeviceController {
     public List<DeviceDto> list() {
         UUID userId = PrincipalContext.requireUserId();
         return deviceService.list(userId);
+    }
+
+    /** Revoke a bound device so its long-lived JWT can no longer reconnect. */
+    @DeleteMapping("/{deviceId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void revoke(@PathVariable UUID deviceId) {
+        deviceService.revoke(PrincipalContext.requireUserId(), deviceId);
     }
 }

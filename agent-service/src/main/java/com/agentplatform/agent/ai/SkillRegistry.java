@@ -1,5 +1,7 @@
 package com.agentplatform.agent.ai;
 
+import com.agentplatform.agent.client.InternalChatFeignClient;
+import com.agentplatform.api.chat.RuntimeSkillDto;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,8 +18,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Scans {@code classpath:skills/<slug>/SKILL.md} once at startup, parses each
@@ -55,6 +59,11 @@ public class SkillRegistry {
 
     /** Insertion-ordered so the listing is stable across restarts. */
     private final Map<String, SkillDef> skills = new LinkedHashMap<>();
+    private final InternalChatFeignClient chatClient;
+
+    public SkillRegistry(InternalChatFeignClient chatClient) {
+        this.chatClient = chatClient;
+    }
 
     @PostConstruct
     void load() {
@@ -170,9 +179,46 @@ public class SkillRegistry {
         return Collections.unmodifiableCollection(skills.values());
     }
 
+    /** Built-in skills plus this user's runtime skills. Runtime definitions override by name. */
+    public Collection<SkillDef> all(UUID userId) {
+        if (userId == null) {
+            return all();
+        }
+        LinkedHashMap<String, SkillDef> merged = new LinkedHashMap<>(skills);
+        try {
+            List<RuntimeSkillDto> rows = chatClient.listRuntimeSkills(userId, false);
+            if (rows != null) {
+                for (RuntimeSkillDto row : rows) {
+                    if (row == null || !row.enabled()) continue;
+                    merged.put(row.name(), new SkillDef(row.name(), row.description(), row.body()));
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Failed to load runtime skills for user {}: {}", userId, e.getMessage());
+        }
+        return Collections.unmodifiableCollection(merged.values());
+    }
+
     /** Look up a skill by its declared {@code name}. */
     public Optional<SkillDef> get(String name) {
         if (name == null) return Optional.empty();
         return Optional.ofNullable(skills.get(name));
+    }
+
+    /** Runtime skill first, then packaged skill fallback. */
+    public Optional<SkillDef> get(UUID userId, String name) {
+        if (name == null || name.isBlank()) return Optional.empty();
+        if (userId != null) {
+            try {
+                RuntimeSkillDto runtime = chatClient.getRuntimeSkill(name, userId);
+                if (runtime != null && runtime.enabled()) {
+                    return Optional.of(new SkillDef(runtime.name(), runtime.description(), runtime.body()));
+                }
+            } catch (Exception e) {
+                log.debug("Runtime skill lookup missed/failed for user {} name '{}': {}",
+                        userId, name, e.getMessage());
+            }
+        }
+        return get(name);
     }
 }

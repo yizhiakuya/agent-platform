@@ -1,6 +1,7 @@
 package com.agentplatform.gateway.filter;
 
 import com.agentplatform.gateway.config.GatewayProperties;
+import com.agentplatform.security.InternalToken;
 import com.agentplatform.security.JwtUtil;
 import com.agentplatform.security.Principal;
 import io.jsonwebtoken.JwtException;
@@ -37,12 +38,21 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
 
     private static final Logger log = LoggerFactory.getLogger(JwtAuthFilter.class);
     private static final String BEARER = "Bearer ";
+    private static final String H_PRINCIPAL_TYPE = "X-Principal-Type";
+    private static final String H_USER_ID = "X-User-Id";
+    private static final String H_DEVICE_ID = "X-Device-Id";
+    private static final String H_JTI = "X-Jti";
 
     private final JwtUtil jwt;
+    private final String internalToken;
     private final List<String> protectedPrefixes;
 
-    public JwtAuthFilter(JwtUtil jwt, GatewayProperties props) {
+    public JwtAuthFilter(JwtUtil jwt,
+                         GatewayProperties props,
+                         @org.springframework.beans.factory.annotation.Value("${agent-platform.internal.token:${agent-platform.jwt.secret}}")
+                         String internalToken) {
         this.jwt = jwt;
+        this.internalToken = internalToken;
         this.protectedPrefixes = props.protectedPaths() == null ? List.of() : props.protectedPaths();
     }
 
@@ -75,18 +85,25 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
             return reject(exchange, "Authentication required");
         }
 
+        ServerHttpRequest.Builder mutated = req.mutate()
+                .headers(headers -> {
+                    headers.remove(H_PRINCIPAL_TYPE);
+                    headers.remove(H_USER_ID);
+                    headers.remove(H_DEVICE_ID);
+                    headers.remove(H_JTI);
+                    headers.remove(InternalToken.HEADER);
+                });
         if (principal != null) {
-            ServerHttpRequest.Builder mutated = req.mutate()
-                    .header("X-Principal-Type", principal.type())
-                    .header("X-User-Id", principal.userId())
-                    .header("X-Jti", principal.jti() == null ? "" : principal.jti());
+            mutated.header(H_PRINCIPAL_TYPE, principal.type())
+                    .header(H_USER_ID, principal.userId())
+                    .header(H_JTI, principal.jti() == null ? "" : principal.jti())
+                    .header(InternalToken.HEADER, internalToken);
             if (principal.isDevice()) {
-                mutated.header("X-Device-Id", principal.subject());
+                mutated.header(H_DEVICE_ID, principal.subject());
             }
-            return chain.filter(exchange.mutate().request(mutated.build()).build());
         }
 
-        return chain.filter(exchange);
+        return chain.filter(exchange.mutate().request(mutated.build()).build());
     }
 
     private boolean isProtected(String path) {

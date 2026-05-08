@@ -30,6 +30,9 @@ public class Session {
     @Column(name = "last_message_at")
     private OffsetDateTime lastMessageAt;
 
+    @Column(name = "deleted_at")
+    private OffsetDateTime deletedAt;
+
     public UUID getId() { return id; }
     public void setId(UUID id) { this.id = id; }
     public UUID getUserId() { return userId; }
@@ -40,4 +43,6 @@ public class Session {
     public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
     public OffsetDateTime getLastMessageAt() { return lastMessageAt; }
     public void setLastMessageAt(OffsetDateTime lastMessageAt) { this.lastMessageAt = lastMessageAt; }
+    public OffsetDateTime getDeletedAt() { return deletedAt; }
+    public void setDeletedAt(OffsetDateTime deletedAt) { this.deletedAt = deletedAt; }
 }

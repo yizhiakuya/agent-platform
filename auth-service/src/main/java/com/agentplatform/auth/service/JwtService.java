@@ -1,6 +1,7 @@
 package com.agentplatform.auth.service;
 
 import com.agentplatform.auth.config.PlatformProperties;
+import com.agentplatform.auth.repository.DeviceRepository;
 import com.agentplatform.auth.repository.RevokedJtiRepository;
 import com.agentplatform.security.JwtUtil;
 import com.agentplatform.security.Principal;
@@ -23,12 +24,14 @@ public class JwtService {
 
     private final JwtUtil jwt;
     private final RevokedJtiRepository revoked;
+    private final DeviceRepository devices;
     private final Duration userTtl;
     private final Duration deviceTtl;
 
-    public JwtService(JwtUtil jwt, PlatformProperties props, RevokedJtiRepository revoked) {
+    public JwtService(JwtUtil jwt, PlatformProperties props, RevokedJtiRepository revoked, DeviceRepository devices) {
         this.jwt = jwt;
         this.revoked = revoked;
+        this.devices = devices;
         this.userTtl = Duration.ofHours(props.jwt().userTokenTtlHours());
         this.deviceTtl = Duration.ofDays(props.jwt().deviceTokenTtlDays());
     }
@@ -45,6 +48,9 @@ public class JwtService {
         Principal p = jwt.verify(token);
         if (p.jti() != null && revoked.existsById(p.jti())) {
             throw new JwtException("Token has been revoked");
+        }
+        if (p.isDevice() && !devices.existsByIdAndUserIdAndRevokedAtIsNull(p.subjectAsUuid(), p.userIdAsUuid())) {
+            throw new JwtException("Device has been revoked");
         }
         return p;
     }

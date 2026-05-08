@@ -1,0 +1,33 @@
+# Use this override when deploying prebuilt images from GitHub Container
+# Registry instead of building the Spring and web images on the host.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d --no-build
+
+services:
+  auth-service:
+    image: ${GHCR_IMAGE_NAMESPACE:-ghcr.io/yizhiakuya}/${GHCR_IMAGE_PREFIX:-agent-platform}-auth-service:${GHCR_IMAGE_TAG:-latest}
+    pull_policy: always
+
+  gateway:
+    image: ${GHCR_IMAGE_NAMESPACE:-ghcr.io/yizhiakuya}/${GHCR_IMAGE_PREFIX:-agent-platform}-gateway:${GHCR_IMAGE_TAG:-latest}
+    pull_policy: always
+
+  device-hub-service:
+    image: ${GHCR_IMAGE_NAMESPACE:-ghcr.io/yizhiakuya}/${GHCR_IMAGE_PREFIX:-agent-platform}-device-hub-service:${GHCR_IMAGE_TAG:-latest}
+    pull_policy: always
+
+  agent-service:
+    image: ${GHCR_IMAGE_NAMESPACE:-ghcr.io/yizhiakuya}/${GHCR_IMAGE_PREFIX:-agent-platform}-agent-service:${GHCR_IMAGE_TAG:-latest}
+    pull_policy: always
+
+  chat-service:
+    image: ${GHCR_IMAGE_NAMESPACE:-ghcr.io/yizhiakuya}/${GHCR_IMAGE_PREFIX:-agent-platform}-chat-service:${GHCR_IMAGE_TAG:-latest}
+    pull_policy: always
+
+  web:
+    image: ${GHCR_IMAGE_NAMESPACE:-ghcr.io/yizhiakuya}/${GHCR_IMAGE_PREFIX:-agent-platform}-web:${GHCR_IMAGE_TAG:-latest}
+    pull_policy: always
+
+  photo-embedding-sidecar:
+    image: ${GHCR_IMAGE_NAMESPACE:-ghcr.io/yizhiakuya}/${GHCR_IMAGE_PREFIX:-agent-platform}-photo-embedding-sidecar:${GHCR_IMAGE_TAG:-latest}
+    pull_policy: always

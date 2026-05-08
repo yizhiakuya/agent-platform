@@ -1,6 +1,6 @@
 # TOOLS
 
-本文件描述当前用户的**设备和工具环境** — 设备别名、文件名约定、用户可覆写的本地知识。
+本文件描述当前用户的**设备和工具环境** — 设备别名、动态工具清单、用户可覆写的本地知识。
 
 行为纪律(怎么调、什么时候调、出错怎么办)在 `AGENTS.md`。每个工具的具体用途在工具自身的 description 里。这里**只**记环境事实。
 
@@ -23,12 +23,6 @@
 
 回复不要复述、引用或截取 base64 字符串。
 
-## Photo Filename Conventions(Android)
-
-- `Screenshot_<timestamp>_<package>.jpg` — 系统截图,末段是源 app 包名(如 `com.xiaoheihe.SnsBus`)。
-- `IMG_<timestamp>.jpg` — 系统相机拍摄。
-- `bucket_display_name` 是用户视角的相册名,常见:`Camera` / `Screenshots` / `WeiXin` / `Tencent/MicroMsg` / `Pictures/<app>`。
-
 ## Time
 
-服务器实时时钟在系统消息的 `# CURRENT TIME` 段(Asia/Shanghai 墙钟 + 今天/明天 0 点的 UNIX 毫秒)。需要时间过滤(`date_after_ms` / `date_before_ms`)时直接读取,不要凭印象算。
+服务器实时时钟在每次请求上下文的 `# CURRENT TIME` 段(Asia/Shanghai 墙钟 + 今天/明天 0 点的 UNIX 毫秒),不在 prompt-cache 稳定系统段里。需要时间相关过滤时,把它当作时间锚点;具体参数名、单位、边界包含关系、排序规则按对应工具 schema、description 或 loaded skill body,不要凭印象算。

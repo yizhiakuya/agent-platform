@@ -6,6 +6,8 @@ import com.agentplatform.agent.ai.ExecutionResult;
 import com.agentplatform.agent.ai.PendingImage;
 import com.agentplatform.agent.ai.RemoteToolCallback;
 import com.agentplatform.agent.ai.ResolvedTools;
+import com.agentplatform.agent.ai.ServerToolCallback;
+import com.agentplatform.agent.ai.ServerToolRegistry;
 import com.agentplatform.agent.ai.SkillLoadCallback;
 import com.agentplatform.agent.config.AgentProperties;
 import com.anthropic.core.http.StreamResponse;
@@ -25,6 +27,7 @@ import com.anthropic.models.messages.ToolResultBlockParam;
 import com.anthropic.models.messages.ToolUnion;
 import com.anthropic.models.messages.ToolUseBlock;
 import com.anthropic.models.messages.Usage;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,21 +59,19 @@ public class AgentLoopRunner {
 
     private static final Logger log = LoggerFactory.getLogger(AgentLoopRunner.class);
 
-    /** Hard cap on agentic iterations per request. 10 is enough for normal
-     *  tool chains (list → get → summarise) plus a couple of skill_load
-     *  hops; cuts off pathological loops where the model keeps re-calling. */
-    private static final int MAX_ITERATIONS = 10;
-
     private final ObjectMapper mapper;
     private final AgentProperties props;
     private final SkillLoadCallback skillLoadCallback;
+    private final ServerToolRegistry serverToolRegistry;
 
     public AgentLoopRunner(ObjectMapper mapper,
                            AgentProperties props,
-                           SkillLoadCallback skillLoadCallback) {
+                           SkillLoadCallback skillLoadCallback,
+                           ServerToolRegistry serverToolRegistry) {
         this.mapper = mapper;
         this.props = props;
         this.skillLoadCallback = skillLoadCallback;
+        this.serverToolRegistry = serverToolRegistry;
     }
 
     /**
@@ -93,6 +94,9 @@ public class AgentLoopRunner {
                          List<MessageParam> messages,
                          ChatEventSink sink,
                          SseEmitter emitter) {
+        if (!provider.isAnthropicMessages() || provider.client() == null) {
+            throw new IllegalArgumentException("AgentLoopRunner requires anthropic-messages provider");
+        }
         // Hold the active stream so emitter cancellation can close it from
         // another thread — SDK forEach is blocking on the worker thread, the
         // close() interrupts the iterator and forEach unwinds with an IO error
@@ -117,8 +121,8 @@ public class AgentLoopRunner {
 
         StringBuilder textBuf = new StringBuilder();
         Usage lastUsage = null;
-
-        for (int iter = 0; iter < MAX_ITERATIONS; iter++) {
+        int maxIterations = props.agent().maxAgentIterations();
+        for (int iter = 0; iter < maxIterations; iter++) {
             // If a previous iteration drained without erroring but cancel
             // already fired, bail before opening another (billed) stream.
             if (cancelled.get()) {
@@ -148,7 +152,7 @@ public class AgentLoopRunner {
                             String chunk = t.text();
                             if (chunk != null && !chunk.isEmpty()) {
                                 textBuf.append(chunk);
-                                safeSend(emitter, SseEvent.assistantMessage(mapper, chunk));
+                                sink.emit(SseEvent.assistantMessage(mapper, chunk));
                             }
                         });
                         // input_json_delta: SDK accumulator handles tool_use args.
@@ -218,8 +222,12 @@ public class AgentLoopRunner {
                     .contentOfBlockParams(toolResults)
                     .build());
         }
-        log.warn("agentic loop hit MAX_ITERATIONS={} for user {}", MAX_ITERATIONS, userId);
-        return new RunResult(textBuf.toString(), lastUsage, cancelled.get());
+        log.warn("agentic loop hit maxAgentIterations={} for user {}", maxIterations, userId);
+        return RunResult.exhausted(
+                textBuf.toString(),
+                lastUsage,
+                "任务还没完成，但本轮工具调用次数已达到上限（" + maxIterations + " 轮）。请继续发送“继续”，我会接着当前页面状态往下做。"
+        );
     }
 
     /**
@@ -247,11 +255,62 @@ public class AgentLoopRunner {
         if (SkillLoadCallback.TOOL_NAME.equals(name)) {
             return skillLoadCallback.executeToolUse(tu, userId, sessionId, sink);
         }
+        ServerToolCallback serverTool = serverToolRegistry.dispatchMap().get(name);
+        if (serverTool != null) {
+            JsonNode args = parseServerToolArgs(tu);
+            if (sink != null) {
+                sink.emit(SseEvent.toolCallStarted(mapper, null, name, args));
+            }
+            ExecutionResult result;
+            try {
+                result = serverTool.executeJsonToolUse(args, userId, sessionId, sink);
+            } catch (Throwable e) {
+                if (sink != null) {
+                    sink.emit(SseEvent.toolCallError(mapper, name, e.getMessage()));
+                    sink.emit(SseEvent.error(mapper, "Tool '" + name + "' failed: " + e.getMessage()));
+                }
+                return ExecutionResult.error(e.getMessage());
+            }
+            if (sink != null) {
+                sink.emit(SseEvent.toolCallResult(mapper, name, parseExecutionResult(result)));
+            }
+            return result;
+        }
         RemoteToolCallback rt = resolved.dispatch().get(name);
         if (rt == null) {
             return ExecutionResult.error("unknown tool: " + name);
         }
         return rt.executeToolUse(tu, userId, sessionId, sink);
+    }
+
+    private JsonNode parseServerToolArgs(ToolUseBlock tu) {
+        try {
+            Object raw = tu._input();
+            if (raw == null) return mapper.createObjectNode();
+            JsonNode node = mapper.valueToTree(raw);
+            if (node != null && node.isTextual()) {
+                try {
+                    return mapper.readTree(node.asText());
+                } catch (Exception ignored) {
+                    return node;
+                }
+            }
+            return node == null || node.isNull() ? mapper.createObjectNode() : node;
+        } catch (Exception e) {
+            log.warn("Failed to parse server tool input for {}: {}", tu.name(), e.getMessage());
+            return mapper.createObjectNode();
+        }
+    }
+
+    private JsonNode parseExecutionResult(ExecutionResult result) {
+        if (result == null || result.jsonText() == null || result.jsonText().isBlank()) {
+            return mapper.createObjectNode();
+        }
+        try {
+            return mapper.readTree(result.jsonText());
+        } catch (Exception ignored) {
+            return mapper.createObjectNode().put("text", result.jsonText());
+        }
     }
 
     /**

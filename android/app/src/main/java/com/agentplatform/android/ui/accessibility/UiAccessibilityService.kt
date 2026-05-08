@@ -2,6 +2,7 @@ package com.agentplatform.android.ui.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Handler
@@ -118,6 +119,20 @@ class UiAccessibilityService : AccessibilityService() {
                 else -> return false
             }
             return s.performGlobalAction(code)
+        }
+
+        /**
+         * Start an activity from the AccessibilityService context. Some Android
+         * builds treat normal foreground-service launches as background app
+         * starts, while a user-enabled accessibility service is allowed to help
+         * the user navigate between apps.
+         */
+        fun startActivityFromService(intent: Intent): Boolean {
+            val s = require()
+            return runCatching {
+                s.startActivity(intent)
+                true
+            }.getOrDefault(false)
         }
 
         /**

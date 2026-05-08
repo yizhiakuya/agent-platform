@@ -21,11 +21,10 @@ import java.util.Set;
  *   <li><b>Truncate big bodies</b> — message {@code content} longer than
  *       {@code agent-platform.chat.max-content-bytes} is cut, with a
  *       {@code [truncated N bytes]} marker appended.</li>
- *   <li><b>Redact long base64 fields in metadata</b> — JSON keys that look
- *       base64-ish (containing {@code base64} / {@code _b64} / equal to
- *       {@code data}) and whose value exceeds
- *       {@code agent-platform.chat.redact-base64-over-bytes} are replaced
- *       with a placeholder so DB rows don't bloat with thumbnails.</li>
+ *   <li><b>Redact large base64 fields in metadata</b> — full-resolution image,
+ *       audio, and blob payloads are replaced with a placeholder. Small UI
+ *       thumbnails are intentionally preserved so historical tool bubbles can
+ *       render after switching sessions.</li>
  * </ol>
  *
  * <p>PR 13 will extend with regex-based PII rules (phone numbers, GPS coords).
@@ -33,8 +32,10 @@ import java.util.Set;
 @Component
 public class PiiSanitizer {
 
-    private static final Set<String> BASE64_LIKE_KEYS = Set.of(
-            "thumb_b64", "data", "image_b64", "image_base64", "audio_b64", "blob_b64");
+    private static final Set<String> ALWAYS_REDACT_BASE64_KEYS = Set.of(
+            "vision_b64", "image_b64", "image_base64", "audio_b64", "blob_b64", "data");
+    private static final Set<String> PRESERVE_BASE64_KEYS = Set.of(
+            "thumb_b64", "cover_thumb_b64", "thumbnail_b64");
 
     private final ChatProperties props;
     private final ObjectMapper mapper;
@@ -68,7 +69,7 @@ public class PiiSanitizer {
                 Map.Entry<String, JsonNode> e = fields.next();
                 String key = e.getKey();
                 JsonNode value = e.getValue();
-                if (looksBase64(key) && value.isTextual()
+                if (shouldRedactBase64(key) && value.isTextual()
                         && value.asText().length() > props.chat().redactBase64OverBytes()) {
                     result.put(key, "<redacted base64 " + value.asText().length() + " bytes>");
                 } else {
@@ -85,9 +86,10 @@ public class PiiSanitizer {
         return node;
     }
 
-    private static boolean looksBase64(String key) {
+    private static boolean shouldRedactBase64(String key) {
         if (key == null) return false;
         String lower = key.toLowerCase();
-        return BASE64_LIKE_KEYS.contains(lower) || lower.contains("base64") || lower.endsWith("_b64");
+        if (PRESERVE_BASE64_KEYS.contains(lower)) return false;
+        return ALWAYS_REDACT_BASE64_KEYS.contains(lower) || lower.contains("base64") || lower.endsWith("_b64");
     }
 }

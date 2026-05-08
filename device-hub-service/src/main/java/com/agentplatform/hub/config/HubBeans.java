@@ -6,8 +6,10 @@ import com.agentplatform.hub.registry.MockDeviceProvisioner;
 import com.agentplatform.protocol.JsonRpcCodec;
 import com.agentplatform.security.JwtUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import feign.RequestInterceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
@@ -66,6 +68,12 @@ public class HubBeans {
         return new JsonRpcCodec(mapper);
     }
 
+    @Bean
+    public RequestInterceptor internalTokenFeignInterceptor(
+            @Value("${agent-platform.internal.token:${agent-platform.jwt.secret}}") String internalToken) {
+        return template -> template.header(com.agentplatform.security.InternalToken.HEADER, internalToken);
+    }
+
     /**
      * Tomcat's default {@code maxTextMessageBufferSize} is only 8KB, which
      * truncates any tool result with a few base64 thumbnails (PR 11
@@ -76,10 +84,26 @@ public class HubBeans {
      */
     @Bean
     public ServletServerContainerFactoryBean wsServletContainer() {
-        ServletServerContainerFactoryBean c = new ServletServerContainerFactoryBean();
+        ServletServerContainerFactoryBean c = new OptionalWsContainerFactoryBean();
         c.setMaxTextMessageBufferSize(4 * 1024 * 1024);
         c.setMaxBinaryMessageBufferSize(4 * 1024 * 1024);
         c.setAsyncSendTimeout(10_000L);
         return c;
+    }
+
+    static class OptionalWsContainerFactoryBean extends ServletServerContainerFactoryBean {
+        @Override
+        public void afterPropertiesSet() {
+            try {
+                super.afterPropertiesSet();
+            } catch (IllegalStateException e) {
+                if (e.getMessage() != null
+                        && e.getMessage().contains("jakarta.websocket.server.ServerContainer")) {
+                    log.debug("[hub] skipping WS container tuning in MockServletContext");
+                    return;
+                }
+                throw e;
+            }
+        }
     }
 }

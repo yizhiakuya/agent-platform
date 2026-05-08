@@ -1,6 +1,7 @@
 package com.agentplatform.auth.filter;
 
 import com.agentplatform.security.AbstractAuthFilter;
+import com.agentplatform.security.InternalToken;
 import com.agentplatform.security.JwtUtil;
 import com.agentplatform.security.Principal;
 import com.agentplatform.security.PrincipalContext;
@@ -31,10 +32,12 @@ public class PathBasedJwtFilter extends AbstractAuthFilter {
     private static final String BEARER = "Bearer ";
 
     private final JwtUtil jwt;
+    private final String internalToken;
     private final List<String> protectedPrefixes;
 
-    public PathBasedJwtFilter(JwtUtil jwt, List<String> protectedPrefixes) {
+    public PathBasedJwtFilter(JwtUtil jwt, String internalToken, List<String> protectedPrefixes) {
         this.jwt = jwt;
+        this.internalToken = internalToken;
         this.protectedPrefixes = protectedPrefixes;
     }
 
@@ -43,13 +46,31 @@ public class PathBasedJwtFilter extends AbstractAuthFilter {
                                     HttpServletResponse res,
                                     FilterChain chain)
             throws ServletException, IOException {
+        PrincipalContext.clear();
+        try {
+            doFilterWithCleanContext(req, res, chain);
+        } finally {
+            PrincipalContext.clear();
+        }
+    }
+
+    private void doFilterWithCleanContext(HttpServletRequest req,
+                                          HttpServletResponse res,
+                                          FilterChain chain)
+            throws ServletException, IOException {
         boolean isProtected = isProtected(req.getRequestURI());
+        boolean isInternal = req.getRequestURI().startsWith("/internal/");
+        if (isInternal && !InternalToken.isValid(internalToken, req.getHeader(InternalToken.HEADER))) {
+            res.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Internal token required");
+            return;
+        }
         String header = req.getHeader("Authorization");
+        Principal principal = null;
 
         if (header != null && header.startsWith(BEARER)) {
             try {
-                Principal p = jwt.verify(header.substring(BEARER.length()));
-                PrincipalContext.set(p);
+                principal = jwt.verify(header.substring(BEARER.length()));
+                PrincipalContext.set(principal);
             } catch (JwtException e) {
                 if (isProtected) {
                     res.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid token");
@@ -59,16 +80,12 @@ public class PathBasedJwtFilter extends AbstractAuthFilter {
             }
         }
 
-        if (isProtected && PrincipalContext.current() == null) {
+        if (isProtected && principal == null) {
             res.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Authentication required");
             return;
         }
 
-        try {
-            chain.doFilter(req, res);
-        } finally {
-            PrincipalContext.clear();
-        }
+        chain.doFilter(req, res);
     }
 
     private boolean isProtected(String path) {

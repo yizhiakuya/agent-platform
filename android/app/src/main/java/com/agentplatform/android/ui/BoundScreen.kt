@@ -72,10 +72,17 @@ fun BoundScreen(
         if (Build.VERSION.SDK_INT >= 34 && isGranted("android.permission.READ_MEDIA_VISUAL_USER_SELECTED")) return true
         return false
     }
+    fun checkOverlayPermission(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(ctx)
+
+    val isXiaomiLike = Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true)
+        || Build.BRAND.equals("Xiaomi", ignoreCase = true)
+        || Build.DISPLAY.contains("HyperOS", ignoreCase = true)
 
     var notifGranted by remember { mutableStateOf(checkNotif()) }
     var photosGranted by remember { mutableStateOf(checkPhotos()) }
     var videosGranted by remember { mutableStateOf(checkVideos()) }
+    var overlayGranted by remember { mutableStateOf(checkOverlayPermission()) }
     var accessibilityReady by remember { mutableStateOf(UiAccessibilityService.isAvailable()) }
     var captureReady by remember { mutableStateOf(UiCaptureManager.isReady()) }
     var autoApproveUiTools by remember { mutableStateOf(prefs.autoApproveUiTools) }
@@ -88,6 +95,7 @@ fun BoundScreen(
                 notifGranted = checkNotif()
                 photosGranted = checkPhotos()
                 videosGranted = checkVideos()
+                overlayGranted = checkOverlayPermission()
                 accessibilityReady = UiAccessibilityService.isAvailable()
                 captureReady = UiCaptureManager.isReady()
                 autoApproveUiTools = prefs.autoApproveUiTools
@@ -162,6 +170,19 @@ fun BoundScreen(
             },
             actionLabel = "允许屏幕识别"
         ) { onRequestScreenCapture() }
+
+        CapabilityCard(
+            title = "后台拉起应用",
+            enabled = overlayGranted,
+            desc = if (overlayGranted) {
+                "已允许悬浮窗权限。小米/HyperOS 还需要在其他权限里允许后台弹出界面,用于 ui.open_app 直接把微信等应用拉到前台。"
+            } else if (isXiaomiLike) {
+                "小米/HyperOS 需要允许悬浮窗和后台弹出界面,否则 ui.open_app 会发出启动 intent,但目标应用可能停留在后台。"
+            } else {
+                "部分系统需要允许悬浮窗/后台弹出权限,否则后台服务不能直接把其他应用拉到前台。"
+            },
+            actionLabel = if (isXiaomiLike) "打开小米权限设置" else "打开悬浮窗设置"
+        ) { openBackgroundLaunchSettings(ctx as Activity) }
 
         AutoApproveCard(
             enabled = autoApproveUiTools,
@@ -328,4 +349,28 @@ private fun openBatterySettings(activity: Activity) {
             // disables the per-app deep link (some MIUI / EMUI builds).
             activity.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }
+}
+
+private fun openBackgroundLaunchSettings(activity: Activity) {
+    val packageName = activity.packageName
+    val candidates = listOf(
+        Intent("miui.intent.action.APP_PERM_EDITOR")
+            .setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
+            .putExtra("extra_pkgname", packageName),
+        Intent("miui.intent.action.APP_PERM_EDITOR")
+            .setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.AppPermissionsEditorActivity")
+            .putExtra("extra_pkgname", packageName),
+        Intent("miui.intent.action.APP_PERM_EDITOR")
+            .putExtra("extra_pkgname", packageName),
+        Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+            data = Uri.parse("package:$packageName")
+        },
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", packageName, null)
+        }
+    )
+    val intent = candidates.firstOrNull { it.resolveActivity(activity.packageManager) != null }
+        ?: candidates.last()
+    runCatching { activity.startActivity(intent) }
+        .onFailure { openAppSettings(activity) }
 }

@@ -1,6 +1,5 @@
 package com.agentplatform.agent.chat;
 
-import com.anthropic.models.messages.Usage;
 import org.springframework.lang.Nullable;
 
 /**
@@ -16,5 +15,18 @@ import org.springframework.lang.Nullable;
  * stats etc); may be {@code null} if no streaming response landed before
  * cancellation.
  */
-public record RunResult(String assistantText, @Nullable Usage usage, boolean cancelled) {
+public record RunResult(
+        String assistantText,
+        @Nullable Object usage,
+        boolean cancelled,
+        boolean exhausted,
+        @Nullable String exhaustionReason
+) {
+    public RunResult(String assistantText, @Nullable Object usage, boolean cancelled) {
+        this(assistantText, usage, cancelled, false, null);
+    }
+
+    public static RunResult exhausted(String assistantText, @Nullable Object usage, String reason) {
+        return new RunResult(assistantText, usage, false, true, reason);
+    }
 }

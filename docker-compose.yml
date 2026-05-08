@@ -27,7 +27,7 @@ services:
       CHAT_DB_PASSWORD: ${CHAT_DB_PASSWORD:-chat_changeme}
       HUB_DB_PASSWORD: ${HUB_DB_PASSWORD:-hub_changeme}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -52,8 +52,8 @@ services:
       JVM_XMX: 512m
       JVM_XMN: 256m
     ports:
-      - "${NACOS_PORT:-8848}:8848"
-      - "${NACOS_GRPC_PORT:-9848}:9848"
+      - "${NACOS_BIND:-127.0.0.1}:${NACOS_PORT:-8848}:8848"
+      - "${NACOS_BIND:-127.0.0.1}:${NACOS_GRPC_PORT:-9848}:9848"
     volumes:
       - nacos-data:/home/nacos/data
       - nacos-logs:/home/nacos/logs
@@ -63,6 +63,23 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+
+  photo-embedding-sidecar:
+    profiles: ["photo-local"]
+    build:
+      context: .
+      dockerfile: photo-embedding-sidecar/Dockerfile
+    container_name: agent-platform-photo-embed
+    restart: unless-stopped
+    environment:
+      PHOTO_EMBEDDING_MODEL: ${PHOTO_LOCAL_EMBEDDING_MODEL:-clip-ViT-B-32-multilingual-v1}
+      PHOTO_EMBEDDING_TEXT_MODEL: ${PHOTO_LOCAL_TEXT_MODEL:-sentence-transformers/clip-ViT-B-32-multilingual-v1}
+      PHOTO_EMBEDDING_IMAGE_MODEL: ${PHOTO_LOCAL_IMAGE_MODEL:-sentence-transformers/clip-ViT-B-32}
+      PHOTO_EMBEDDING_DIM: ${PHOTO_EMBEDDING_DIM:-1024}
+      PHOTO_EMBEDDING_DEVICE: ${PHOTO_LOCAL_EMBEDDING_DEVICE:-cpu}
+    volumes:
+      - photo-embedding-models:/models
+    expose: ["8000"]
 
   # ───────────────────────── application services ─────────────────────────
 
@@ -87,6 +104,7 @@ services:
       AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
       SERVER_PUBLIC_URL: ${SERVER_PUBLIC_URL:-http://localhost:8080}
     expose: ["8081"]
 
@@ -105,6 +123,7 @@ services:
       SERVER_PORT: 8080
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
       WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:3000}
     ports:
       - "${GATEWAY_PORT:-8080}:8080"
@@ -124,8 +143,10 @@ services:
       SERVER_PORT: 8083
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
       # Default false — see device-hub application.yaml comment.
       HUB_MOCK_MODE: ${HUB_MOCK_MODE:-false}
+      HUB_WS_ALLOWED_ORIGINS: ${HUB_WS_ALLOWED_ORIGINS:-${WEB_PUBLIC_URL:-http://localhost:3000}}
     expose: ["8083"]
 
   agent-service:
@@ -143,6 +164,12 @@ services:
       SERVER_PORT: 8082
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
+      # Codex provider through an OpenAI-compatible Responses API relay.
+      # Leave CODEX_API_KEY blank to skip this provider and use Anthropic below.
+      CODEX_API_KEY: ${CODEX_API_KEY:-${OPENAI_API_KEY:-}}
+      CODEX_BASE_URL: ${CODEX_BASE_URL:-https://subapi.rainaki.top}
+      CODEX_CHAT_MODEL: ${CODEX_CHAT_MODEL:-gpt-5.5}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       # Override to point at sub2api (cc.rainaki.top) or any Anthropic-compatible relay.
       # Default https://api.anthropic.com when this env var isn't set.
@@ -156,6 +183,19 @@ services:
       MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-jina-embeddings-v3}
       MEMORY_EMBEDDING_DIM: ${MEMORY_EMBEDDING_DIM:-1024}
       MEMORY_EMBEDDING_TASK: ${MEMORY_EMBEDDING_TASK:-retrieval.passage}
+      PHOTO_INDEX_ENABLED: ${PHOTO_INDEX_ENABLED:-true}
+      PHOTO_INDEX_FALLBACK_REALTIME: ${PHOTO_INDEX_FALLBACK_REALTIME:-true}
+      PHOTO_EMBEDDING_BASE_URL: ${PHOTO_EMBEDDING_BASE_URL:-${MEMORY_EMBEDDING_BASE_URL:-}}
+      PHOTO_EMBEDDING_API_KEY: ${PHOTO_EMBEDDING_API_KEY:-${MEMORY_EMBEDDING_API_KEY:-}}
+      PHOTO_EMBEDDING_MODEL: ${PHOTO_EMBEDDING_MODEL:-clip-ViT-B-32-multilingual-v1}
+      PHOTO_EMBEDDING_DIM: ${PHOTO_EMBEDDING_DIM:-1024}
+      PHOTO_EMBEDDING_TEXT_TASK: ${PHOTO_EMBEDDING_TEXT_TASK:-}
+      PHOTO_EMBEDDING_IMAGE_TASK: ${PHOTO_EMBEDDING_IMAGE_TASK:-}
+      PHOTO_EMBEDDING_IMAGE_FIELD: ${PHOTO_EMBEDDING_IMAGE_FIELD:-image}
+      PHOTO_SEARCH_TOP_K: ${PHOTO_SEARCH_TOP_K:-8}
+      PHOTO_SEARCH_MIN_SCORE: ${PHOTO_SEARCH_MIN_SCORE:-0.20}
+      PHOTO_INDEX_BATCH_SIZE: ${PHOTO_INDEX_BATCH_SIZE:-8}
+      PHOTO_EMBEDDING_TIMEOUT_SECONDS: ${PHOTO_EMBEDDING_TIMEOUT_SECONDS:-180}
     expose: ["8082"]
 
   chat-service:
@@ -179,6 +219,7 @@ services:
       CHAT_DB_PASSWORD: ${CHAT_DB_PASSWORD}
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
     expose: ["8084"]
 
   web:
@@ -199,6 +240,8 @@ services:
     restart: unless-stopped
     depends_on:
       - web
+      - gateway
+      - device-hub-service
     ports:
       - "${CADDY_HTTP_PORT:-80}:80"
       - "${CADDY_HTTPS_PORT:-443}:443"
@@ -214,3 +257,4 @@ volumes:
   nacos-logs:
   caddy-data:
   caddy-config:
+  photo-embedding-models:

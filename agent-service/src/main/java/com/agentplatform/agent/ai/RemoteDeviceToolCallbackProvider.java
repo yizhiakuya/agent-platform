@@ -2,6 +2,7 @@ package com.agentplatform.agent.ai;
 
 import com.agentplatform.agent.client.DeviceHubClient;
 import com.agentplatform.agent.client.DeviceToolDispatcher;
+import com.agentplatform.agent.client.InternalChatFeignClient;
 import com.agentplatform.agent.config.AgentProperties;
 import com.agentplatform.api.hub.OnlineDeviceDto;
 import com.agentplatform.protocol.ToolSpec;
@@ -37,21 +38,32 @@ public class RemoteDeviceToolCallbackProvider {
     private final DeviceHubClient deviceHubClient;
     private final DeviceToolDispatcher dispatcher;
     private final ObjectMapper mapper;
+    private final EmbeddingService embeddingService;
+    private final PhotoEmbeddingService photoEmbeddingService;
+    private final InternalChatFeignClient internalChatClient;
     private final List<ToolPreInterceptor> preInterceptors;
     private final ApplicationEventPublisher events;
     private final boolean visionToolResults;
+    private final AgentProperties props;
 
     public RemoteDeviceToolCallbackProvider(DeviceHubClient deviceHubClient,
                                             DeviceToolDispatcher dispatcher,
                                             ObjectMapper mapper,
+                                            EmbeddingService embeddingService,
+                                            PhotoEmbeddingService photoEmbeddingService,
+                                            InternalChatFeignClient internalChatClient,
                                             List<ToolPreInterceptor> preInterceptors,
                                             ApplicationEventPublisher events,
                                             AgentProperties props) {
         this.deviceHubClient = deviceHubClient;
         this.dispatcher = dispatcher;
         this.mapper = mapper;
+        this.embeddingService = embeddingService;
+        this.photoEmbeddingService = photoEmbeddingService;
+        this.internalChatClient = internalChatClient;
         this.preInterceptors = preInterceptors;
         this.events = events;
+        this.props = props;
         this.visionToolResults = props != null && props.agent() != null && props.agent().memory() != null
                 && Boolean.TRUE.equals(props.agent().memory().enableVisionToolResults());
     }
@@ -71,12 +83,24 @@ public class RemoteDeviceToolCallbackProvider {
             return new ResolvedTools(List.of(), Map.of());
         }
         List<ToolSpec> specs = first.manifest().tools();
-        List<Tool> defs = new ArrayList<>(specs.size());
-        Map<String, RemoteToolCallback> dispatch = new HashMap<>(specs.size() * 2);
+        List<Tool> defs = new ArrayList<>(specs.size() + 1);
+        Map<String, RemoteToolCallback> dispatch = new HashMap<>((specs.size() + 1) * 2);
+        boolean hasSemanticCandidates = false;
         for (ToolSpec spec : specs) {
+            if ("photos.semantic_candidates".equals(spec.name())) {
+                hasSemanticCandidates = true;
+                continue;
+            }
             RemoteToolCallback cb = new RemoteToolCallback(
                     first.deviceId(), userId, spec, dispatcher, mapper,
                     preInterceptors, events, visionToolResults);
+            defs.add(cb.toAnthropicTool());
+            dispatch.put(cb.name(), cb);
+        }
+        if (hasSemanticCandidates) {
+            SemanticPhotoSearchCallback cb = new SemanticPhotoSearchCallback(
+                    first.deviceId(), userId, dispatcher, mapper, embeddingService,
+                    photoEmbeddingService, internalChatClient, events, visionToolResults, props);
             defs.add(cb.toAnthropicTool());
             dispatch.put(cb.name(), cb);
         }

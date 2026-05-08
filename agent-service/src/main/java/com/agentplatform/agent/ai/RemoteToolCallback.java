@@ -98,6 +98,10 @@ public class RemoteToolCallback {
                 .build();
     }
 
+    public ToolSpec spec() {
+        return spec;
+    }
+
     /**
      * Execute the device tool in response to one LLM-issued
      * {@link ToolUseBlock}:
@@ -121,7 +125,13 @@ public class RemoteToolCallback {
      * @param sink      per-request SSE sink (may be null in tests)
      */
     public ExecutionResult executeToolUse(ToolUseBlock tu, UUID userId, UUID sessionId, ChatEventSink sink) {
-        JsonNode args = parseArgs(tu);
+        return executeJsonToolUse(parseArgs(tu), userId, sessionId, sink);
+    }
+
+    public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
+        if (args == null || args.isNull()) {
+            args = mapper.createObjectNode();
+        }
         Map<String, Object> requestCtx = new HashMap<>();
         requestCtx.put("userId", userId);
         if (sessionId != null) requestCtx.put("sessionId", sessionId);
@@ -155,6 +165,7 @@ public class RemoteToolCallback {
                         null, e.getMessage(), dur, Instant.now()));
             }
             if (sink != null) {
+                sink.emit(SseEvent.toolCallError(mapper, spec.name(), e.getMessage()));
                 sink.emit(SseEvent.error(mapper,
                         "Tool '" + spec.name() + "' failed: " + e.getMessage()));
             }
@@ -173,6 +184,7 @@ public class RemoteToolCallback {
 
         if (sink != null) {
             if (result.hasError()) {
+                sink.emit(SseEvent.toolCallError(mapper, spec.name(), result.error().message()));
                 sink.emit(SseEvent.error(mapper,
                         "Tool '" + spec.name() + "' failed: " + result.error().message()));
             } else {
@@ -268,7 +280,7 @@ public class RemoteToolCallback {
      * @param pathPrefix dotted JSON pointer accumulated so far, used only for
      *                   diagnostic logging.
      */
-    static JsonNode stripB64ForLlmAndCollect(JsonNode node, String pathPrefix, List<PendingImage> out) {
+    protected static JsonNode stripB64ForLlmAndCollect(JsonNode node, String pathPrefix, List<PendingImage> out) {
         if (node instanceof ObjectNode obj) {
             ObjectNode copy = obj.objectNode();
             // Layered b64 priority within ONE object: when a tool returns BOTH
@@ -338,7 +350,7 @@ public class RemoteToolCallback {
     }
 
     /** Recursively replace any "*_b64" string field with a short placeholder. */
-    private static JsonNode stripB64ForLlm(JsonNode node) {
+    protected static JsonNode stripB64ForLlm(JsonNode node) {
         if (node instanceof ObjectNode obj) {
             ObjectNode copy = obj.objectNode();
             obj.fields().forEachRemaining(e -> {

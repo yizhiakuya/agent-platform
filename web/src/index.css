@@ -3,3 +3,82 @@
 @tailwind utilities;
 
 html, body, #root { height: 100%; }
+
+.markdown-body {
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: #0f172a;
+  overflow-wrap: anywhere;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body pre,
+.markdown-body table {
+  margin: 0.45rem 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.25rem;
+}
+
+.markdown-body li + li {
+  margin-top: 0.2rem;
+}
+
+.markdown-body code {
+  border-radius: 0.25rem;
+  background: rgba(15, 23, 42, 0.07);
+  padding: 0.1rem 0.3rem;
+  font-size: 0.88em;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  border-radius: 0.4rem;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 0.75rem;
+}
+
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.markdown-body blockquote {
+  border-left: 3px solid #cbd5e1;
+  padding-left: 0.75rem;
+  color: #475569;
+}
+
+.markdown-body a {
+  color: #2563eb;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid #cbd5e1;
+  padding: 0.35rem 0.5rem;
+}

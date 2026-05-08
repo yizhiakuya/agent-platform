@@ -49,6 +49,9 @@ public class MessageService {
         }
         Session s = sessions.findById(req.sessionId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found"));
+        if (s.getDeletedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found");
+        }
         if (!s.getUserId().equals(req.userId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Session belongs to another user");
         }

@@ -5,13 +5,12 @@
 #
 # docker-compose.yml wires this up automatically — see the build: blocks there.
 
-FROM eclipse-temurin:21-jdk-alpine AS build
+FROM maven:3.9.11-eclipse-temurin-21-alpine AS build
 ARG SERVICE
 WORKDIR /app
 
 # Copy build descriptors first so we can prime the dep cache without invalidating
 # it on every source change.
-COPY mvnw mvnw.cmd ./
 COPY .mvn ./.mvn
 COPY pom.xml ./
 COPY common ./common
@@ -20,11 +19,11 @@ COPY gateway/pom.xml                ./gateway/pom.xml
 COPY device-hub-service/pom.xml     ./device-hub-service/pom.xml
 COPY agent-service/pom.xml          ./agent-service/pom.xml
 COPY chat-service/pom.xml           ./chat-service/pom.xml
-RUN chmod +x mvnw && ./mvnw -B -pl ${SERVICE} -am dependency:resolve -DskipTests || true
+RUN mvn -B -pl ${SERVICE} -am dependency:resolve -DskipTests || true
 
 # Now bring the actual sources in and build the requested module
 COPY ${SERVICE} ./${SERVICE}
-RUN ./mvnw -B -pl ${SERVICE} -am package -DskipTests
+RUN mvn -B -pl ${SERVICE} -am package -DskipTests
 
 # Stage 2: thin runtime layer
 FROM eclipse-temurin:21-jre-alpine

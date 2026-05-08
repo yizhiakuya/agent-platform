@@ -76,5 +76,11 @@ dependencies {
     // EXIF reader for photos.get_metadata (no native deps).
     implementation("androidx.exifinterface:exifinterface:1.3.7")
 
+    // On-device OCR for photos.semantic_candidates. The agent-service uses
+    // embeddings for ranking; Android only extracts searchable text locally.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+    implementation("com.google.mlkit:image-labeling:17.0.9")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
