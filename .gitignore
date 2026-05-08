@@ -66,6 +66,7 @@ wstest2.py
 *.bak
 *.bak-*
 .tmp/
+.tmp-apk-download/
 .learnings/
 .mvn/wrapper/maven-wrapper.jar
 
