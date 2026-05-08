@@ -1,6 +1,7 @@
 package com.agentplatform.chat.filter;
 
 import com.agentplatform.security.AbstractAuthFilter;
+import com.agentplatform.security.InternalToken;
 import com.agentplatform.security.JwtUtil;
 import com.agentplatform.security.Principal;
 import com.agentplatform.security.PrincipalContext;
@@ -30,31 +31,39 @@ public class ChatAuthFilter extends AbstractAuthFilter {
     private static final String BEARER = "Bearer ";
 
     private final JwtUtil jwt;
+    private final String internalToken;
     private final List<String> protectedPrefixes;
 
-    public ChatAuthFilter(JwtUtil jwt, List<String> protectedPrefixes) {
+    public ChatAuthFilter(JwtUtil jwt, String internalToken, List<String> protectedPrefixes) {
         this.jwt = jwt;
+        this.internalToken = internalToken;
         this.protectedPrefixes = protectedPrefixes;
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
             throws ServletException, IOException {
-        Principal principal = resolveTrustedHeaders(req);
-        if (principal == null) {
-            principal = resolveBearer(req);
-        }
-        if (principal != null) {
-            PrincipalContext.set(principal);
-        }
-
-        boolean isProtected = protectedPrefixes.stream().anyMatch(req.getRequestURI()::startsWith);
-        if (isProtected && principal == null) {
-            res.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Authentication required");
-            return;
-        }
-
+        PrincipalContext.clear();
         try {
+            Principal principal = resolveTrustedHeaders(req);
+            if (principal == null) {
+                principal = resolveBearer(req);
+            }
+            if (principal != null) {
+                PrincipalContext.set(principal);
+            }
+
+            boolean isInternal = req.getRequestURI().startsWith("/internal/");
+            if (isInternal && !InternalToken.isValid(internalToken, req.getHeader(InternalToken.HEADER))) {
+                res.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Internal token required");
+                return;
+            }
+            boolean isProtected = protectedPrefixes.stream().anyMatch(req.getRequestURI()::startsWith);
+            if (isProtected && principal == null) {
+                res.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Authentication required");
+                return;
+            }
+
             chain.doFilter(req, res);
         } finally {
             PrincipalContext.clear();
@@ -62,6 +71,9 @@ public class ChatAuthFilter extends AbstractAuthFilter {
     }
 
     private Principal resolveTrustedHeaders(HttpServletRequest req) {
+        if (!InternalToken.isValid(internalToken, req.getHeader(InternalToken.HEADER))) {
+            return null;
+        }
         String type = req.getHeader(TrustedHeaderAuthFilter.H_TYPE);
         if (type == null) return null;
         String userId = req.getHeader(TrustedHeaderAuthFilter.H_USER);

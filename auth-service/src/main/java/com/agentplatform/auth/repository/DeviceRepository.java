@@ -8,4 +8,6 @@ import java.util.UUID;
 
 public interface DeviceRepository extends JpaRepository<Device, UUID> {
     List<Device> findByUserIdAndRevokedAtIsNull(UUID userId);
+
+    boolean existsByIdAndUserIdAndRevokedAtIsNull(UUID id, UUID userId);
 }

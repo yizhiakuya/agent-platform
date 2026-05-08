@@ -165,6 +165,7 @@ public class RemoteToolCallback {
                         null, e.getMessage(), dur, Instant.now()));
             }
             if (sink != null) {
+                sink.emit(SseEvent.toolCallError(mapper, spec.name(), e.getMessage()));
                 sink.emit(SseEvent.error(mapper,
                         "Tool '" + spec.name() + "' failed: " + e.getMessage()));
             }
@@ -183,6 +184,7 @@ public class RemoteToolCallback {
 
         if (sink != null) {
             if (result.hasError()) {
+                sink.emit(SseEvent.toolCallError(mapper, spec.name(), result.error().message()));
                 sink.emit(SseEvent.error(mapper,
                         "Tool '" + spec.name() + "' failed: " + result.error().message()));
             } else {

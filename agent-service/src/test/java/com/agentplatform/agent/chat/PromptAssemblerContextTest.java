@@ -1,5 +1,7 @@
 package com.agentplatform.agent.chat;
 
+import com.agentplatform.agent.ai.PersonaBundle;
+import com.agentplatform.agent.ai.SkillDef;
 import com.agentplatform.api.chat.SessionArtifactDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -11,6 +13,19 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class PromptAssemblerContextTest {
+
+    @Test
+    void buildSystemTextDoesNotIncludePerRequestClock() {
+        String text = PromptAssembler.buildSystemText(
+                new PersonaBundle("identity", "soul", "agents", "tools"),
+                "likes concise answers",
+                List.of(new SkillDef("photos", "Photo workflow", "body")));
+
+        assertThat(text).contains("# IDENTITY");
+        assertThat(text).contains("# AVAILABLE SKILLS");
+        assertThat(text).doesNotContain("# CURRENT TIME");
+        assertThat(text).doesNotContain("Today 00:00");
+    }
 
     @Test
     void composeUserTextIncludesWorkingSetBeforeCurrentMessage() {
@@ -34,6 +49,7 @@ class PromptAssemblerContextTest {
 
         assertThat(text).contains("# RELEVANT MEMORIES");
         assertThat(text).contains("# SESSION WORKING SET");
+        assertThat(text).contains("# CURRENT TIME");
         assertThat(text).contains("photo key=asset-123");
         assertThat(text).contains("result_rank=1");
         assertThat(text).endsWith("再看看这张图");

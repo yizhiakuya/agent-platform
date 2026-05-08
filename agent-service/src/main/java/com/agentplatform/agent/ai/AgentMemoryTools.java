@@ -1,0 +1,196 @@
+package com.agentplatform.agent.ai;
+
+import com.agentplatform.agent.client.InternalChatFeignClient;
+import com.agentplatform.api.chat.MemoryFactDto;
+import com.agentplatform.api.chat.SaveFactRequest;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+public final class AgentMemoryTools {
+
+    private static final int MAX_MEMORY_CONTENT_CHARS = 4_000;
+
+    private AgentMemoryTools() {}
+
+    static ObjectNode schema(ObjectMapper mapper) {
+        ObjectNode schema = mapper.createObjectNode();
+        schema.put("type", "object");
+        schema.set("properties", mapper.createObjectNode());
+        return schema;
+    }
+
+    static ObjectNode prop(ObjectMapper mapper, String type, String description) {
+        ObjectNode p = mapper.createObjectNode();
+        p.put("type", type);
+        p.put("description", description);
+        return p;
+    }
+
+    @Component
+    public static class Add implements ServerToolCallback {
+        private final InternalChatFeignClient chatClient;
+        private final EmbeddingService embeddingService;
+        private final ObjectMapper mapper;
+
+        public Add(InternalChatFeignClient chatClient, EmbeddingService embeddingService, ObjectMapper mapper) {
+            this.chatClient = chatClient;
+            this.embeddingService = embeddingService;
+            this.mapper = mapper;
+        }
+
+        @Override
+        public String name() {
+            return "agent_memory_add";
+        }
+
+        @Override
+        public String description() {
+            return "Persist a durable memory about the user or project. Use for stable facts, preferences, rules, "
+                    + "or repeated operational lessons that should be recalled in future turns. Do not store secrets.";
+        }
+
+        @Override
+        public JsonNode schema() {
+            ObjectNode schema = AgentMemoryTools.schema(mapper);
+            ObjectNode props = (ObjectNode) schema.get("properties");
+            props.set("kind", prop(mapper, "string", "One of fact, preference, rule, lesson."));
+            props.set("content", prop(mapper, "string", "Concise durable memory text. Avoid secrets and transient details."));
+            ArrayNode required = mapper.createArrayNode();
+            required.add("kind");
+            required.add("content");
+            schema.set("required", required);
+            return schema;
+        }
+
+        @Override
+        public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
+            String kind = normalizeKind(text(args, "kind", "fact"));
+            if (kind == null) return ExecutionResult.error("kind must be one of fact, preference, rule, lesson");
+            String content = text(args, "content", "").trim();
+            if (content.isBlank()) return ExecutionResult.error("content is required");
+            if (content.length() > MAX_MEMORY_CONTENT_CHARS) {
+                return ExecutionResult.error("content too long; max " + MAX_MEMORY_CONTENT_CHARS + " chars");
+            }
+            float[] embedding = embeddingService.embed(content);
+            Map<String, UUID> saved = chatClient.saveFact(
+                    new SaveFactRequest(userId, kind, content, null, embedding, true));
+            ObjectNode out = mapper.createObjectNode();
+            out.put("ok", true);
+            out.put("id", String.valueOf(saved.get("id")));
+            out.put("kind", kind);
+            out.put("content", content);
+            return ExecutionResult.text(out.toString());
+        }
+    }
+
+    @Component
+    public static class ListMemories implements ServerToolCallback {
+        private final InternalChatFeignClient chatClient;
+        private final ObjectMapper mapper;
+
+        public ListMemories(InternalChatFeignClient chatClient, ObjectMapper mapper) {
+            this.chatClient = chatClient;
+            this.mapper = mapper;
+        }
+
+        @Override
+        public String name() {
+            return "agent_memory_list";
+        }
+
+        @Override
+        public String description() {
+            return "List stored durable memories for review before updating or deleting them.";
+        }
+
+        @Override
+        public JsonNode schema() {
+            ObjectNode schema = AgentMemoryTools.schema(mapper);
+            ObjectNode props = (ObjectNode) schema.get("properties");
+            props.set("limit", prop(mapper, "integer", "Maximum rows to return, default 20, max 100."));
+            props.set("includeRaw", prop(mapper, "boolean", "When true, include automatically extracted raw memories too."));
+            return schema;
+        }
+
+        @Override
+        public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
+            int limit = args == null ? 20 : Math.max(1, Math.min(args.path("limit").asInt(20), 100));
+            boolean includeRaw = args != null && args.path("includeRaw").asBoolean(false);
+            List<MemoryFactDto> rows = chatClient.listFacts(Map.of(
+                    "userId", userId.toString(),
+                    "limit", limit,
+                    "includeRaw", includeRaw));
+            return ExecutionResult.text(mapper.valueToTree(rows == null ? List.of() : rows).toString());
+        }
+    }
+
+    @Component
+    public static class Forget implements ServerToolCallback {
+        private final InternalChatFeignClient chatClient;
+        private final ObjectMapper mapper;
+
+        public Forget(InternalChatFeignClient chatClient, ObjectMapper mapper) {
+            this.chatClient = chatClient;
+            this.mapper = mapper;
+        }
+
+        @Override
+        public String name() {
+            return "agent_memory_forget";
+        }
+
+        @Override
+        public String description() {
+            return "Delete one stored memory by id after it is obsolete, wrong, or explicitly no longer wanted.";
+        }
+
+        @Override
+        public JsonNode schema() {
+            ObjectNode schema = AgentMemoryTools.schema(mapper);
+            ObjectNode props = (ObjectNode) schema.get("properties");
+            props.set("id", prop(mapper, "string", "Memory fact UUID from agent_memory_list."));
+            ArrayNode required = mapper.createArrayNode();
+            required.add("id");
+            schema.set("required", required);
+            return schema;
+        }
+
+        @Override
+        public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
+            String id = text(args, "id", "");
+            if (id.isBlank()) return ExecutionResult.error("id is required");
+            UUID factId;
+            try {
+                factId = UUID.fromString(id);
+            } catch (IllegalArgumentException e) {
+                return ExecutionResult.error("id must be a valid UUID");
+            }
+            Map<String, Boolean> deleted = chatClient.deleteFact(userId, factId);
+            ObjectNode out = mapper.createObjectNode();
+            out.put("deleted", Boolean.TRUE.equals(deleted.get("deleted")));
+            out.put("id", id);
+            return ExecutionResult.text(out.toString());
+        }
+    }
+
+    private static String text(JsonNode args, String field, String fallback) {
+        if (args == null || !args.has(field)) return fallback;
+        JsonNode node = args.get(field);
+        return node == null || node.isNull() ? fallback : node.asText(fallback);
+    }
+
+    private static String normalizeKind(String kind) {
+        if (kind == null || kind.isBlank()) return "fact";
+        return switch (kind.trim().toLowerCase()) {
+            case "fact", "preference", "rule", "lesson" -> kind.trim().toLowerCase();
+            default -> null;
+        };
+    }
+}

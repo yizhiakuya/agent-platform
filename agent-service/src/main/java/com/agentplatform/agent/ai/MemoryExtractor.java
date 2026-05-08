@@ -3,9 +3,6 @@ package com.agentplatform.agent.ai;
 import com.agentplatform.agent.client.InternalChatFeignClient;
 import com.agentplatform.agent.config.AgentProperties;
 import com.agentplatform.api.chat.SaveFactRequest;
-import com.anthropic.models.messages.ContentBlock;
-import com.anthropic.models.messages.Message;
-import com.anthropic.models.messages.MessageCreateParams;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -28,11 +25,10 @@ import java.util.concurrent.ExecutorService;
  * pool — the user never waits for it, and any failure is logged at WARN and
  * dropped (memory is a best-effort enrichment, not a contract).
  *
- * <p>Calls the Anthropic SDK directly with {@code factExtractorModel} (cheap
- * Haiku by default) — independent of the main-conversation provider's model
- * choice. v0 fallback: if the first provider's call fails we just drop the
- * batch (best-effort), since fact extraction shouldn't dominate cost or
- * latency budgets.
+ * <p>Provider routing is delegated to {@link BackgroundLlmClient}: Anthropic
+ * deployments can keep the cheap extractor model, and Codex-only deployments
+ * use their configured Responses provider instead of disabling memory.
+ *
  */
 @Service
 public class MemoryExtractor {
@@ -45,6 +41,7 @@ public class MemoryExtractor {
     private final ExecutorService chatExecutor;
     private final ObjectMapper mapper;
     private final AgentProperties props;
+    private final BackgroundLlmClient backgroundLlmClient;
 
     // Per-session ring of (USER, ASSISTANT) turns waiting for the LLM extractor
     // to chew on. We flush in batches to cut the per-turn sub2api request count
@@ -57,13 +54,15 @@ public class MemoryExtractor {
                            InternalChatFeignClient chatFeign,
                            ExecutorService chatExecutor,
                            ObjectMapper mapper,
-                           AgentProperties props) {
+                           AgentProperties props,
+                           BackgroundLlmClient backgroundLlmClient) {
         this.chatClients = chatClients;
         this.embeddingService = embeddingService;
         this.chatFeign = chatFeign;
         this.chatExecutor = chatExecutor;
         this.mapper = mapper;
         this.props = props;
+        this.backgroundLlmClient = backgroundLlmClient;
     }
 
     /**
@@ -125,32 +124,18 @@ public class MemoryExtractor {
             // delta on a busy chat dwarfs the chat itself if you ever skip
             // this — Opus is ~30x the per-token price.
             String factModel = props.agent().memory().factExtractorModel();
-            ConfiguredProvider provider = chatClients.stream()
-                    .filter(ConfiguredProvider::isAnthropicMessages)
-                    .findFirst()
-                    .orElse(null);
-            if (provider == null) {
-                log.warn("[memory-extract] no anthropic-messages provider configured, skip fact extraction");
+            BackgroundLlmClient.CompletionPlan plan = backgroundLlmClient.choosePlan(chatClients, factModel);
+            if (plan == null) {
+                log.warn("[memory-extract] no background LLM provider configured, skip fact extraction");
                 return;
             }
 
-            MessageCreateParams params = MessageCreateParams.builder()
-                    .model(factModel)
-                    .maxTokens(1024L)
-                    .addUserMessage(prompt)
-                    .build();
-
             String reply;
             try {
-                Message msg = provider.client().messages().create(params);
-                StringBuilder sb = new StringBuilder();
-                for (ContentBlock cb : msg.content()) {
-                    cb.text().ifPresent(t -> sb.append(t.text()));
-                }
-                reply = sb.toString();
+                reply = backgroundLlmClient.complete(plan, prompt, 1024L);
             } catch (Exception e) {
-                log.warn("[memory-extract] fact extraction LLM call failed for user {}: {}",
-                        userId, e.getMessage());
+                log.warn("[memory-extract] fact extraction LLM call failed for user {} provider={} model={}: {}",
+                        userId, plan.provider().name(), plan.model(), e.getMessage());
                 return;
             }
 
@@ -180,8 +165,8 @@ public class MemoryExtractor {
                 }
             }
             if (saved > 0) {
-                log.info("[memory-extract] saved {} fact(s) for user {} session {} (batch of {} turns, model={})",
-                        saved, userId, sessionId, turns.size(), factModel);
+                log.info("[memory-extract] saved {} fact(s) for user {} session {} (batch of {} turns, provider={} model={})",
+                        saved, userId, sessionId, turns.size(), plan.provider().name(), plan.model());
             }
         } catch (Exception ex) {
             log.warn("[memory-extract] batch extraction failed for user {}: {}", userId, ex.getMessage());

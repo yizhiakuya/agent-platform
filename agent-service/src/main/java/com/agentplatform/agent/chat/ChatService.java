@@ -6,6 +6,7 @@ import com.agentplatform.agent.ai.EmbeddingService;
 import com.agentplatform.agent.ai.MemoryExtractor;
 import com.agentplatform.agent.ai.RemoteDeviceToolCallbackProvider;
 import com.agentplatform.agent.ai.ResolvedTools;
+import com.agentplatform.agent.ai.ServerToolRegistry;
 import com.agentplatform.agent.ai.SessionSummaryRefresher;
 import com.agentplatform.agent.ai.SkillLoadCallback;
 import com.agentplatform.agent.client.DeviceHubClient;
@@ -37,9 +38,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * SSE-streaming chat orchestrator. Per-request flow:
@@ -78,6 +82,7 @@ public class ChatService {
     private final AgentProperties props;
     private final List<ConfiguredProvider> chatClients;
     private final SkillLoadCallback skillLoadCallback;
+    private final ServerToolRegistry serverToolRegistry;
     private final EmbeddingService embeddingService;
     private final MemoryExtractor memoryExtractor;
     private final AgentLoopRunner agentLoopRunner;
@@ -95,6 +100,7 @@ public class ChatService {
                        AgentProperties props,
                        List<ConfiguredProvider> chatClients,
                        SkillLoadCallback skillLoadCallback,
+                       ServerToolRegistry serverToolRegistry,
                        EmbeddingService embeddingService,
                        MemoryExtractor memoryExtractor,
                        AgentLoopRunner agentLoopRunner,
@@ -111,6 +117,7 @@ public class ChatService {
         this.props = props;
         this.chatClients = chatClients == null ? List.of() : chatClients;
         this.skillLoadCallback = skillLoadCallback;
+        this.serverToolRegistry = serverToolRegistry;
         this.embeddingService = embeddingService;
         this.memoryExtractor = memoryExtractor;
         this.agentLoopRunner = agentLoopRunner;
@@ -150,7 +157,7 @@ public class ChatService {
 
     private void handleWithLlm(UUID userId, UUID sessionId, ChatRequest req, SseEmitter emitter) {
         ResolvedTools resolved = toolProvider.getForUser(userId);
-        if (resolved.definitions().isEmpty()) {
+        if (resolved.definitions().isEmpty() && serverToolRegistry.toAnthropicTools().isEmpty()) {
             // No tools registered yet (no real device bound). Fall back to the
             // mock path so we still emit a useful SSE response —
             // InternalToolController auto-provisions a MockDeviceSession when
@@ -170,9 +177,11 @@ public class ChatService {
         // along on the user message instead so they don't churn the cache.
         List<MemoryFactDto> memories = recallMemories(userId, req.message());
         ContextBundle context = contextAssembler.assemble(userId, sessionId, req.message(), memories);
+        List<com.anthropic.models.messages.Tool> executableTools = new java.util.ArrayList<>(resolved.definitions());
+        executableTools.addAll(serverToolRegistry.toAnthropicTools());
+        executableTools.add(skillLoadCallback.toAnthropicTool());
         List<ToolUnion> tools = PromptAssembler.buildToolUnionList(
-                resolved.definitions(),
-                skillLoadCallback.toAnthropicTool(),
+                executableTools,
                 props.agent().memory());
 
         ThinkingConfigEnabled thinking = null;
@@ -187,7 +196,8 @@ public class ChatService {
                 .content(context.userText())
                 .build());
 
-        ChatEventSink sink = ev -> emitAndPersistToolEvent(emitter, sessionId, userId, ev);
+        AtomicBoolean responseStarted = new AtomicBoolean(false);
+        ChatEventSink sink = new PersistingChatEventSink(emitter, sessionId, userId, responseStarted);
 
         long t0 = System.currentTimeMillis();
 
@@ -204,6 +214,13 @@ public class ChatService {
                 break;
             } catch (RuntimeException e) {
                 lastErr = e;
+                if (responseStarted.get()) {
+                    log.warn("[agent] provider '{}' failed after streaming began; not failing over",
+                            provider.name(), e);
+                    safeSend(emitter, SseEvent.error(mapper, userFacingProviderFailureMessage(e)));
+                    emitter.complete();
+                    return;
+                }
                 log.warn("[agent] provider '{}' failed: {} — trying next", provider.name(), e.getMessage());
             }
         }
@@ -482,6 +499,48 @@ public class ChatService {
             MessageDto saved = persist(sessionId, userId, MessageRole.TOOL_RESULT, "tool " + tool + " returned",
                     toolResultMetadata(tool, result));
             persistArtifacts(sessionId, userId, saved == null ? null : saved.id(), tool, result);
+        }
+    }
+
+    private class PersistingChatEventSink implements ChatEventSink {
+        private final SseEmitter emitter;
+        private final UUID sessionId;
+        private final UUID userId;
+        private final AtomicBoolean responseStarted;
+        private final Deque<String> pendingTools = new ArrayDeque<>();
+
+        PersistingChatEventSink(SseEmitter emitter, UUID sessionId, UUID userId,
+                                AtomicBoolean responseStarted) {
+            this.emitter = emitter;
+            this.sessionId = sessionId;
+            this.userId = userId;
+            this.responseStarted = responseStarted;
+        }
+
+        @Override
+        public void emit(SseEvent event) {
+            if (event != null && ("assistant_message".equals(event.type())
+                    || "tool_call_started".equals(event.type())
+                    || "tool_call_result".equals(event.type()))) {
+                responseStarted.set(true);
+            }
+            emitAndPersistToolEvent(emitter, sessionId, userId, event);
+            if (event == null || event.data() == null || event.data().isNull()) return;
+            if ("tool_call_started".equals(event.type())) {
+                pendingTools.addLast(event.data().path("tool").asText("tool"));
+            } else if ("tool_call_result".equals(event.type()) || "tool_call_error".equals(event.type())) {
+                String tool = event.data().path("tool").asText(null);
+                if (tool == null) {
+                    pendingTools.pollLast();
+                } else {
+                    pendingTools.removeFirstOccurrence(tool);
+                }
+            } else if ("error".equals(event.type()) && !pendingTools.isEmpty()) {
+                String tool = pendingTools.pollLast();
+                String message = event.data().path("message").asText("tool failed");
+                SseEvent terminal = SseEvent.toolCallError(mapper, tool, message);
+                emitAndPersistToolEvent(emitter, sessionId, userId, terminal);
+            }
         }
     }
 

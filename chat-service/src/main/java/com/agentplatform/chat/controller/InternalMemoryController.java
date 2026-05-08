@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
@@ -38,13 +39,36 @@ public class InternalMemoryController {
         if (req == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body required");
         }
-        UUID id = memoryService.saveFact(
+        UUID id = Boolean.TRUE.equals(req.curated())
+                ? memoryService.saveCuratedFact(
+                req.userId(),
+                req.kind(),
+                req.content(),
+                req.sourceMessageId(),
+                req.embedding())
+                : memoryService.saveFact(
                 req.userId(),
                 req.kind(),
                 req.content(),
                 req.sourceMessageId(),
                 req.embedding());
         return Map.of("id", id);
+    }
+
+    @PostMapping("/facts/list")
+    public List<MemoryFactDto> listFacts(@RequestBody Map<String, Object> req) {
+        if (req == null || req.get("userId") == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId required");
+        }
+        UUID userId = UUID.fromString(String.valueOf(req.get("userId")));
+        int limit = parseInt(req.get("limit"), 20);
+        boolean includeRaw = Boolean.parseBoolean(String.valueOf(req.getOrDefault("includeRaw", "false")));
+        return memoryService.listFacts(userId, limit, includeRaw);
+    }
+
+    @PostMapping("/facts/delete")
+    public Map<String, Boolean> deleteFact(@RequestParam UUID userId, @RequestParam UUID factId) {
+        return Map.of("deleted", memoryService.deleteFact(userId, factId));
     }
 
     @PostMapping("/facts/query")
@@ -71,5 +95,15 @@ public class InternalMemoryController {
         int cap = req.maxToPromote() <= 0 ? 20 : req.maxToPromote();
         int promoted = memoryService.promoteHotFacts(req.userId(), min, cap);
         return Map.of("promoted", promoted);
+    }
+
+    private static int parseInt(Object value, int fallback) {
+        if (value == null) return fallback;
+        if (value instanceof Number n) return n.intValue();
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 }

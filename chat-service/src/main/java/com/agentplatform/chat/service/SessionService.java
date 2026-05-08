@@ -32,7 +32,7 @@ public class SessionService {
 
     @Transactional(readOnly = true)
     public List<SessionDto> listByUser(UUID userId) {
-        return sessions.findByUserIdOrderByCreatedAtDesc(userId).stream()
+        return sessions.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId).stream()
                 .map(this::toDto)
                 .toList();
     }
@@ -44,12 +44,15 @@ public class SessionService {
 
     @Transactional
     public void delete(UUID sessionId, UUID userId) {
-        sessions.delete(requireOwned(sessionId, userId));
+        Session s = requireOwned(sessionId, userId);
+        s.setDeletedAt(OffsetDateTime.now());
+        sessions.save(s);
     }
 
     @Transactional
     public void touchLastMessage(UUID sessionId) {
         sessions.findById(sessionId).ifPresent(s -> {
+            if (s.getDeletedAt() != null) return;
             s.setLastMessageAt(OffsetDateTime.now());
             sessions.save(s);
         });
@@ -58,6 +61,9 @@ public class SessionService {
     Session requireOwned(UUID sessionId, UUID userId) {
         Session s = sessions.findById(sessionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found"));
+        if (s.getDeletedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found");
+        }
         if (!s.getUserId().equals(userId)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Session belongs to another user");
         }

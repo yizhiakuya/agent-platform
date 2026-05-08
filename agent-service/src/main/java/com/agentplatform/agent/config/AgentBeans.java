@@ -1,11 +1,14 @@
 package com.agentplatform.agent.config;
 
 import com.agentplatform.agent.ai.ConfiguredProvider;
+import com.agentplatform.security.InternalToken;
 import com.agentplatform.security.JwtUtil;
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import feign.RequestInterceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -108,14 +111,23 @@ public class AgentBeans {
     }
 
     @Bean
-    public WebClient hubWebClient(@LoadBalanced WebClient.Builder builder) {
+    public WebClient hubWebClient(
+            @LoadBalanced WebClient.Builder builder,
+            @Value("${agent-platform.internal.token:${agent-platform.jwt.secret}}") String internalToken) {
         // Default Spring WebClient caps in-memory response decode at 256KB,
         // which trips the moment a tool returns a high-res image. Bump to 16MB.
         return builder
+                .defaultHeader(InternalToken.HEADER, internalToken)
                 .exchangeStrategies(org.springframework.web.reactive.function.client.ExchangeStrategies.builder()
                         .codecs(c -> c.defaultCodecs().maxInMemorySize(16 * 1024 * 1024))
                         .build())
                 .build();
+    }
+
+    @Bean
+    public RequestInterceptor internalTokenFeignInterceptor(
+            @Value("${agent-platform.internal.token:${agent-platform.jwt.secret}}") String internalToken) {
+        return template -> template.header(InternalToken.HEADER, internalToken);
     }
 
     /**

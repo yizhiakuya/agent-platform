@@ -27,7 +27,7 @@ services:
       CHAT_DB_PASSWORD: ${CHAT_DB_PASSWORD:-chat_changeme}
       HUB_DB_PASSWORD: ${HUB_DB_PASSWORD:-hub_changeme}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -52,8 +52,8 @@ services:
       JVM_XMX: 512m
       JVM_XMN: 256m
     ports:
-      - "${NACOS_PORT:-8848}:8848"
-      - "${NACOS_GRPC_PORT:-9848}:9848"
+      - "${NACOS_BIND:-127.0.0.1}:${NACOS_PORT:-8848}:8848"
+      - "${NACOS_BIND:-127.0.0.1}:${NACOS_GRPC_PORT:-9848}:9848"
     volumes:
       - nacos-data:/home/nacos/data
       - nacos-logs:/home/nacos/logs
@@ -104,6 +104,7 @@ services:
       AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
       SERVER_PUBLIC_URL: ${SERVER_PUBLIC_URL:-http://localhost:8080}
     expose: ["8081"]
 
@@ -122,6 +123,7 @@ services:
       SERVER_PORT: 8080
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
       WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:3000}
     ports:
       - "${GATEWAY_PORT:-8080}:8080"
@@ -141,8 +143,10 @@ services:
       SERVER_PORT: 8083
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
       # Default false — see device-hub application.yaml comment.
       HUB_MOCK_MODE: ${HUB_MOCK_MODE:-false}
+      HUB_WS_ALLOWED_ORIGINS: ${HUB_WS_ALLOWED_ORIGINS:-${WEB_PUBLIC_URL:-http://localhost:3000}}
     expose: ["8083"]
 
   agent-service:
@@ -160,6 +164,7 @@ services:
       SERVER_PORT: 8082
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
       # Codex provider through an OpenAI-compatible Responses API relay.
       # Leave CODEX_API_KEY blank to skip this provider and use Anthropic below.
       CODEX_API_KEY: ${CODEX_API_KEY:-${OPENAI_API_KEY:-}}
@@ -214,6 +219,7 @@ services:
       CHAT_DB_PASSWORD: ${CHAT_DB_PASSWORD}
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
     expose: ["8084"]
 
   web:

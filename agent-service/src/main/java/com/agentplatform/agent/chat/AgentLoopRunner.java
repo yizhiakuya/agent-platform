@@ -6,6 +6,8 @@ import com.agentplatform.agent.ai.ExecutionResult;
 import com.agentplatform.agent.ai.PendingImage;
 import com.agentplatform.agent.ai.RemoteToolCallback;
 import com.agentplatform.agent.ai.ResolvedTools;
+import com.agentplatform.agent.ai.ServerToolCallback;
+import com.agentplatform.agent.ai.ServerToolRegistry;
 import com.agentplatform.agent.ai.SkillLoadCallback;
 import com.agentplatform.agent.config.AgentProperties;
 import com.anthropic.core.http.StreamResponse;
@@ -25,6 +27,7 @@ import com.anthropic.models.messages.ToolResultBlockParam;
 import com.anthropic.models.messages.ToolUnion;
 import com.anthropic.models.messages.ToolUseBlock;
 import com.anthropic.models.messages.Usage;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,13 +62,16 @@ public class AgentLoopRunner {
     private final ObjectMapper mapper;
     private final AgentProperties props;
     private final SkillLoadCallback skillLoadCallback;
+    private final ServerToolRegistry serverToolRegistry;
 
     public AgentLoopRunner(ObjectMapper mapper,
                            AgentProperties props,
-                           SkillLoadCallback skillLoadCallback) {
+                           SkillLoadCallback skillLoadCallback,
+                           ServerToolRegistry serverToolRegistry) {
         this.mapper = mapper;
         this.props = props;
         this.skillLoadCallback = skillLoadCallback;
+        this.serverToolRegistry = serverToolRegistry;
     }
 
     /**
@@ -115,7 +121,6 @@ public class AgentLoopRunner {
 
         StringBuilder textBuf = new StringBuilder();
         Usage lastUsage = null;
-
         int maxIterations = props.agent().maxAgentIterations();
         for (int iter = 0; iter < maxIterations; iter++) {
             // If a previous iteration drained without erroring but cancel
@@ -147,7 +152,7 @@ public class AgentLoopRunner {
                             String chunk = t.text();
                             if (chunk != null && !chunk.isEmpty()) {
                                 textBuf.append(chunk);
-                                safeSend(emitter, SseEvent.assistantMessage(mapper, chunk));
+                                sink.emit(SseEvent.assistantMessage(mapper, chunk));
                             }
                         });
                         // input_json_delta: SDK accumulator handles tool_use args.
@@ -250,11 +255,62 @@ public class AgentLoopRunner {
         if (SkillLoadCallback.TOOL_NAME.equals(name)) {
             return skillLoadCallback.executeToolUse(tu, userId, sessionId, sink);
         }
+        ServerToolCallback serverTool = serverToolRegistry.dispatchMap().get(name);
+        if (serverTool != null) {
+            JsonNode args = parseServerToolArgs(tu);
+            if (sink != null) {
+                sink.emit(SseEvent.toolCallStarted(mapper, null, name, args));
+            }
+            ExecutionResult result;
+            try {
+                result = serverTool.executeJsonToolUse(args, userId, sessionId, sink);
+            } catch (Throwable e) {
+                if (sink != null) {
+                    sink.emit(SseEvent.toolCallError(mapper, name, e.getMessage()));
+                    sink.emit(SseEvent.error(mapper, "Tool '" + name + "' failed: " + e.getMessage()));
+                }
+                return ExecutionResult.error(e.getMessage());
+            }
+            if (sink != null) {
+                sink.emit(SseEvent.toolCallResult(mapper, name, parseExecutionResult(result)));
+            }
+            return result;
+        }
         RemoteToolCallback rt = resolved.dispatch().get(name);
         if (rt == null) {
             return ExecutionResult.error("unknown tool: " + name);
         }
         return rt.executeToolUse(tu, userId, sessionId, sink);
+    }
+
+    private JsonNode parseServerToolArgs(ToolUseBlock tu) {
+        try {
+            Object raw = tu._input();
+            if (raw == null) return mapper.createObjectNode();
+            JsonNode node = mapper.valueToTree(raw);
+            if (node != null && node.isTextual()) {
+                try {
+                    return mapper.readTree(node.asText());
+                } catch (Exception ignored) {
+                    return node;
+                }
+            }
+            return node == null || node.isNull() ? mapper.createObjectNode() : node;
+        } catch (Exception e) {
+            log.warn("Failed to parse server tool input for {}: {}", tu.name(), e.getMessage());
+            return mapper.createObjectNode();
+        }
+    }
+
+    private JsonNode parseExecutionResult(ExecutionResult result) {
+        if (result == null || result.jsonText() == null || result.jsonText().isBlank()) {
+            return mapper.createObjectNode();
+        }
+        try {
+            return mapper.readTree(result.jsonText());
+        } catch (Exception ignored) {
+            return mapper.createObjectNode().put("text", result.jsonText());
+        }
     }
 
     /**

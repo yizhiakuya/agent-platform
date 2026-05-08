@@ -29,6 +29,8 @@ spring:
         register-enabled: ${NACOS_REGISTER:true}
 
 agent-platform:
+  internal:
+    token: ${INTERNAL_API_TOKEN:${JWT_SECRET}}
   jwt:
     # Dev fallback — decoded value is 50 bytes of "dev-only-..." text. NEVER use in production.
     # Override via JWT_SECRET env var (must be base64, >= 32 raw bytes).

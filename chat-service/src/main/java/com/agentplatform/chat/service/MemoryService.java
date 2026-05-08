@@ -40,6 +40,7 @@ public class MemoryService {
     private static final Logger log = LoggerFactory.getLogger(MemoryService.class);
 
     private static final int MAX_TOP_K = 50;
+    private static final int MAX_CONTENT_CHARS = 4_000;
 
     private final JdbcTemplate jdbc;
 
@@ -62,15 +63,22 @@ public class MemoryService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "userId, kind, content and embedding are required");
         }
+        String normalizedKind = normalizeKind(kind);
+        String normalizedContent = content.trim();
+        if (normalizedContent.length() > MAX_CONTENT_CHARS) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "content too long; max " + MAX_CONTENT_CHARS + " chars");
+        }
 
         UUID id = UUID.randomUUID();
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
         jdbc.update("""
-                INSERT INTO memory_facts (id, user_id, kind, content, source_message_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO memory_facts (id, user_id, kind, content, source_message_id,
+                                          created_at, is_curated, curated_at)
+                VALUES (?, ?, ?, ?, ?, ?, false, NULL)
                 """,
-                id, userId, kind, content, sourceMessageId, Timestamp.from(now.toInstant()));
+                id, userId, normalizedKind, normalizedContent, sourceMessageId, Timestamp.from(now.toInstant()));
 
         jdbc.update("""
                 INSERT INTO memory_embeddings (fact_id, embedding)
@@ -79,8 +87,50 @@ public class MemoryService {
                 id, toVectorLiteral(embedding));
 
         log.debug("Saved memory fact {} for user {} (kind={}, dim={})",
-                id, userId, kind, embedding.length);
+                id, userId, normalizedKind, embedding.length);
         return id;
+    }
+
+    /**
+     * Insert a manually curated memory fact. Agent-facing memory tools use this
+     * when the model intentionally saves a durable rule/preference/fact.
+     */
+    @Transactional
+    public UUID saveCuratedFact(UUID userId,
+                                String kind,
+                                String content,
+                                UUID sourceMessageId,
+                                float[] embedding) {
+        UUID id = saveFact(userId, kind, content, sourceMessageId, embedding);
+        jdbc.update("UPDATE memory_facts SET is_curated = true, curated_at = ? WHERE id = ?",
+                Timestamp.from(OffsetDateTime.now(ZoneOffset.UTC).toInstant()), id);
+        return id;
+    }
+
+    public List<MemoryFactDto> listFacts(UUID userId, int limit, boolean includeRaw) {
+        if (userId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId is required");
+        }
+        int cap = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 100));
+        String where = includeRaw ? "WHERE user_id = ?" : "WHERE user_id = ? AND is_curated = true";
+        return jdbc.query("""
+                SELECT id, user_id, kind, content, source_message_id,
+                       created_at, is_curated, access_count, curated_at
+                FROM memory_facts
+                """ + where + """
+                ORDER BY is_curated DESC, created_at DESC
+                LIMIT ?
+                """,
+                FACT_ROW_MAPPER,
+                userId, cap);
+    }
+
+    @Transactional
+    public boolean deleteFact(UUID userId, UUID factId) {
+        if (userId == null || factId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId and factId are required");
+        }
+        return jdbc.update("DELETE FROM memory_facts WHERE user_id = ? AND id = ?", userId, factId) > 0;
     }
 
     /**
@@ -270,5 +320,14 @@ public class MemoryService {
         }
         sb.append(']');
         return sb.toString();
+    }
+
+    private static String normalizeKind(String kind) {
+        String normalized = kind.trim().toLowerCase();
+        return switch (normalized) {
+            case "fact", "preference", "rule", "lesson" -> normalized;
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "kind must be one of fact, preference, rule, lesson");
+        };
     }
 }

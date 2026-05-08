@@ -48,6 +48,8 @@ spring:
                 maxAge: 3600
 
 agent-platform:
+  internal:
+    token: ${INTERNAL_API_TOKEN:${JWT_SECRET}}
   jwt:
     secret: ${JWT_SECRET:?JWT_SECRET must be set (base64-encoded, >= 32 raw bytes)}
     issuer: agent-platform
@@ -58,6 +60,7 @@ agent-platform:
     - /api/chat
     - /api/sessions
     - /api/photos
+    - /api/uploads
 
 logging:
   level:
@@ -69,4 +72,4 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,gateway
+        include: health,info

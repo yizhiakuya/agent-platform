@@ -2,16 +2,20 @@ package com.agentplatform.chat.controller;
 
 import com.agentplatform.api.chat.CreateSessionRequest;
 import com.agentplatform.api.chat.MessageDto;
+import com.agentplatform.api.chat.RuntimeSkillDto;
 import com.agentplatform.api.chat.SessionArtifactDto;
 import com.agentplatform.api.chat.SessionContextSummaryDto;
 import com.agentplatform.api.chat.SessionDto;
+import com.agentplatform.api.chat.UpsertRuntimeSkillRequest;
 import com.agentplatform.api.chat.UpsertSessionArtifactRequest;
 import com.agentplatform.api.chat.UpsertSessionContextSummaryRequest;
 import com.agentplatform.api.chat.WriteMessageRequest;
 import com.agentplatform.chat.service.MessageService;
+import com.agentplatform.chat.service.RuntimeSkillService;
 import com.agentplatform.chat.service.SessionArtifactService;
 import com.agentplatform.chat.service.SessionContextSummaryService;
 import com.agentplatform.chat.service.SessionService;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -34,15 +38,18 @@ public class InternalChatController {
     private final MessageService messageService;
     private final SessionArtifactService artifactService;
     private final SessionContextSummaryService summaryService;
+    private final RuntimeSkillService runtimeSkillService;
 
     public InternalChatController(SessionService sessionService,
                                   MessageService messageService,
                                   SessionArtifactService artifactService,
-                                  SessionContextSummaryService summaryService) {
+                                  SessionContextSummaryService summaryService,
+                                  RuntimeSkillService runtimeSkillService) {
         this.sessionService = sessionService;
         this.messageService = messageService;
         this.artifactService = artifactService;
         this.summaryService = summaryService;
+        this.runtimeSkillService = runtimeSkillService;
     }
 
     /** Create a session on behalf of agent-service when the LLM starts a new conversation. */
@@ -97,5 +104,31 @@ public class InternalChatController {
     @ResponseStatus(HttpStatus.CREATED)
     public SessionContextSummaryDto upsertContextSummary(@RequestBody UpsertSessionContextSummaryRequest req) {
         return summaryService.upsert(req);
+    }
+
+    @GetMapping("/runtime-skills")
+    public List<RuntimeSkillDto> listRuntimeSkills(@RequestParam UUID userId,
+                                                   @RequestParam(defaultValue = "false") boolean includeDisabled) {
+        return runtimeSkillService.list(userId, includeDisabled);
+    }
+
+    @GetMapping("/runtime-skills/{name}")
+    public RuntimeSkillDto getRuntimeSkill(@PathVariable String name, @RequestParam UUID userId) {
+        RuntimeSkillDto skill = runtimeSkillService.get(userId, name);
+        if (skill == null || !skill.enabled()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "skill not found");
+        }
+        return skill;
+    }
+
+    @PostMapping("/runtime-skills")
+    @ResponseStatus(HttpStatus.CREATED)
+    public RuntimeSkillDto upsertRuntimeSkill(@RequestBody UpsertRuntimeSkillRequest req) {
+        return runtimeSkillService.upsert(req);
+    }
+
+    @DeleteMapping("/runtime-skills/{name}")
+    public void deleteRuntimeSkill(@PathVariable String name, @RequestParam UUID userId) {
+        runtimeSkillService.delete(userId, name);
     }
 }

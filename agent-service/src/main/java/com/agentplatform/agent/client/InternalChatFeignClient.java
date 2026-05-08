@@ -9,14 +9,17 @@ import com.agentplatform.api.chat.PhotoAssetSearchRequest;
 import com.agentplatform.api.chat.PhotoAssetSearchResult;
 import com.agentplatform.api.chat.PromoteRequest;
 import com.agentplatform.api.chat.QueryFactRequest;
+import com.agentplatform.api.chat.RuntimeSkillDto;
 import com.agentplatform.api.chat.SaveFactRequest;
 import com.agentplatform.api.chat.SessionArtifactDto;
 import com.agentplatform.api.chat.SessionContextSummaryDto;
 import com.agentplatform.api.chat.SessionDto;
+import com.agentplatform.api.chat.UpsertRuntimeSkillRequest;
 import com.agentplatform.api.chat.UpsertSessionArtifactRequest;
 import com.agentplatform.api.chat.UpsertSessionContextSummaryRequest;
 import com.agentplatform.api.chat.WriteMessageRequest;
 import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -72,6 +75,13 @@ public interface InternalChatFeignClient {
     @PostMapping("/memory/facts/query")
     List<MemoryFactDto> queryFacts(@RequestBody QueryFactRequest req);
 
+    @PostMapping("/memory/facts/list")
+    List<MemoryFactDto> listFacts(@RequestBody Map<String, Object> req);
+
+    @PostMapping("/memory/facts/delete")
+    Map<String, Boolean> deleteFact(@RequestParam("userId") UUID userId,
+                                    @RequestParam("factId") UUID factId);
+
     /**
      * Promote frequently-recalled raw facts into the curated tier.
      * Returns {@code {"promoted": <int>}}.
@@ -87,4 +97,19 @@ public interface InternalChatFeignClient {
 
     @PostMapping("/photos/embedding")
     void savePhotoEmbedding(@RequestBody PhotoAssetEmbeddingRequest req);
+
+    @GetMapping("/runtime-skills")
+    List<RuntimeSkillDto> listRuntimeSkills(@RequestParam("userId") UUID userId,
+                                            @RequestParam("includeDisabled") boolean includeDisabled);
+
+    @GetMapping("/runtime-skills/{name}")
+    RuntimeSkillDto getRuntimeSkill(@PathVariable("name") String name,
+                                    @RequestParam("userId") UUID userId);
+
+    @PostMapping("/runtime-skills")
+    RuntimeSkillDto upsertRuntimeSkill(@RequestBody UpsertRuntimeSkillRequest req);
+
+    @DeleteMapping("/runtime-skills/{name}")
+    void deleteRuntimeSkill(@PathVariable("name") String name,
+                            @RequestParam("userId") UUID userId);
 }

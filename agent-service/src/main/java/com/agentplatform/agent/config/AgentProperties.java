@@ -95,10 +95,10 @@ public record AgentProperties(
     ) {
         public Memory {
             if (embeddingModel == null || embeddingModel.isBlank()) {
-                embeddingModel = "text-embedding-3-small";
+                embeddingModel = "jina-embeddings-v3";
             }
             if (embeddingDim <= 0) {
-                embeddingDim = 1536;
+                embeddingDim = 1024;
             }
             if (topK <= 0) {
                 topK = 5;

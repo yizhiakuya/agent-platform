@@ -7,5 +7,5 @@ import java.util.List;
 import java.util.UUID;
 
 public interface SessionRepository extends JpaRepository<Session, UUID> {
-    List<Session> findByUserIdOrderByCreatedAtDesc(UUID userId);
+    List<Session> findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID userId);
 }

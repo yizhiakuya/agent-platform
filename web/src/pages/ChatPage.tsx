@@ -136,6 +136,14 @@ export default function ChatPage() {
     }
   }
 
+  async function exportSession(id: string) {
+    try {
+      await api.downloadSessionExport(id);
+    } catch (e) {
+      setSessionsError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function deleteSelectedSessions() {
     if (busy || bulkDeleting || selectedSessionIds.size === 0) return;
     const ids = Array.from(selectedSessionIds);
@@ -453,6 +461,18 @@ export default function ChatPage() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => void exportSession(s.id)}
+                  disabled={busy || selectionMode || bulkDeleting}
+                  className={[
+                    'px-2 text-xs opacity-0 group-hover:opacity-100 focus:opacity-100 disabled:opacity-40',
+                    active ? 'text-slate-300 hover:text-white' : 'text-slate-400 hover:text-slate-700'
+                  ].join(' ')}
+                  title="导出 JSONL"
+                >
+                  导出
+                </button>
+                <button
+                  type="button"
                   onClick={() => void deleteSession(s.id)}
                   disabled={busy || selectionMode || bulkDeleting || deleteBusyId === s.id}
                   className={[
@@ -708,6 +728,16 @@ function matchingToolResult(events: ChatEvent[], index: number) {
     const ev = events[i];
     if (ev.type === 'tool_call_started') return null;
     if (ev.type === 'tool_call_result' && ev.data?.tool === tool) return ev;
+    if (ev.type === 'error') {
+      return {
+        type: 'tool_call_result',
+        data: {
+          tool,
+          result: { error: { message: ev.data?.message ?? 'tool failed' } },
+          createdAt: ev.data?.createdAt
+        }
+      };
+    }
   }
   return null;
 }

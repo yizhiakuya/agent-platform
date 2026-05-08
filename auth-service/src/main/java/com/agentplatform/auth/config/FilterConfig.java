@@ -2,6 +2,7 @@ package com.agentplatform.auth.config;
 
 import com.agentplatform.auth.filter.PathBasedJwtFilter;
 import com.agentplatform.security.JwtUtil;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,9 +21,11 @@ public class FilterConfig {
      * best-effort so controllers can opportunistically know the caller.
      */
     @Bean
-    public FilterRegistrationBean<PathBasedJwtFilter> jwtAuthFilter(JwtUtil jwt) {
+    public FilterRegistrationBean<PathBasedJwtFilter> jwtAuthFilter(
+            JwtUtil jwt,
+            @Value("${agent-platform.internal.token:${agent-platform.jwt.secret}}") String internalToken) {
         FilterRegistrationBean<PathBasedJwtFilter> bean =
-                new FilterRegistrationBean<>(new PathBasedJwtFilter(jwt, List.of("/api/me")));
+                new FilterRegistrationBean<>(new PathBasedJwtFilter(jwt, internalToken, List.of("/api/me")));
         bean.addUrlPatterns("/*");
         bean.setOrder(Ordered.HIGHEST_PRECEDENCE + 100);
         return bean;

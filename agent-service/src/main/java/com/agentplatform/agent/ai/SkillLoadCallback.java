@@ -100,12 +100,12 @@ public class SkillLoadCallback {
     public ExecutionResult executeJsonToolUse(JsonNode input, UUID userId, UUID sessionId, ChatEventSink sink) {
         String name = parseName(input);
         if (name == null || name.isBlank()) {
-            return ExecutionResult.text("Error: 'name' is required. Available skills: " + availableNames());
+            return ExecutionResult.text("Error: 'name' is required. Available skills: " + availableNames(userId));
         }
-        Optional<SkillDef> hit = registry.get(name);
+        Optional<SkillDef> hit = registry.get(userId, name);
         if (hit.isEmpty()) {
             log.debug("skill_load miss: '{}'", name);
-            return ExecutionResult.text("Skill '" + name + "' not found. Available: " + availableNames());
+            return ExecutionResult.text("Skill '" + name + "' not found. Available: " + availableNames(userId));
         }
         log.debug("skill_load hit: '{}' ({} chars)", name, hit.get().body().length());
         return ExecutionResult.text(hit.get().body());
@@ -138,8 +138,8 @@ public class SkillLoadCallback {
         return (n != null && n.isTextual()) ? n.asText() : null;
     }
 
-    private String availableNames() {
-        return registry.all().stream()
+    private String availableNames(UUID userId) {
+        return registry.all(userId).stream()
                 .map(SkillDef::name)
                 .collect(Collectors.joining(", "));
     }

@@ -8,9 +8,6 @@ import com.agentplatform.api.chat.MessageDto;
 import com.agentplatform.api.chat.MessageRole;
 import com.agentplatform.api.chat.SessionContextSummaryDto;
 import com.agentplatform.api.chat.UpsertSessionContextSummaryRequest;
-import com.anthropic.models.messages.ContentBlock;
-import com.anthropic.models.messages.Message;
-import com.anthropic.models.messages.MessageCreateParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -37,17 +34,20 @@ public class SessionSummaryRefresher {
     private final HistoryReplayer historyReplayer;
     private final ExecutorService chatExecutor;
     private final AgentProperties props;
+    private final BackgroundLlmClient backgroundLlmClient;
 
     public SessionSummaryRefresher(List<ConfiguredProvider> chatClients,
                                    InternalChatFeignClient chatFeign,
                                    HistoryReplayer historyReplayer,
                                    ExecutorService chatExecutor,
-                                   AgentProperties props) {
+                                   AgentProperties props,
+                                   BackgroundLlmClient backgroundLlmClient) {
         this.chatClients = chatClients == null ? List.of() : chatClients;
         this.chatFeign = chatFeign;
         this.historyReplayer = historyReplayer;
         this.chatExecutor = chatExecutor;
         this.props = props;
+        this.backgroundLlmClient = backgroundLlmClient;
     }
 
     public void refreshAsync(UUID userId, UUID sessionId) {
@@ -91,33 +91,19 @@ public class SessionSummaryRefresher {
             }
             if (delta.isEmpty()) return;
 
-            ConfiguredProvider provider = chatClients.stream()
-                    .filter(ConfiguredProvider::isAnthropicMessages)
-                    .findFirst()
-                    .orElse(null);
-            if (provider == null) {
-                log.debug("[session-summary] no anthropic-messages provider configured, skip");
+            BackgroundLlmClient.CompletionPlan plan = backgroundLlmClient.choosePlan(chatClients, mem.factExtractorModel());
+            if (plan == null) {
+                log.debug("[session-summary] no background LLM provider configured, skip");
                 return;
             }
 
             String prompt = buildPrompt(existing, delta, older.size(), recent.size(), mem.summaryMaxTokens());
-            MessageCreateParams params = MessageCreateParams.builder()
-                    .model(mem.factExtractorModel())
-                    .maxTokens((long) mem.summaryMaxTokens())
-                    .addUserMessage(prompt)
-                    .build();
-
             String summary;
             try {
-                Message msg = provider.client().messages().create(params);
-                StringBuilder sb = new StringBuilder();
-                for (ContentBlock cb : msg.content()) {
-                    cb.text().ifPresent(t -> sb.append(t.text()));
-                }
-                summary = sb.toString().trim();
+                summary = backgroundLlmClient.complete(plan, prompt, (long) mem.summaryMaxTokens()).trim();
             } catch (Exception e) {
-                log.warn("[session-summary] LLM call failed for user {} session {}: {}",
-                        userId, sessionId, e.getMessage());
+                log.warn("[session-summary] LLM call failed for user {} session {} provider={} model={}: {}",
+                        userId, sessionId, plan.provider().name(), plan.model(), e.getMessage());
                 return;
             }
             if (summary.isBlank()) return;

@@ -61,7 +61,7 @@ public class ContextAssembler {
         String stableSystemText = PromptAssembler.buildSystemText(
                 personaLoader.getBundle(),
                 loadUserPrefs(userId),
-                skillRegistry.all());
+                skillRegistry.all(userId));
 
         boolean cacheEnabled = Boolean.TRUE.equals(props.agent().memory().enablePromptCache())
                 && stableSystemText.length() >= PromptAssembler.PROMPT_CACHE_MIN_CHARS;
@@ -153,7 +153,8 @@ public class ContextAssembler {
         int artifactTokens = ContextBudget.estimateTextTokens(artifactBlock);
         int summaryTokens = ContextBudget.estimateTextTokens(summaryBlock);
         int historyTokens = ContextBudget.estimateMessagesTokens(historyRows);
-        int currentTokens = ContextBudget.estimateTextTokens(currentMessage);
+        int currentTokens = ContextBudget.estimateTextTokens(PromptAssembler.formatCurrentTimeBlock())
+                + ContextBudget.estimateTextTokens(currentMessage);
         int total = systemTokens + memoryTokens + artifactTokens + summaryTokens + historyTokens + currentTokens;
         int recentRows = historyRows == null ? 0 : historyRows.size();
         return new ContextStats(

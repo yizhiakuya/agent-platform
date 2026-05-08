@@ -19,6 +19,8 @@ spring:
       request-timeout: 600000   # 10 min — SSE streams can run long
 
 agent-platform:
+  internal:
+    token: ${INTERNAL_API_TOKEN:${JWT_SECRET}}
   jwt:
     secret: ${JWT_SECRET:?JWT_SECRET must be set (base64-encoded, >= 32 raw bytes)}
     issuer: agent-platform
@@ -81,7 +83,7 @@ agent-platform:
       # Dedicated embedding provider. When both are set, EmbeddingService uses
       # them; otherwise it falls back to providers[0] (which fails on sub2api
       # — sub2api is anthropic-only and has no /v1/embeddings). Point at
-      # https://api.openai.com (text-embedding-3-small, 1536 dim, matches
+      # a Jina-compatible endpoint (default model emits 1024 dims, matching
       # chat.memory_embeddings schema) or a self-hosted TEI / ollama gateway.
       embeddingBaseUrl: ${MEMORY_EMBEDDING_BASE_URL:}
       embeddingApiKey: ${MEMORY_EMBEDDING_API_KEY:}

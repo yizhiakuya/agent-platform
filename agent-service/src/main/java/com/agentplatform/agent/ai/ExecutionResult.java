@@ -1,5 +1,8 @@
 package com.agentplatform.agent.ai;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
 import java.util.List;
 
 /**
@@ -21,6 +24,8 @@ import java.util.List;
  */
 public record ExecutionResult(String jsonText, List<PendingImage> images) {
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     /** No images attached. Use for tools that only return text/JSON. */
     public static ExecutionResult text(String json) {
         return new ExecutionResult(json, List.of());
@@ -32,7 +37,8 @@ public record ExecutionResult(String jsonText, List<PendingImage> images) {
      * RuntimeExceptions that bubble out of the dispatcher.
      */
     public static ExecutionResult error(String message) {
-        String safe = message == null ? "unknown error" : message.replace("\"", "\\\"");
-        return new ExecutionResult("{\"error\":\"" + safe + "\"}", List.of());
+        ObjectNode out = MAPPER.createObjectNode();
+        out.put("error", message == null ? "unknown error" : message);
+        return new ExecutionResult(out.toString(), List.of());
     }
 }

@@ -25,4 +25,4 @@
 
 ## Time
 
-服务器实时时钟在系统消息的 `# CURRENT TIME` 段(Asia/Shanghai 墙钟 + 今天/明天 0 点的 UNIX 毫秒)。需要时间相关过滤时,把它当作时间锚点;具体参数名、单位、边界包含关系、排序规则按对应工具 schema、description 或 loaded skill body,不要凭印象算。
+服务器实时时钟在每次请求上下文的 `# CURRENT TIME` 段(Asia/Shanghai 墙钟 + 今天/明天 0 点的 UNIX 毫秒),不在 prompt-cache 稳定系统段里。需要时间相关过滤时,把它当作时间锚点;具体参数名、单位、边界包含关系、排序规则按对应工具 schema、description 或 loaded skill body,不要凭印象算。

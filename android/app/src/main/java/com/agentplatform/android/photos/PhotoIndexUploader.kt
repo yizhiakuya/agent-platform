@@ -2,6 +2,7 @@ package com.agentplatform.android.photos
 
 import android.content.ContentResolver
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
@@ -38,6 +39,7 @@ internal class PhotoIndexUploader(
             return@withContext SyncResult(0, 0, "not_bound")
         }
 
+        val didReconcile = maybeReconcile(serverUrl, token)
         val rows = loadRows(
             maxRows.coerceIn(1, 500),
             indexPrefs.lastIndexedModifiedSec,
@@ -45,15 +47,18 @@ internal class PhotoIndexUploader(
         )
         if (rows.isEmpty()) {
             indexPrefs.lastRunMs = System.currentTimeMillis()
-            return@withContext SyncResult(0, 0, "no_new_rows")
+            return@withContext SyncResult(0, 0, if (didReconcile) "reconciled" else "no_new_rows")
         }
 
         var uploaded = 0
         var maxModified = indexPrefs.lastIndexedModifiedSec
         var maxIdAtModified = indexPrefs.lastIndexedIdAtModified
+        var sawPayloadFailure = false
         for (chunk in rows.chunked(batchSize.coerceIn(1, 50))) {
             val assets: ArrayNode = mapper.createArrayNode()
+            val assetRows = mutableListOf<Row>()
             for (row in chunk) {
+                if (sawPayloadFailure) break
                 try {
                     val bitmap = PhotoToolUtils.loadThumbnail(context.contentResolver, row.id, 512)
                     val thumbB64 = PhotoToolUtils.jpegBase64(bitmap, 76)
@@ -72,17 +77,13 @@ internal class PhotoIndexUploader(
                     obj.put("contentHash", row.fingerprint())
                     obj.put("thumbB64", thumbB64)
                     assets.add(obj)
-                    if (row.dateModifiedSec > maxModified) {
-                        maxModified = row.dateModifiedSec
-                        maxIdAtModified = row.id
-                    } else if (row.dateModifiedSec == maxModified) {
-                        maxIdAtModified = maxOf(maxIdAtModified, row.id)
-                    }
+                    assetRows += row
                 } catch (e: Exception) {
+                    sawPayloadFailure = true
                     Log.w(TAG, "thumbnail/index payload failed id=${row.id}: ${e.message}")
                 }
             }
-            if (assets.isEmpty) continue
+            if (assets.isEmpty) break
 
             val body = mapper.createObjectNode()
             body.set<ArrayNode>("assets", assets)
@@ -98,6 +99,15 @@ internal class PhotoIndexUploader(
                 }
             }
             uploaded += assets.size()
+            for (row in assetRows) {
+                if (row.dateModifiedSec > maxModified) {
+                    maxModified = row.dateModifiedSec
+                    maxIdAtModified = row.id
+                } else if (row.dateModifiedSec == maxModified) {
+                    maxIdAtModified = maxOf(maxIdAtModified, row.id)
+                }
+            }
+            if (sawPayloadFailure) break
         }
 
         if (uploaded > 0) {
@@ -106,6 +116,89 @@ internal class PhotoIndexUploader(
         }
         indexPrefs.lastRunMs = System.currentTimeMillis()
         SyncResult(rows.size, uploaded, "ok")
+    }
+
+    private fun maybeReconcile(serverUrl: String, token: String): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - indexPrefs.lastReconcileMs < RECONCILE_INTERVAL_MS) return false
+        if (!hasFullImageAccess()) {
+            Log.w(TAG, "photo index reconcile skipped: full image access is not granted")
+            return false
+        }
+
+        val ids = loadCurrentMediaStoreIds(MAX_RECONCILE_IDS + 1)
+        if (ids == null) {
+            Log.w(TAG, "photo index reconcile skipped: MediaStore query returned no cursor")
+            return false
+        }
+        if (ids.size > MAX_RECONCILE_IDS) {
+            Log.w(TAG, "photo index reconcile skipped: current MediaStore image count exceeds $MAX_RECONCILE_IDS")
+            return false
+        }
+        try {
+            val body = mapper.createObjectNode()
+            val arr = mapper.createArrayNode()
+            ids.forEach { arr.add(it.toString()) }
+            body.set<ArrayNode>("mediaStoreIds", arr)
+            val req = Request.Builder()
+                .url("$serverUrl/api/photos/index/reconcile")
+                .header("Authorization", "Bearer $token")
+                .post(mapper.writeValueAsBytes(body).toRequestBody(JSON))
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val err = resp.body?.string()?.take(300)
+                    throw RuntimeException("HTTP ${resp.code}: $err")
+                }
+            }
+            indexPrefs.lastReconcileMs = now
+            Log.i(TAG, "photo index reconcile uploaded currentIds=${ids.size}")
+            return true
+        } catch (e: Exception) {
+            Log.w(TAG, "photo index reconcile failed; continuing incremental upload: ${e.message}", e)
+            return false
+        }
+    }
+
+    private fun loadCurrentMediaStoreIds(limit: Int): List<Long>? {
+        val projection = arrayOf(MediaStore.Images.Media._ID)
+        val cursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val args = Bundle().apply {
+                putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(MediaStore.Images.Media._ID))
+                putInt(
+                    ContentResolver.QUERY_ARG_SORT_DIRECTION,
+                    ContentResolver.QUERY_SORT_DIRECTION_ASCENDING
+                )
+                putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
+            }
+            context.contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, args, null)
+        } else {
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                null,
+                null,
+                "${MediaStore.Images.Media._ID} ASC"
+            )
+        }
+
+        val ids = mutableListOf<Long>()
+        cursor ?: return null
+        cursor.use { c ->
+            val idIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            while (c.moveToNext() && ids.size < limit) {
+                ids += c.getLong(idIdx)
+            }
+        }
+        return ids
+    }
+
+    private fun hasFullImageAccess(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        } else {
+            context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
     }
 
     private fun loadRows(limit: Int, afterModifiedSec: Long, afterIdAtModified: Long): List<Row> {
@@ -219,6 +312,8 @@ internal class PhotoIndexUploader(
 
     companion object {
         private const val TAG = "PhotoIndexUploader"
+        private const val RECONCILE_INTERVAL_MS = 6 * 60 * 60_000L
+        private const val MAX_RECONCILE_IDS = 50_000
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 }

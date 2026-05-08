@@ -5,7 +5,10 @@ import com.agentplatform.auth.entity.Device;
 import com.agentplatform.auth.repository.DeviceRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -23,6 +26,17 @@ public class DeviceService {
         return devices.findByUserIdAndRevokedAtIsNull(userId).stream()
                 .map(this::toDto)
                 .toList();
+    }
+
+    @Transactional
+    public void revoke(UUID userId, UUID deviceId) {
+        Device device = devices.findById(deviceId)
+                .filter(d -> d.getUserId().equals(userId))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found"));
+        if (device.getRevokedAt() == null) {
+            device.setRevokedAt(OffsetDateTime.now());
+            devices.save(device);
+        }
     }
 
     private DeviceDto toDto(Device d) {

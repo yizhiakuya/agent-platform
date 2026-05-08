@@ -1,5 +1,8 @@
 package com.agentplatform.hub.ws;
 
+import com.agentplatform.api.auth.VerifyRequest;
+import com.agentplatform.api.auth.VerifyResponse;
+import com.agentplatform.hub.client.AuthInternalClient;
 import com.agentplatform.hub.config.HubProperties;
 import com.agentplatform.security.JwtUtil;
 import com.agentplatform.security.Principal;
@@ -38,11 +41,13 @@ public class DeviceHandshakeInterceptor implements HandshakeInterceptor {
     public static final String ATTR_JTI = "jti";
 
     private final JwtUtil jwt;
+    private final AuthInternalClient authClient;
     private final List<String> allowedOrigins;
     private final boolean allowAnyOrigin;
 
-    public DeviceHandshakeInterceptor(JwtUtil jwt, HubProperties props) {
+    public DeviceHandshakeInterceptor(JwtUtil jwt, AuthInternalClient authClient, HubProperties props) {
         this.jwt = jwt;
+        this.authClient = authClient;
         this.allowedOrigins = props.wsAllowedOriginsOrDefault();
         this.allowAnyOrigin = this.allowedOrigins.contains("*");
     }
@@ -71,6 +76,17 @@ public class DeviceHandshakeInterceptor implements HandshakeInterceptor {
                 log.warn("WS handshake rejected: principal type is '{}', not 'device'", p.type());
                 return false;
             }
+            VerifyResponse verified = verifyWithAuthService(token);
+            if (verified == null) {
+                res.setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
+                return false;
+            }
+            if (!verified.valid()) {
+                res.setStatusCode(HttpStatus.UNAUTHORIZED);
+                log.warn("WS handshake rejected: token revoked or device inactive ({})",
+                        verified.error());
+                return false;
+            }
             attrs.put(ATTR_DEVICE_ID, UUID.fromString(p.subject()));
             attrs.put(ATTR_USER_ID, UUID.fromString(p.userId()));
             attrs.put(ATTR_JTI, p.jti());
@@ -80,6 +96,15 @@ public class DeviceHandshakeInterceptor implements HandshakeInterceptor {
             res.setStatusCode(HttpStatus.UNAUTHORIZED);
             log.warn("WS handshake rejected: invalid token ({})", e.getMessage());
             return false;
+        }
+    }
+
+    private VerifyResponse verifyWithAuthService(String token) {
+        try {
+            return authClient.verify(new VerifyRequest(token));
+        } catch (Exception e) {
+            log.warn("WS handshake rejected: auth-service verification unavailable ({})", e.toString());
+            return null;
         }
     }
 

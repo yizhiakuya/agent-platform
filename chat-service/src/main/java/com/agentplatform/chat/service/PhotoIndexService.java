@@ -3,6 +3,7 @@ package com.agentplatform.chat.service;
 import com.agentplatform.api.chat.PendingPhotoAssetDto;
 import com.agentplatform.api.chat.PhotoAssetBatchResponse;
 import com.agentplatform.api.chat.PhotoAssetDto;
+import com.agentplatform.api.chat.PhotoAssetReconcileResponse;
 import com.agentplatform.api.chat.PhotoAssetSearchResult;
 import com.agentplatform.api.chat.PhotoAssetUpsertRequest;
 import org.slf4j.Logger;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -30,6 +32,7 @@ public class PhotoIndexService {
     private static final int MAX_BATCH = 100;
     private static final int MAX_TOP_K = 50;
     private static final int MAX_PENDING = 200;
+    private static final int MAX_RECONCILE_IDS = 50_000;
     private static final String RANKING_SEMANTIC = "semantic";
     private static final String RANKING_SEMANTIC_THEN_SORT = "semantic_then_sort";
     private static final String RANKING_SORT_THEN_SEMANTIC = "sort_then_semantic";
@@ -132,6 +135,64 @@ public class PhotoIndexService {
         log.debug("Upserted {} photo asset row(s) for user {} device {} (pending={})",
                 upserted, userId, deviceId, pending);
         return new PhotoAssetBatchResponse(assets.size(), upserted, pending);
+    }
+
+    @Transactional
+    public PhotoAssetReconcileResponse reconcileDeviceAssets(UUID userId, UUID deviceId, List<String> mediaStoreIds) {
+        if (userId == null || deviceId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId and deviceId are required");
+        }
+        if (mediaStoreIds == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "mediaStoreIds are required");
+        }
+        List<String> currentIds = mediaStoreIds.stream()
+                .map(PhotoIndexService::clean)
+                .filter(id -> id != null)
+                .distinct()
+                .toList();
+        if (currentIds.size() > MAX_RECONCILE_IDS) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "max photo reconcile size is " + MAX_RECONCILE_IDS);
+        }
+
+        List<UUID> deletedAssetIds;
+        if (currentIds.isEmpty()) {
+            deletedAssetIds = jdbc.queryForList("""
+                    UPDATE photo_assets
+                    SET deleted_at = now(), updated_at = now(), thumb_b64 = NULL
+                    WHERE user_id = ?
+                      AND device_id = ?
+                      AND deleted_at IS NULL
+                    RETURNING id
+                    """,
+                    UUID.class,
+                    userId,
+                    deviceId);
+        } else {
+            String sql = """
+                    UPDATE photo_assets
+                    SET deleted_at = now(), updated_at = now(), thumb_b64 = NULL
+                    WHERE user_id = ?
+                      AND device_id = ?
+                      AND deleted_at IS NULL
+                      AND NOT (media_store_id = ANY (?::text[]))
+                    RETURNING id
+                    """;
+            deletedAssetIds = jdbc.query(con -> {
+                PreparedStatement ps = con.prepareStatement(sql);
+                ps.setObject(1, userId);
+                ps.setObject(2, deviceId);
+                ps.setArray(3, con.createArrayOf("text", currentIds.toArray(String[]::new)));
+                return ps;
+            }, (rs, rowNum) -> (UUID) rs.getObject("id"));
+        }
+        int deleted = deletedAssetIds.size();
+        for (UUID assetId : deletedAssetIds) {
+            jdbc.update("DELETE FROM photo_asset_embeddings WHERE asset_id = ?", assetId);
+        }
+        log.debug("Reconciled photo index for user {} device {} (current={}, deleted={})",
+                userId, deviceId, currentIds.size(), deleted);
+        return new PhotoAssetReconcileResponse(currentIds.size(), deleted);
     }
 
     public List<PendingPhotoAssetDto> listPending(int limit) {

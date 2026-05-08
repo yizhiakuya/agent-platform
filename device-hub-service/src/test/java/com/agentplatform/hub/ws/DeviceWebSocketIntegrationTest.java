@@ -1,6 +1,8 @@
 package com.agentplatform.hub.ws;
 
+import com.agentplatform.api.auth.VerifyResponse;
 import com.agentplatform.api.hub.InternalCallRequest;
+import com.agentplatform.hub.client.AuthInternalClient;
 import com.agentplatform.hub.registry.DeviceRegistry;
 import com.agentplatform.protocol.JsonRpcCodec;
 import com.agentplatform.protocol.JsonRpcMessage;
@@ -11,6 +13,7 @@ import com.agentplatform.protocol.JsonRpcResponse;
 import com.agentplatform.protocol.ToolManifest;
 import com.agentplatform.protocol.ToolResult;
 import com.agentplatform.protocol.ToolSpec;
+import com.agentplatform.security.InternalToken;
 import com.agentplatform.security.JwtUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -19,7 +22,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -41,6 +47,8 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 /**
  * End-to-end test: a fake "device" connects via WebSocket, reports its
@@ -55,6 +63,8 @@ import static org.awaitility.Awaitility.await;
 })
 class DeviceWebSocketIntegrationTest {
 
+    private static final String INTERNAL_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
+
     @LocalServerPort int port;
 
     @Autowired JwtUtil jwt;
@@ -62,6 +72,8 @@ class DeviceWebSocketIntegrationTest {
     @Autowired ObjectMapper mapper;
     @Autowired JsonRpcCodec codec;
     @Autowired TestRestTemplate rest;
+
+    @MockitoBean AuthInternalClient authClient;
 
     private WebSocketHttpHeaders bearerHeader(String token) {
         WebSocketHttpHeaders h = new WebSocketHttpHeaders();
@@ -96,6 +108,8 @@ class DeviceWebSocketIntegrationTest {
 
     @Test
     void valid_token_registers_device_and_can_update_manifest() throws Exception {
+        when(authClient.verify(any())).thenReturn(new VerifyResponse(true, "device", null, null, null, null));
+
         UUID userId = UUID.randomUUID();
         UUID deviceId = UUID.randomUUID();
         String token = jwt.issueDeviceToken(userId, deviceId, Duration.ofHours(1));
@@ -129,6 +143,8 @@ class DeviceWebSocketIntegrationTest {
 
     @Test
     void e2e_tool_call_round_trips_through_websocket() throws Exception {
+        when(authClient.verify(any())).thenReturn(new VerifyResponse(true, "device", null, null, null, null));
+
         UUID userId = UUID.randomUUID();
         UUID deviceId = UUID.randomUUID();
         String token = jwt.issueDeviceToken(userId, deviceId, Duration.ofHours(1));
@@ -146,11 +162,14 @@ class DeviceWebSocketIntegrationTest {
         InternalCallRequest req = new InternalCallRequest(
                 deviceId, userId, "photos.list_recent",
                 mapper.createObjectNode().put("limit", 3), null);
+        HttpHeaders headers = new HttpHeaders();
+        headers.add(InternalToken.HEADER, INTERNAL_TOKEN);
+        HttpEntity<InternalCallRequest> entity = new HttpEntity<>(req, headers);
 
         CompletableFuture<ResponseEntity<ToolResult>> futureResp = CompletableFuture.supplyAsync(() ->
                 rest.postForEntity(
                         "http://localhost:" + port + "/internal/tools/call",
-                        req, ToolResult.class));
+                        entity, ToolResult.class));
 
         // The device should receive a tool.call request — wait for it
         JsonRpcMessage received = handler.poll(Duration.ofSeconds(3));

@@ -6,6 +6,8 @@ import com.agentplatform.agent.ai.ExecutionResult;
 import com.agentplatform.agent.ai.PendingImage;
 import com.agentplatform.agent.ai.RemoteToolCallback;
 import com.agentplatform.agent.ai.ResolvedTools;
+import com.agentplatform.agent.ai.ServerToolCallback;
+import com.agentplatform.agent.ai.ServerToolRegistry;
 import com.agentplatform.agent.ai.SkillLoadCallback;
 import com.agentplatform.agent.config.AgentProperties;
 import com.agentplatform.api.chat.MessageDto;
@@ -35,8 +37,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Minimal OpenAI-compatible Responses API agent loop for Codex models.
  *
  * <p>The existing Anthropic path stays SDK-native. This runner translates the
- * same platform prompt, tools, and callback dispatch map into Responses API
- * function calls so Codex can use the Android device tools through sub2api.
+ * same platform prompt, local tools, and native Responses tools into the
+ * Responses API so Codex can use Android device tools through sub2api and
+ * provider-side tools such as web search.
  * sub2api's HTTP Responses endpoint currently rejects previous_response_id,
  * so each tool iteration replays the in-request transcript instead of linking
  * server-side state.
@@ -48,15 +51,18 @@ public class CodexResponsesLoopRunner {
     private final ObjectMapper mapper;
     private final AgentProperties props;
     private final SkillLoadCallback skillLoadCallback;
+    private final ServerToolRegistry serverToolRegistry;
     private final WebClient.Builder webClientBuilder;
 
     public CodexResponsesLoopRunner(ObjectMapper mapper,
                                     AgentProperties props,
                                     SkillLoadCallback skillLoadCallback,
+                                    ServerToolRegistry serverToolRegistry,
                                     WebClient.Builder defaultWebClientBuilder) {
         this.mapper = mapper;
         this.props = props;
         this.skillLoadCallback = skillLoadCallback;
+        this.serverToolRegistry = serverToolRegistry;
         this.webClientBuilder = defaultWebClientBuilder;
     }
 
@@ -124,7 +130,7 @@ public class CodexResponsesLoopRunner {
             String text = extractOutputText(resp);
             if (!text.isEmpty()) {
                 textBuf.append(text);
-                safeSend(emitter, SseEvent.assistantMessage(mapper, text));
+                sink.emit(SseEvent.assistantMessage(mapper, text));
             }
 
             List<FunctionCall> calls = extractFunctionCalls(resp);
@@ -139,7 +145,13 @@ public class CodexResponsesLoopRunner {
                 }
             }
             for (FunctionCall call : calls) {
-                ExecutionResult er = executeFunctionCall(call, resolved, userId, sessionId, sink);
+                ExecutionResult er;
+                try {
+                    er = executeFunctionCall(call, resolved, userId, sessionId, sink);
+                } catch (Throwable t) {
+                    log.error("codex function_call threw name={} err={}", call.name(), t.toString(), t);
+                    er = ExecutionResult.error("tool execution failed: " + t.getMessage());
+                }
                 transcript.add(functionOutput(call, er));
                 if (!er.images().isEmpty()) {
                     transcript.add(imageMessage(call, er));
@@ -185,10 +197,23 @@ public class CodexResponsesLoopRunner {
             RemoteToolCallback cb = entry.getValue();
             out.add(functionTool(entry.getKey(), cb.spec().description(), cb.spec().schema()));
         }
+        for (Map.Entry<String, ServerToolCallback> entry : serverToolRegistry.dispatchMap().entrySet()) {
+            ServerToolCallback cb = entry.getValue();
+            out.add(functionTool(entry.getKey(), cb.description(), cb.schema()));
+        }
         out.add(functionTool(skillLoadCallback.name(),
                 "Load the body of a skill by name. Returns the full markdown playbook.",
                 skillLoadSchema()));
+        if (Boolean.TRUE.equals(props.agent().memory().enableWebSearch())) {
+            out.add(webSearchTool());
+        }
         return out;
+    }
+
+    private ObjectNode webSearchTool() {
+        ObjectNode tool = mapper.createObjectNode();
+        tool.put("type", "web_search");
+        return tool;
     }
 
     private ObjectNode functionTool(String name, String description, @Nullable JsonNode schema) {
@@ -277,11 +302,42 @@ public class CodexResponsesLoopRunner {
         if (SkillLoadCallback.TOOL_NAME.equals(call.name())) {
             return skillLoadCallback.executeJsonToolUse(args, userId, sessionId, sink);
         }
+        ServerToolCallback serverTool = serverToolRegistry.dispatchMap().get(call.name());
+        if (serverTool != null) {
+            if (sink != null) {
+                sink.emit(SseEvent.toolCallStarted(mapper, null, call.name(), args));
+            }
+            ExecutionResult result;
+            try {
+                result = serverTool.executeJsonToolUse(args, userId, sessionId, sink);
+            } catch (RuntimeException e) {
+                if (sink != null) {
+                    sink.emit(SseEvent.toolCallError(mapper, call.name(), e.getMessage()));
+                    sink.emit(SseEvent.error(mapper, "Tool '" + call.name() + "' failed: " + e.getMessage()));
+                }
+                return ExecutionResult.error(e.getMessage());
+            }
+            if (sink != null) {
+                sink.emit(SseEvent.toolCallResult(mapper, call.name(), parseExecutionResult(result)));
+            }
+            return result;
+        }
         RemoteToolCallback cb = resolved.dispatch().get(call.name());
         if (cb == null) {
             return ExecutionResult.error("unknown tool: " + call.name());
         }
         return cb.executeJsonToolUse(args, userId, sessionId, sink);
+    }
+
+    private JsonNode parseExecutionResult(ExecutionResult result) {
+        if (result == null || result.jsonText() == null || result.jsonText().isBlank()) {
+            return mapper.createObjectNode();
+        }
+        try {
+            return mapper.readTree(result.jsonText());
+        } catch (Exception ignored) {
+            return mapper.createObjectNode().put("text", result.jsonText());
+        }
     }
 
     private JsonNode parseArguments(String arguments) {

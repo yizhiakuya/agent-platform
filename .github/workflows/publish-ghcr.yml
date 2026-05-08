@@ -57,6 +57,10 @@ jobs:
             context: ./web
             dockerfile: Dockerfile
             build_args: ""
+          - service: photo-embedding-sidecar
+            context: .
+            dockerfile: photo-embedding-sidecar/Dockerfile
+            build_args: ""
 
     steps:
       - name: Checkout

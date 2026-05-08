@@ -56,6 +56,14 @@ public record SseEvent(String type, JsonNode data) {
         return new SseEvent("tool_call_result", data);
     }
 
+    public static SseEvent toolCallError(ObjectMapper mapper, String toolName, String message) {
+        ObjectNode error = mapper.createObjectNode();
+        error.put("message", message == null ? "tool failed" : message);
+        ObjectNode result = mapper.createObjectNode();
+        result.set("error", error);
+        return toolCallResult(mapper, toolName, result);
+    }
+
     public static SseEvent error(ObjectMapper mapper, String message) {
         return new SseEvent("error", mapper.createObjectNode().put("message", message));
     }

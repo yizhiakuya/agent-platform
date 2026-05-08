@@ -65,6 +65,31 @@ export const api = {
   deleteSession: (sessionId: string) =>
     request<void>(`/api/sessions/${sessionId}`, { method: 'DELETE' }),
 
+  sessionExportUrl: (sessionId: string) =>
+    `/api/sessions/${sessionId}/export.jsonl`,
+
+  downloadSessionExport: async (sessionId: string) => {
+    const token = getToken();
+    const headers = new Headers();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    const resp = await fetch(`/api/sessions/${sessionId}/export.jsonl`, { headers });
+    if (resp.status === 401) {
+      setToken(null);
+      window.location.assign('/login');
+      throw new ApiError(401, '未登录或登录已过期');
+    }
+    if (!resp.ok) throw new ApiError(resp.status, `HTTP ${resp.status}`);
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `session-${sessionId}.jsonl`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  },
+
   getPreferences: () =>
     request<UserPreferenceDto>('/api/me/preferences'),
 

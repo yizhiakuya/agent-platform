@@ -1,11 +1,14 @@
 package com.agentplatform.hub;
 
+import com.agentplatform.hub.client.AuthInternalClient;
+import com.agentplatform.security.InternalToken;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -29,8 +32,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 })
 class InternalToolControllerTest {
 
+    private static final String INTERNAL_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
+
     @Autowired private WebApplicationContext webContext;
     @Autowired private ObjectMapper mapper;
+
+    @MockitoBean private AuthInternalClient authClient;
 
     private MockMvc mvc;
 
@@ -52,6 +59,7 @@ class InternalToolControllerTest {
 
         MvcResult started = mvc.perform(post("/internal/tools/call")
                         .contentType(MediaType.APPLICATION_JSON)
+                        .header(InternalToken.HEADER, INTERNAL_TOKEN)
                         .content(body))
                 .andExpect(request().asyncStarted())
                 .andReturn();
@@ -83,6 +91,7 @@ class InternalToolControllerTest {
 
         MvcResult started = mvc.perform(post("/internal/tools/call")
                         .contentType(MediaType.APPLICATION_JSON)
+                        .header(InternalToken.HEADER, INTERNAL_TOKEN)
                         .content(body))
                 .andExpect(request().asyncStarted())
                 .andReturn();
@@ -103,6 +112,7 @@ class InternalToolControllerTest {
 
         mvc.perform(post("/internal/tools/call")
                         .contentType(MediaType.APPLICATION_JSON)
+                        .header(InternalToken.HEADER, INTERNAL_TOKEN)
                         .content(body))
                 .andExpect(status().isBadRequest());
     }

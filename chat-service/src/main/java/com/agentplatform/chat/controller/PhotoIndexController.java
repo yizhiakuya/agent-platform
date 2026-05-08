@@ -3,6 +3,8 @@ package com.agentplatform.chat.controller;
 import com.agentplatform.api.chat.PhotoAssetBatchRequest;
 import com.agentplatform.api.chat.PhotoAssetBatchResponse;
 import com.agentplatform.api.chat.PhotoAssetDto;
+import com.agentplatform.api.chat.PhotoAssetReconcileRequest;
+import com.agentplatform.api.chat.PhotoAssetReconcileResponse;
 import com.agentplatform.chat.service.PhotoIndexService;
 import com.agentplatform.security.Principal;
 import com.agentplatform.security.PrincipalContext;
@@ -41,6 +43,21 @@ public class PhotoIndexController {
         UUID deviceId = principal.subjectAsUuid();
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(photoIndexService.upsertBatch(userId, deviceId, req.assets()));
+    }
+
+    @PostMapping("/index/reconcile")
+    public PhotoAssetReconcileResponse reconcile(@RequestBody PhotoAssetReconcileRequest req) {
+        if (req == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body required");
+        }
+        Principal principal = PrincipalContext.require();
+        if (!principal.isDevice()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "device token required");
+        }
+        return photoIndexService.reconcileDeviceAssets(
+                principal.userIdAsUuid(),
+                principal.subjectAsUuid(),
+                req.mediaStoreIds());
     }
 
     @GetMapping("/{id}")

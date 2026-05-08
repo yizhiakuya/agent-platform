@@ -54,8 +54,12 @@ description: Self-hosted mobile agent platform — Java 21 + Spring Boot 3.5 + S
 
 ## Adding a new skill (LLM playbook)
 
-1. Create `agent-service/src/main/resources/skills/<slug>/SKILL.md` with YAML frontmatter `name` + `description`. The body is a playbook the LLM loads on demand via the `skill_load` meta-tool.
-2. Rebuild `agent-service` and redeploy. `SkillRegistry` rescans classpath on startup.
+There are two skill tiers:
+
+1. **Runtime skills**: agent-created per-user skills stored in chat-service `runtime_skills`. The agent can create/update/list/delete these through server-side tools (`agent_skill_upsert`, `agent_skill_list`, `agent_skill_delete`). It can also install a standard `SKILL.md` through `agent_skill_install` from pasted markdown or a trusted HTTPS raw URL. Runtime skills are visible in the skill index on the next turn and override packaged skills by name. No rebuild/redeploy needed.
+2. **Packaged skills**: developer-shipped skills under `agent-service/src/main/resources/skills/<slug>/SKILL.md` with YAML frontmatter `name` + `description`. Rebuild `agent-service` and redeploy; `SkillRegistry` rescans classpath on startup.
+
+For stable user/project facts and lessons, the agent can also save curated memory through `agent_memory_add`; this writes `memory_facts.is_curated=true` and is recalled by normal memory search.
 
 ## Modifying LLM behavior (persona)
 
@@ -90,7 +94,7 @@ Edit the relevant `.md` file and redeploy `agent-service`.
 - `chat.session_context_summaries` stores a compact rolling summary for old USER/ASSISTANT turns. `SessionSummaryRefresher` updates it asynchronously after a complete assistant reply; failures must never fail the chat path.
 - `ContextBudget` estimates context tokens and keeps only the recent tail verbatim (`CONTEXT_RECENT_HISTORY_MESSAGES`, default 12). If `CONTEXT_ENABLE_SESSION_SUMMARY=false`, history replay falls back to full legacy behavior.
 - Context knobs: `CONTEXT_ENABLE_SESSION_SUMMARY`, `CONTEXT_RECENT_HISTORY_MESSAGES`, `CONTEXT_SUMMARY_TRIGGER_MESSAGES`, `CONTEXT_MAX_INPUT_TOKENS`, `CONTEXT_SUMMARY_MAX_TOKENS`.
-- Next planned layer: move dynamic current time out of the prompt-cache-stable system block.
+- Dynamic current time lives in the per-request `# CURRENT TIME` user-context block, not the prompt-cache-stable system block.
 
 ## Semantic photo search
 

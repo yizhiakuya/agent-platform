@@ -34,11 +34,12 @@ public final class PromptAssembler {
 
     /**
      * Assemble the layered system prompt:
-     * IDENTITY → SOUL → AGENTS → TOOLS → USER prefs → SKILLS index → CURRENT TIME.
+     * IDENTITY → SOUL → AGENTS → TOOLS → USER prefs → SKILLS index.
      *
      * <p>Stays bit-identical across requests (no per-request data injected
      * here) so the ephemeral cache breakpoint can hit cleanly. Per-request
-     * memory ride along on the user message via {@link #composeUserText}.
+     * memory and clock context ride along on the user message via
+     * {@link #composeUserText}.
      */
     public static String buildSystemText(PersonaBundle pb,
                                          String userPrefs,
@@ -50,10 +51,6 @@ public final class PromptAssembler {
         appendSection(sys, "TOOLS", pb.tools());
         appendSection(sys, "USER", userPrefs == null || userPrefs.isBlank() ? "(暂无用户偏好)" : userPrefs);
         appendSection(sys, "AVAILABLE SKILLS (call skill_load to load body)", formatSkillIndex(skills));
-        // Time block lives in stable system head — Claude's prompt cache
-        // tolerates a few minutes of drift; we log the request time so any
-        // "today / yesterday / last week" reasoning has a real anchor.
-        appendSection(sys, "CURRENT TIME", buildCurrentTimeBlock());
         return sys.toString();
     }
 
@@ -70,6 +67,7 @@ public final class PromptAssembler {
         if (memoryBlock != null && !memoryBlock.isBlank()) blocks.add(memoryBlock);
         if (artifactBlock != null && !artifactBlock.isBlank()) blocks.add(artifactBlock);
         if (summaryBlock != null && !summaryBlock.isBlank()) blocks.add(summaryBlock);
+        blocks.add(formatCurrentTimeBlock());
         blocks.add(currentMessage == null ? "" : currentMessage);
         return String.join("\n", blocks);
     }
@@ -99,14 +97,12 @@ public final class PromptAssembler {
      * device tools (one per online (device, tool) pair) → skill_load meta-tool →
      * optional web_search server-side tool (if {@code memory.enableWebSearch}).
      */
-    public static List<ToolUnion> buildToolUnionList(List<Tool> deviceTools,
-                                                     Tool skillLoadTool,
+    public static List<ToolUnion> buildToolUnionList(List<Tool> tools,
                                                      AgentProperties.Memory mem) {
-        List<ToolUnion> out = new ArrayList<>(deviceTools.size() + 2);
-        for (Tool t : deviceTools) {
+        List<ToolUnion> out = new ArrayList<>(tools.size() + 1);
+        for (Tool t : tools) {
             out.add(ToolUnion.ofTool(t));
         }
-        out.add(ToolUnion.ofTool(skillLoadTool));
         if (Boolean.TRUE.equals(mem.enableWebSearch())) {
             out.add(ToolUnion.ofWebSearchTool20250305(
                     WebSearchTool20250305.builder()
@@ -182,6 +178,10 @@ public final class PromptAssembler {
         }
         sb.append(summary.trim());
         return sb.toString().stripTrailing();
+    }
+
+    public static String formatCurrentTimeBlock() {
+        return "# CURRENT TIME\n\n" + buildCurrentTimeBlock();
     }
 
     private static void appendFact(StringBuilder sb, MemoryFactDto f) {
