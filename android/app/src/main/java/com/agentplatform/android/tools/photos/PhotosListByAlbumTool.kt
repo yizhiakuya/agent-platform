@@ -1,14 +1,10 @@
 package com.agentplatform.android.tools.photos
 
-import android.content.ContentUris
 import android.content.Context
-import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import android.util.Base64
 import android.util.Log
-import android.util.Size
 import com.agentplatform.android.core.tool.Tool
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -16,12 +12,9 @@ import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 
 /**
- * Lists photo thumbnails inside one specific bucket (album). The bucket_id
- * comes from {@code photos.list_albums}. Optional date_after / date_before
- * narrow it further.
+ * Lists cached display-sized original images inside one specific album bucket.
  */
 class PhotosListByAlbumTool(
     private val context: Context,
@@ -31,11 +24,10 @@ class PhotosListByAlbumTool(
     override val name: String = "photos.list_by_album"
 
     override val description: String = """
-        列出指定相册(bucket_id 来自 photos.list_albums 返回值)内的照片缩略图。
-        比 photos.list_recent 更精准 — 用户问"看微信相册最近的图/截图相册最早的图"等场景使用。
-
-        `bucket_id` 必填,先调 photos.list_albums 拿到。`limit` 默认 20,最多 50。
-        可选 date_after / date_before(UNIX 毫秒,UTC)做时间窗过滤。
+        List photos inside one specific album bucket as cached display-sized
+        original JPEG images (base64, up to 2048px long edge). `bucket_id`
+        comes from photos.list_albums. Optional date_after/date_before filter
+        the album by UNIX milliseconds. Default limit is 6; cap is 50.
     """.trimIndent()
 
     override val schema: JsonNode = mapper.readTree(
@@ -51,7 +43,7 @@ class PhotosListByAlbumTool(
               "type": "integer",
               "minimum": 1,
               "maximum": 50,
-              "default": 20,
+              "default": 6,
               "description": "Max photos to return."
             },
             "date_after": {
@@ -73,7 +65,7 @@ class PhotosListByAlbumTool(
     override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
         val bucketId = args.path("bucket_id").asText("").trim()
         require(bucketId.isNotEmpty()) { "bucket_id is required" }
-        val limit = args.path("limit").asInt(20).coerceIn(1, 50)
+        val limit = args.path("limit").asInt(6).coerceIn(1, 50)
         val dateAfter = args.path("date_after").let { if (it.isNumber) it.asLong() else null }
         val dateBefore = args.path("date_before").let { if (it.isNumber) it.asLong() else null }
 
@@ -95,6 +87,7 @@ class PhotosListByAlbumTool(
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DISPLAY_NAME,
             MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.DATE_MODIFIED,
             MediaStore.Images.Media.SIZE
         )
 
@@ -128,30 +121,27 @@ class PhotosListByAlbumTool(
             val idIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
             val nameIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
             val dateIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+            val modifiedIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
             val sizeIdx = c.getColumnIndex(MediaStore.Images.Media.SIZE)
             while (c.moveToNext() && photos.size() < limit) {
                 val id = c.getLong(idIdx)
                 val name = c.getString(nameIdx) ?: "image_$id"
                 val date = if (dateIdx >= 0 && !c.isNull(dateIdx)) c.getLong(dateIdx) else 0L
+                val modified = if (modifiedIdx >= 0 && !c.isNull(modifiedIdx)) c.getLong(modifiedIdx) else 0L
                 val size = if (sizeIdx >= 0 && !c.isNull(sizeIdx)) c.getLong(sizeIdx) else 0L
 
-                val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                val thumbB64: String = try {
-                    val bmp: Bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        context.contentResolver.loadThumbnail(uri, Size(256, 256), null)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        MediaStore.Images.Thumbnails.getThumbnail(
-                            context.contentResolver, id,
-                            MediaStore.Images.Thumbnails.MINI_KIND, null
-                        ) ?: throw RuntimeException("no thumb")
-                    }
-                    val baos = ByteArrayOutputStream()
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 70, baos)
-                    Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+                val image = try {
+                    PhotoToolUtils.encodedDisplayPhoto(
+                        context = context,
+                        id = id,
+                        maxDim = 2048,
+                        quality = 85,
+                        sourceModifiedSec = modified,
+                        sourceSizeBytes = size
+                    )
                 } catch (e: Exception) {
-                    Log.w(TAG, "thumbnail generation failed for id=$id: ${e.message}")
-                    ""
+                    Log.w(TAG, "image encode failed for id=$id: ${e.message}")
+                    null
                 }
 
                 val photo: ObjectNode = mapper.createObjectNode()
@@ -159,7 +149,14 @@ class PhotosListByAlbumTool(
                 photo.put("name", name)
                 photo.put("date_taken_ms", date)
                 photo.put("size_bytes", size)
-                photo.put("thumb_b64", thumbB64)
+                photo.put("date_modified_sec", modified)
+                if (image != null) {
+                    photo.put("image_b64", image.b64)
+                    photo.put("image_bytes", image.bytes)
+                    photo.put("image_width", image.width)
+                    photo.put("image_height", image.height)
+                    photo.put("image_cache_hit", image.cacheHit)
+                }
                 photos.add(photo)
             }
         }

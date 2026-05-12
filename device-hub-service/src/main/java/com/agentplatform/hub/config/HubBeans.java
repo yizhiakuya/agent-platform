@@ -85,8 +85,8 @@ public class HubBeans {
     @Bean
     public ServletServerContainerFactoryBean wsServletContainer() {
         ServletServerContainerFactoryBean c = new OptionalWsContainerFactoryBean();
-        c.setMaxTextMessageBufferSize(4 * 1024 * 1024);
-        c.setMaxBinaryMessageBufferSize(4 * 1024 * 1024);
+        c.setMaxTextMessageBufferSize(16 * 1024 * 1024);
+        c.setMaxBinaryMessageBufferSize(16 * 1024 * 1024);
         c.setAsyncSendTimeout(10_000L);
         return c;
     }

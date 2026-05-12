@@ -1,14 +1,10 @@
 package com.agentplatform.android.tools.photos
 
-import android.content.ContentUris
 import android.content.Context
-import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import android.util.Base64
 import android.util.Log
-import android.util.Size
 import com.agentplatform.android.core.tool.Tool
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -16,21 +12,15 @@ import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 
 /**
- * Returns the N most-recent photos from the device's gallery as 256×256 JPEG
- * thumbnails (base64). Used by the LLM to answer
+ * Returns the N most-recent photos from the device gallery as cached
+ * display-sized original JPEG images. Used by the LLM to answer
  * "show me my recent photos".
  *
- * <p>Permission: requires {@code READ_MEDIA_IMAGES} (Android 13+) or the
- * legacy {@code READ_EXTERNAL_STORAGE} on older versions. The user must have
- * granted it before this tool is invoked — otherwise the {@link android.database.Cursor}
- * returned by {@code MediaStore} will be null and we return an empty array.
- *
- * <p>Thumbnails are bounded at 256×256 and JPEG-compressed at quality 70.
- * Larger payloads should go through the side-channel upload endpoint
- * ({@code /api/uploads/{call_id}/{idx}}).
+ * Permission: requires READ_MEDIA_IMAGES on Android 13+ or legacy
+ * READ_EXTERNAL_STORAGE on older versions. If permission is missing, the
+ * MediaStore cursor is null and the tool returns an empty array.
  */
 class PhotosListRecentTool(
     private val context: Context,
@@ -40,8 +30,9 @@ class PhotosListRecentTool(
     override val name: String = "photos.list_recent"
 
     override val description: String = """
-        List photos from the device's gallery as JPEG thumbnails (256x256, base64).
-        Returns the most-recent matching photos first.
+        List photos from the device's gallery as cached display-sized original
+        JPEG images (base64, up to 2048px long edge). Returns the most-recent
+        matching photos first.
 
         Always pass the narrowest filter you can — pulling 20+ unfiltered photos
         wastes the user's mobile upload bandwidth. In particular:
@@ -66,7 +57,7 @@ class PhotosListRecentTool(
               "type": "integer",
               "minimum": 1,
               "maximum": 50,
-              "default": 10,
+              "default": 6,
               "description": "Max photos to return."
             },
             "name_contains": {
@@ -90,7 +81,7 @@ class PhotosListRecentTool(
     override val confirmRequired: Boolean = false
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
-        val limit = (args.path("limit").asInt(10)).coerceIn(1, 50)
+        val limit = (args.path("limit").asInt(6)).coerceIn(1, 50)
         val nameContains = args.path("name_contains").asText("").trim().takeIf { it.isNotEmpty() }
         val dateAfter = args.path("date_after").let { if (it.isNumber) it.asLong() else null }
         val dateBefore = args.path("date_before").let { if (it.isNumber) it.asLong() else null }
@@ -119,6 +110,7 @@ class PhotosListRecentTool(
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DISPLAY_NAME,
             MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.DATE_MODIFIED,
             MediaStore.Images.Media.SIZE
         )
         val cursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -153,30 +145,27 @@ class PhotosListRecentTool(
             val idIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
             val nameIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
             val dateIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+            val modifiedIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
             val sizeIdx = c.getColumnIndex(MediaStore.Images.Media.SIZE)
             while (c.moveToNext() && photos.size() < limit) {
                 val id = c.getLong(idIdx)
                 val name = c.getString(nameIdx) ?: "image_$id"
                 val date = if (dateIdx >= 0 && !c.isNull(dateIdx)) c.getLong(dateIdx) else 0L
+                val modified = if (modifiedIdx >= 0 && !c.isNull(modifiedIdx)) c.getLong(modifiedIdx) else 0L
                 val size = if (sizeIdx >= 0 && !c.isNull(sizeIdx)) c.getLong(sizeIdx) else 0L
 
-                val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                val thumbB64: String = try {
-                    val bmp: Bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        context.contentResolver.loadThumbnail(uri, Size(256, 256), null)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        MediaStore.Images.Thumbnails.getThumbnail(
-                            context.contentResolver, id,
-                            MediaStore.Images.Thumbnails.MINI_KIND, null
-                        ) ?: throw RuntimeException("no thumb")
-                    }
-                    val baos = ByteArrayOutputStream()
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 70, baos)
-                    Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+                val image = try {
+                    PhotoToolUtils.encodedDisplayPhoto(
+                        context = context,
+                        id = id,
+                        maxDim = 2048,
+                        quality = 85,
+                        sourceModifiedSec = modified,
+                        sourceSizeBytes = size
+                    )
                 } catch (e: Exception) {
-                    Log.w(TAG, "thumbnail generation failed for id=$id: ${e.message}")
-                    ""
+                    Log.w(TAG, "image encode failed for id=$id: ${e.message}")
+                    null
                 }
 
                 val photo: ObjectNode = mapper.createObjectNode()
@@ -184,7 +173,14 @@ class PhotosListRecentTool(
                 photo.put("name", name)
                 photo.put("date_taken_ms", date)
                 photo.put("size_bytes", size)
-                photo.put("thumb_b64", thumbB64)
+                photo.put("date_modified_sec", modified)
+                if (image != null) {
+                    photo.put("image_b64", image.b64)
+                    photo.put("image_bytes", image.bytes)
+                    photo.put("image_width", image.width)
+                    photo.put("image_height", image.height)
+                    photo.put("image_cache_hit", image.cacheHit)
+                }
                 photos.add(photo)
             }
         }

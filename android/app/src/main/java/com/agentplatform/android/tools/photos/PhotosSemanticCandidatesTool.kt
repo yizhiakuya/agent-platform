@@ -27,7 +27,7 @@ import java.time.format.DateTimeFormatter
 /**
  * Internal candidate collector for server-side semantic photo search.
  *
- * <p>This tool intentionally returns OCR text + metadata + thumbnails, but does
+ * <p>This tool intentionally returns OCR text + metadata + display images, but does
  * not compute embeddings. agent-service owns embedding provider credentials and
  * ranks candidates with the same OpenAI-compatible embedding stack as memory.
  */
@@ -41,7 +41,7 @@ class PhotosSemanticCandidatesTool(
     override val description: String = """
         Internal helper for photos.semantic_search. Scans recent/gallery images,
         extracts on-device OCR text when requested, and returns candidate
-        metadata plus thumbnails. Do not call directly unless asked to debug
+        metadata plus cached display images. Do not call directly unless asked to debug
         semantic photo search internals.
     """.trimIndent()
 
@@ -87,7 +87,7 @@ class PhotosSemanticCandidatesTool(
             "ocr": {
               "type": "boolean",
               "default": true,
-              "description": "Whether to run on-device OCR over thumbnails."
+              "description": "Whether to run on-device OCR over local working images."
             }
           }
         }
@@ -121,7 +121,6 @@ class PhotosSemanticCandidatesTool(
             var bitmap: Bitmap? = null
             try {
                 bitmap = PhotoToolUtils.loadThumbnail(context.contentResolver, row.id, 384)
-                val thumbB64 = PhotoToolUtils.jpegBase64(bitmap, 70)
                 val ocrText = if (latinRecognizer != null && chineseRecognizer != null) {
                     ocrText(bitmap, row.id, latinRecognizer, chineseRecognizer)
                 } else {
@@ -135,7 +134,6 @@ class PhotosSemanticCandidatesTool(
                 val candidateScore = localScore + (visualScore * 3.0) + (recencyScore * 0.5)
                 candidates += Candidate(
                     row = row,
-                    thumbB64 = thumbB64,
                     ocrText = ocrText,
                     visualLabels = labels,
                     semanticText = text,
@@ -184,7 +182,26 @@ class PhotosSemanticCandidatesTool(
             obj.put("visual_score", c.visualScore)
             obj.put("recency_score", c.recencyScore)
             obj.put("candidate_score", c.candidateScore)
-            obj.put("thumb_b64", c.thumbB64)
+            val image = try {
+                PhotoToolUtils.encodedDisplayPhoto(
+                    context = context,
+                    id = c.row.id,
+                    maxDim = 2048,
+                    quality = 85,
+                    sourceModifiedSec = c.row.dateModifiedSec,
+                    sourceSizeBytes = c.row.sizeBytes
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "semantic result image encode failed for id=${c.row.id}: ${e.message}")
+                null
+            }
+            if (image != null) {
+                obj.put("image_b64", image.b64)
+                obj.put("image_bytes", image.bytes)
+                obj.put("image_width", image.width)
+                obj.put("image_height", image.height)
+                obj.put("image_cache_hit", image.cacheHit)
+            }
             arr.add(obj)
         }
 
@@ -278,13 +295,15 @@ class PhotosSemanticCandidatesTool(
             while (c.moveToNext() && out.size < scanLimit) {
                 val id = c.getLong(idIdx)
                 val dateTaken = l(c, dateIdx)
-                val modified = l(c, modifiedIdx) * 1000L
+                val modifiedSec = l(c, modifiedIdx)
+                val modifiedMs = modifiedSec * 1000L
                 out += Row(
                     id = id,
                     name = c.getString(nameIdx) ?: "image_$id",
                     bucketId = s(c, bucketIdIdx),
                     bucketName = s(c, bucketNameIdx),
-                    dateTakenMs = if (dateTaken > 0L) dateTaken else modified,
+                    dateTakenMs = if (dateTaken > 0L) dateTaken else modifiedMs,
+                    dateModifiedSec = modifiedSec,
                     sizeBytes = l(c, sizeIdx),
                     width = i(c, widthIdx),
                     height = i(c, heightIdx),
@@ -433,6 +452,7 @@ class PhotosSemanticCandidatesTool(
         val bucketId: String,
         val bucketName: String,
         val dateTakenMs: Long,
+        val dateModifiedSec: Long,
         val sizeBytes: Long,
         val width: Int,
         val height: Int,
@@ -441,7 +461,6 @@ class PhotosSemanticCandidatesTool(
 
     private data class Candidate(
         val row: Row,
-        val thumbB64: String,
         val ocrText: String,
         val visualLabels: List<String>,
         val semanticText: String,

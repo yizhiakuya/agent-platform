@@ -2,12 +2,9 @@ package com.agentplatform.android.tools.photos
 
 import android.content.ContentUris
 import android.content.Context
-import android.graphics.Bitmap
 import android.os.Build
 import android.provider.MediaStore
-import android.util.Base64
 import android.util.Log
-import android.util.Size
 import com.agentplatform.android.core.tool.Tool
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -15,11 +12,10 @@ import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 
 /**
  * Lists buckets (albums) on the device — Camera, Screenshots, WeChat, etc. —
- * with photo count and a 256x256 cover thumbnail per bucket. Pairs with
+ * with photo count and a cached display-sized original cover image. Pairs with
  * {@code photos.list_by_album} for "show me what's in album X".
  */
 class PhotosListAlbumsTool(
@@ -30,11 +26,10 @@ class PhotosListAlbumsTool(
     override val name: String = "photos.list_albums"
 
     override val description: String = """
-        列出设备相册分组(BUCKET_DISPLAY_NAME 去重),按最近修改排序,每个相册附最近一张图的缩略图作为封面。
-        当用户问"我有哪些相册/微信相册有多少张/截图相册"等分组级问题时使用。
-
-        返回 bucket_id 可以传给 photos.list_by_album 拉具体相册的图。
-        默认 limit=30,最多 100。
+        List device photo albums/buckets. Each album includes its latest photo
+        as a cached display-sized original JPEG cover image, not a thumbnail.
+        Return bucket_id values for photos.list_by_album. Default limit is 30;
+        cap is 100.
     """.trimIndent()
 
     override val schema: JsonNode = mapper.readTree(
@@ -69,6 +64,8 @@ class PhotosListAlbumsTool(
             var coverDate: Long,
             var latestDate: Long,
             var count: Int,
+            var coverSizeBytes: Long,
+            var coverModifiedSec: Long,
         )
         val byBucket = LinkedHashMap<String, Album>()
 
@@ -77,7 +74,8 @@ class PhotosListAlbumsTool(
             MediaStore.Images.Media.BUCKET_ID,
             MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
             MediaStore.Images.Media.DATE_TAKEN,
-            MediaStore.Images.Media.DATE_MODIFIED
+            MediaStore.Images.Media.DATE_MODIFIED,
+            MediaStore.Images.Media.SIZE
         )
         val cursor = context.contentResolver.query(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
@@ -91,12 +89,14 @@ class PhotosListAlbumsTool(
             val bNameIdx = c.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
             val dateIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
             val modIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
+            val sizeIdx = c.getColumnIndex(MediaStore.Images.Media.SIZE)
             while (c.moveToNext()) {
                 if (bIdIdx < 0 || c.isNull(bIdIdx)) continue
                 val bucketId = c.getString(bIdIdx) ?: continue
                 val bucketName = if (bNameIdx >= 0) c.getString(bNameIdx) ?: "(未命名)" else "(未命名)"
                 val date = if (dateIdx >= 0 && !c.isNull(dateIdx)) c.getLong(dateIdx) else 0L
                 val modSec = if (modIdx >= 0 && !c.isNull(modIdx)) c.getLong(modIdx) else 0L
+                val size = if (sizeIdx >= 0 && !c.isNull(sizeIdx)) c.getLong(sizeIdx) else 0L
                 val id = c.getLong(idIdx)
 
                 val existing = byBucket[bucketId]
@@ -107,7 +107,9 @@ class PhotosListAlbumsTool(
                         coverId = id,
                         coverDate = date,
                         latestDate = maxOf(date, modSec * 1000L),
-                        count = 1
+                        count = 1,
+                        coverSizeBytes = size,
+                        coverModifiedSec = modSec
                     )
                 } else {
                     existing.count += 1
@@ -116,6 +118,8 @@ class PhotosListAlbumsTool(
                     if (date > existing.coverDate) {
                         existing.coverId = id
                         existing.coverDate = date
+                        existing.coverSizeBytes = size
+                        existing.coverModifiedSec = modSec
                     }
                 }
             }
@@ -132,27 +136,26 @@ class PhotosListAlbumsTool(
             obj.put("photo_count", a.count)
             obj.put("latest_date_ms", a.latestDate)
 
-            val coverUri = ContentUris.withAppendedId(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, a.coverId
-            )
-            val coverB64: String = try {
-                val bmp: Bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    context.contentResolver.loadThumbnail(coverUri, Size(256, 256), null)
-                } else {
-                    @Suppress("DEPRECATION")
-                    MediaStore.Images.Thumbnails.getThumbnail(
-                        context.contentResolver, a.coverId,
-                        MediaStore.Images.Thumbnails.MINI_KIND, null
-                    ) ?: throw RuntimeException("no thumb")
-                }
-                val baos = ByteArrayOutputStream()
-                bmp.compress(Bitmap.CompressFormat.JPEG, 70, baos)
-                Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+            val cover = try {
+                PhotoToolUtils.encodedDisplayPhoto(
+                    context = context,
+                    id = a.coverId,
+                    maxDim = 2048,
+                    quality = 85,
+                    sourceModifiedSec = a.coverModifiedSec,
+                    sourceSizeBytes = a.coverSizeBytes
+                )
             } catch (e: Exception) {
-                Log.w(TAG, "cover thumb failed for bucket=${a.bucketId}: ${e.message}")
-                ""
+                Log.w(TAG, "cover image failed for bucket=${a.bucketId}: ${e.message}")
+                null
             }
-            obj.put("cover_thumb_b64", coverB64)
+            if (cover != null) {
+                obj.put("cover_image_b64", cover.b64)
+                obj.put("cover_image_bytes", cover.bytes)
+                obj.put("cover_image_width", cover.width)
+                obj.put("cover_image_height", cover.height)
+                obj.put("cover_image_cache_hit", cover.cacheHit)
+            }
             albums.add(obj)
         }
 

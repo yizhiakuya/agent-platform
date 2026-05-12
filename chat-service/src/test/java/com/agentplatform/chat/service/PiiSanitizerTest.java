@@ -19,11 +19,13 @@ class PiiSanitizerTest {
             mapper);
 
     @Test
-    void preservesThumbnailsButRedactsFullVisionImages() throws Exception {
+    void preservesDisplayImagesButRedactsFullVisionImages() throws Exception {
         ObjectNode root = mapper.createObjectNode();
         ObjectNode result = mapper.createObjectNode();
         ArrayNode photos = mapper.createArrayNode();
         ObjectNode photo = mapper.createObjectNode();
+        photo.put("image_b64", "123456789ABCDE");
+        photo.put("cover_image_b64", "ABCDE123456789");
         photo.put("thumb_b64", "123456789ABCDE");
         photo.put("cover_thumb_b64", "ABCDE123456789");
         photo.put("vision_b64", "abcdefghijklmnopqrstuvwxyz");
@@ -34,6 +36,8 @@ class PiiSanitizerTest {
         ObjectNode sanitized = (ObjectNode) mapper.readTree(sanitizer.sanitizeMetadata(root));
         ObjectNode sanitizedPhoto = (ObjectNode) sanitized.path("result").path("photos").path(0);
 
+        assertEquals("123456789ABCDE", sanitizedPhoto.path("image_b64").asText());
+        assertEquals("ABCDE123456789", sanitizedPhoto.path("cover_image_b64").asText());
         assertEquals("123456789ABCDE", sanitizedPhoto.path("thumb_b64").asText());
         assertEquals("ABCDE123456789", sanitizedPhoto.path("cover_thumb_b64").asText());
         assertTrue(sanitizedPhoto.path("vision_b64").asText().startsWith("<redacted base64 "));

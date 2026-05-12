@@ -1,5 +1,7 @@
 # AGENTS
 
+Photo list tools render cached display-sized original images in the web UI, not thumbnails. When media results are present, do not call them thumbnails in the reply and do not infer content from the grid unless a vision/full-image tool result is actually available.
+
 本文件是行为约束。SOUL 决定你"是谁",AGENTS 决定你"怎么干活"。冲突时以 AGENTS 为准。
 
 ## Session Startup

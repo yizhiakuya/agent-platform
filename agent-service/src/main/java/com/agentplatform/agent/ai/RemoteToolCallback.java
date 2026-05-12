@@ -284,12 +284,9 @@ public class RemoteToolCallback {
         if (node instanceof ObjectNode obj) {
             ObjectNode copy = obj.objectNode();
             // Layered b64 priority within ONE object: when a tool returns BOTH
-            // a high-resolution `vision_b64` (for the LLM to see clearly) and
-            // a small `thumb_b64` (for the web bubble), the LLM only needs the
-            // vision copy. Skip thumb_b64 collection in that case so we don't
-            // waste tokens / context on a duplicate at lower fidelity.
-            // The thumb_b64 is still placeholdered (so its bytes don't leak
-            // into the LLM as text) but not emitted as an image.
+            // `vision_b64` (for the LLM) and `image_b64` (for the web bubble),
+            // collect only the vision copy. The other b64 fields are still
+            // placeholdered so raw bytes never leak into text context.
             boolean hasVisionSibling = false;
             for (java.util.Iterator<String> it = obj.fieldNames(); it.hasNext(); ) {
                 String fn = it.next();
@@ -310,7 +307,7 @@ public class RemoteToolCallback {
                     int len = b64.length();
                     boolean isVision = k.startsWith("vision");
                     boolean shouldCollect = len > 0 && len < 7_000_000   // Anthropic per-image cap ~5MB binary
-                            && (isVision || !hasVision);                  // skip thumb when vision sibling present
+                            && (isVision || !hasVision);                  // skip duplicate UI image when vision sibling present
                     if (shouldCollect) {
                         copy.put(k, "<binary " + len + "B attached as image; rendered to user>");
                         out.add(new PendingImage(sniffMime(k, b64), b64));

@@ -1234,7 +1234,7 @@ function ToolResult({ tool, result, onOpenImage }: {
     return (
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {result.albums.map((a: any) => {
-          const src = a.cover_thumb_b64 ? `data:image/jpeg;base64,${a.cover_thumb_b64}` : null;
+          const src = imageDataUrl(a.cover_image_b64 ?? a.cover_b64 ?? a.cover_thumb_b64);
           return (
             <div key={a.bucket_id} className="border rounded overflow-hidden">
               {src ? (
@@ -1446,8 +1446,15 @@ function hasPhotoImage(photo: unknown) {
 function photoImageSources(photo: unknown) {
   const p = asRecord(photo);
   if (!p) return { big: null, small: null };
-  const big = imageDataUrl(p.vision_b64 ?? p.image_b64 ?? p.image_base64);
-  const small = imageDataUrl(p.thumb_b64 ?? p.thumbnail_b64 ?? p.cover_thumb_b64) ?? big;
+  const big = imageDataUrl(
+    p.image_b64 ??
+    p.vision_b64 ??
+    p.image_base64 ??
+    p.cover_image_b64 ??
+    p.cover_b64 ??
+    p.full_b64
+  );
+  const small = big ?? imageDataUrl(p.thumb_b64 ?? p.thumbnail_b64 ?? p.cover_thumb_b64);
   return { big, small };
 }
 

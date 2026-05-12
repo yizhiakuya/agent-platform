@@ -23,7 +23,7 @@ import java.util.Set;
  *       {@code [truncated N bytes]} marker appended.</li>
  *   <li><b>Redact large base64 fields in metadata</b> — full-resolution image,
  *       audio, and blob payloads are replaced with a placeholder. Small UI
- *       thumbnails are intentionally preserved so historical tool bubbles can
+ *       display images are intentionally preserved so historical tool bubbles can
  *       render after switching sessions.</li>
  * </ol>
  */
@@ -31,8 +31,9 @@ import java.util.Set;
 public class PiiSanitizer {
 
     private static final Set<String> ALWAYS_REDACT_BASE64_KEYS = Set.of(
-            "vision_b64", "image_b64", "image_base64", "audio_b64", "blob_b64", "data");
+            "vision_b64", "audio_b64", "blob_b64", "data");
     private static final Set<String> PRESERVE_BASE64_KEYS = Set.of(
+            "image_b64", "image_base64", "cover_image_b64", "cover_b64",
             "thumb_b64", "cover_thumb_b64", "thumbnail_b64");
 
     private final ChatProperties props;
