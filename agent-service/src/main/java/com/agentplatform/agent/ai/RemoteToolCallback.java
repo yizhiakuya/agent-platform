@@ -18,6 +18,7 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +44,7 @@ import java.util.UUID;
 public class RemoteToolCallback {
 
     private static final Logger log = LoggerFactory.getLogger(RemoteToolCallback.class);
+    private static final int MAX_UPLOADED_VISION_ATTACHMENTS = 6;
 
     private final UUID deviceId;
     private final UUID userId;
@@ -211,12 +213,50 @@ public class RemoteToolCallback {
         if (visionEnabled) {
             List<PendingImage> imgs = new ArrayList<>();
             JsonNode stripped = stripB64ForLlmAndCollect(raw, "", imgs);
+            collectUploadedImages(stripped, imgs);
             if (!imgs.isEmpty() && stripped instanceof ObjectNode obj) {
                 obj.put("_vision_attached_count", imgs.size());
             }
             return new ExecutionResult(stripped.toString(), imgs);
         }
         return ExecutionResult.text(stripB64ForLlm(raw).toString());
+    }
+
+    private void collectUploadedImages(JsonNode node, List<PendingImage> out) {
+        if (node == null || out == null) {
+            return;
+        }
+        if (out.size() >= MAX_UPLOADED_VISION_ATTACHMENTS) {
+            return;
+        }
+        if (node.isObject()) {
+            String url = firstText(node,
+                    "image_url", "asset_url", "url",
+                    "imageUrl", "assetUrl");
+            if (url != null) {
+                dispatcher.fetchUploadAsset(userId, url)
+                        .filter(asset -> asset.bytes().length < 5_250_000)
+                        .ifPresent(asset -> out.add(new PendingImage(
+                                asset.contentType(),
+                                Base64.getEncoder().encodeToString(asset.bytes()))));
+            }
+            node.fields().forEachRemaining(entry -> collectUploadedImages(entry.getValue(), out));
+        } else if (node.isArray()) {
+            node.forEach(child -> collectUploadedImages(child, out));
+        }
+    }
+
+    private static String firstText(JsonNode node, String... keys) {
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        for (String key : keys) {
+            JsonNode value = node.path(key);
+            if (value.isTextual() && !value.asText().isBlank()) {
+                return value.asText();
+            }
+        }
+        return null;
     }
 
     /** Replace characters Anthropic's API rejects (only "." in our scheme so far). */

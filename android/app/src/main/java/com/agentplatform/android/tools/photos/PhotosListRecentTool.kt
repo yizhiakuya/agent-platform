@@ -14,8 +14,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Returns the N most-recent photos from the device gallery as cached
- * display-sized original JPEG images. Used by the LLM to answer
+ * Returns the N most-recent photos from the device gallery as cached,
+ * uploaded display-sized original JPEG assets. Used by the LLM to answer
  * "show me my recent photos".
  *
  * Permission: requires READ_MEDIA_IMAGES on Android 13+ or legacy
@@ -31,7 +31,7 @@ class PhotosListRecentTool(
 
     override val description: String = """
         List photos from the device's gallery as cached display-sized original
-        JPEG images (base64, up to 2048px long edge). Returns the most-recent
+        JPEG asset URLs (up to 2048px long edge). Returns the most-recent
         matching photos first.
 
         Always pass the narrowest filter you can — pulling 20+ unfiltered photos
@@ -81,6 +81,7 @@ class PhotosListRecentTool(
     override val confirmRequired: Boolean = false
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+        val uploader = PhotoAssetUploader(context, mapper)
         val limit = (args.path("limit").asInt(6)).coerceIn(1, 50)
         val nameContains = args.path("name_contains").asText("").trim().takeIf { it.isNotEmpty() }
         val dateAfter = args.path("date_after").let { if (it.isNumber) it.asLong() else null }
@@ -175,11 +176,8 @@ class PhotosListRecentTool(
                 photo.put("size_bytes", size)
                 photo.put("date_modified_sec", modified)
                 if (image != null) {
-                    photo.put("image_b64", image.b64)
-                    photo.put("image_bytes", image.bytes)
-                    photo.put("image_width", image.width)
-                    photo.put("image_height", image.height)
-                    photo.put("image_cache_hit", image.cacheHit)
+                    val upload = uploader.uploadDisplayJpeg(id, name, image)
+                    PhotoAssetUploader.putUploadFields(photo, upload, image)
                 }
                 photos.add(photo)
             }

@@ -17,12 +17,17 @@ import java.security.MessageDigest
 
 object PhotoToolUtils {
     data class EncodedPhoto(
-        val b64: String,
-        val bytes: Int,
+        val jpegBytes: ByteArray,
         val width: Int,
         val height: Int,
         val cacheHit: Boolean
-    )
+    ) {
+        val b64: String
+            get() = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+
+        val bytes: Int
+            get() = jpegBytes.size
+    }
 
     fun loadThumbnail(resolver: ContentResolver, id: Long, size: Int = 256): Bitmap {
         val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
@@ -100,8 +105,7 @@ object PhotoToolUtils {
                 current.compress(Bitmap.CompressFormat.JPEG, safeQuality, it)
             }.toByteArray()
             val out = EncodedPhoto(
-                b64 = Base64.encodeToString(bytes, Base64.NO_WRAP),
-                bytes = bytes.size,
+                jpegBytes = bytes,
                 width = current.width,
                 height = current.height,
                 cacheHit = false
@@ -150,20 +154,22 @@ object PhotoToolUtils {
     ): File {
         val dir = File(context.cacheDir, "photo-display-cache").apply { mkdirs() }
         val key = "$id|$maxDim|$quality|$sourceModifiedSec|$sourceSizeBytes"
-        return File(dir, sha256(key) + ".txt")
+        return File(dir, sha256(key) + ".jpg")
     }
 
     private fun readCached(file: File): EncodedPhoto? {
         return try {
             if (!file.isFile) return null
             file.setLastModified(System.currentTimeMillis())
-            val lines = file.readLines(Charsets.UTF_8)
-            if (lines.size < 4) return null
+            val bytes = file.readBytes()
+            if (bytes.isEmpty()) return null
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            if (opts.outWidth <= 0 || opts.outHeight <= 0) return null
             EncodedPhoto(
-                b64 = lines.drop(3).joinToString(""),
-                bytes = lines[0].toInt(),
-                width = lines[1].toInt(),
-                height = lines[2].toInt(),
+                jpegBytes = bytes,
+                width = opts.outWidth,
+                height = opts.outHeight,
                 cacheHit = true
             )
         } catch (_: Exception) {
@@ -174,15 +180,7 @@ object PhotoToolUtils {
     private fun writeCached(file: File, photo: EncodedPhoto) {
         try {
             file.parentFile?.mkdirs()
-            file.writeText(
-                buildString {
-                    append(photo.bytes).append('\n')
-                    append(photo.width).append('\n')
-                    append(photo.height).append('\n')
-                    append(photo.b64)
-                },
-                Charsets.UTF_8
-            )
+            file.writeBytes(photo.jpegBytes)
         } catch (_: Exception) {
             // Cache failures should never fail the photo tool.
         }

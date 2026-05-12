@@ -14,6 +14,10 @@ spring:
       # Async controllers (DeferredResult) need a generous timeout so they hit
       # OUR timeout in PendingCallRegistry first, not Spring's safety net.
       request-timeout: 60000
+  servlet:
+    multipart:
+      max-file-size: ${PHOTO_UPLOAD_MAX_SIZE:10MB}
+      max-request-size: ${PHOTO_UPLOAD_MAX_SIZE:10MB}
 
 agent-platform:
   internal:
@@ -40,6 +44,11 @@ agent-platform:
     ws-allowed-origins: ${HUB_WS_ALLOWED_ORIGINS:}
     # Reserved for future heartbeat/idle disconnect logic.
     ws-heartbeat-interval-ms: 60000
+  uploads:
+    photos:
+      storage-dir: ${PHOTO_UPLOAD_DIR:/data/agent-platform/uploads/photos}
+      max-size: ${PHOTO_UPLOAD_MAX_SIZE:10MB}
+      cache-max-age: ${PHOTO_UPLOAD_CACHE_MAX_AGE:30d}
 
 logging:
   level:

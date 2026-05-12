@@ -4,8 +4,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import com.agentplatform.agent.client.DeviceToolDispatcher;
+import com.agentplatform.protocol.ToolResult;
+import com.agentplatform.protocol.ToolSpec;
+
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -131,5 +138,73 @@ class RemoteToolCallbackBinaryStripTest {
         assertEquals(0, imgs.size());
         assertEquals("a JPEG", out.get("description").asText());
         assertEquals("http://x/img.jpg", out.get("image_url").asText());
+    }
+
+    @Test
+    void uploadedImageUrlIsFetchedAndCollectedWhenVisionEnabled() throws Exception {
+        DeviceToolDispatcher dispatcher = org.mockito.Mockito.mock(DeviceToolDispatcher.class);
+        UUID userId = UUID.randomUUID();
+        org.mockito.Mockito.when(dispatcher.dispatch(
+                        org.mockito.Mockito.any(), org.mockito.Mockito.eq(userId),
+                        org.mockito.Mockito.eq("photos.list_recent"), org.mockito.Mockito.any()))
+                .thenReturn(ToolResult.ok(mapper.readTree(
+                        "{\"photos\":[{\"id\":\"1\",\"image_url\":\"/api/uploads/photos/asset-1\"}]}")));
+        org.mockito.Mockito.when(dispatcher.fetchUploadAsset(userId, "/api/uploads/photos/asset-1"))
+                .thenReturn(Optional.of(new DeviceToolDispatcher.FetchedAsset(
+                        "image/jpeg", "jpeg-bytes".getBytes(StandardCharsets.UTF_8))));
+
+        RemoteToolCallback callback = new RemoteToolCallback(
+                UUID.randomUUID(),
+                userId,
+                new ToolSpec("photos.list_recent", "list", mapper.createObjectNode(), false),
+                dispatcher,
+                mapper,
+                List.of(),
+                null,
+                true);
+
+        ExecutionResult result = callback.executeJsonToolUse(mapper.createObjectNode(), userId, UUID.randomUUID(), null);
+
+        assertEquals(1, result.images().size());
+        assertEquals("image/jpeg", result.images().get(0).mimeType());
+        assertEquals("anBlZy1ieXRlcw==", result.images().get(0).b64());
+        assertTrue(result.jsonText().contains("\"_vision_attached_count\":1"));
+    }
+
+    @Test
+    void uploadedImageCollectionIsCappedAndSkipsAlbumCoverUrls() throws Exception {
+        DeviceToolDispatcher dispatcher = org.mockito.Mockito.mock(DeviceToolDispatcher.class);
+        UUID userId = UUID.randomUUID();
+        StringBuilder photos = new StringBuilder("{\"photos\":[");
+        for (int i = 1; i <= 8; i++) {
+            if (i > 1) photos.append(',');
+            photos.append("{\"id\":\"").append(i).append("\",\"image_url\":\"/api/uploads/photos/asset-")
+                    .append(i).append("\"}");
+            org.mockito.Mockito.when(dispatcher.fetchUploadAsset(userId, "/api/uploads/photos/asset-" + i))
+                    .thenReturn(Optional.of(new DeviceToolDispatcher.FetchedAsset(
+                            "image/jpeg", ("jpeg-" + i).getBytes(StandardCharsets.UTF_8))));
+        }
+        photos.append("],\"albums\":[{\"cover_image_url\":\"/api/uploads/photos/cover-1\"}]}");
+        org.mockito.Mockito.when(dispatcher.dispatch(
+                        org.mockito.Mockito.any(), org.mockito.Mockito.eq(userId),
+                        org.mockito.Mockito.eq("photos.list_recent"), org.mockito.Mockito.any()))
+                .thenReturn(ToolResult.ok(mapper.readTree(photos.toString())));
+
+        RemoteToolCallback callback = new RemoteToolCallback(
+                UUID.randomUUID(),
+                userId,
+                new ToolSpec("photos.list_recent", "list", mapper.createObjectNode(), false),
+                dispatcher,
+                mapper,
+                List.of(),
+                null,
+                true);
+
+        ExecutionResult result = callback.executeJsonToolUse(mapper.createObjectNode(), userId, UUID.randomUUID(), null);
+
+        assertEquals(6, result.images().size(), "uploaded image attachments are capped per tool result");
+        assertTrue(result.jsonText().contains("\"_vision_attached_count\":6"));
+        org.mockito.Mockito.verify(dispatcher, org.mockito.Mockito.never())
+                .fetchUploadAsset(userId, "/api/uploads/photos/cover-1");
     }
 }

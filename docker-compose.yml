@@ -148,6 +148,8 @@ services:
       HUB_MOCK_MODE: ${HUB_MOCK_MODE:-false}
       HUB_WS_ALLOWED_ORIGINS: ${HUB_WS_ALLOWED_ORIGINS:-${WEB_PUBLIC_URL:-http://localhost:3000}}
     expose: ["8083"]
+    volumes:
+      - photo-upload-data:/data/agent-platform/uploads/photos
 
   agent-service:
     profiles: ["default"]
@@ -258,3 +260,4 @@ volumes:
   caddy-data:
   caddy-config:
   photo-embedding-models:
+  photo-upload-data:

@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { api, MessageDto, SessionDto } from '../api/client';
 import { streamChat } from '../api/sse';
 import { ChatEvent, useChatStore } from '../lib/chatStore';
+import { getToken } from '../lib/auth';
 
 export default function ChatPage() {
   const {
@@ -582,12 +583,13 @@ export default function ChatPage() {
           className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 cursor-zoom-out"
           onClick={() => setLightboxSrc(null)}
         >
-          <img
-            src={lightboxSrc}
-            className="max-w-[95vw] max-h-[95vh] object-contain"
+          <div onClick={e => e.stopPropagation()}>
+            <AuthImage
+              src={lightboxSrc}
+              className="max-w-[95vw] max-h-[95vh] object-contain"
             alt="预览"
-            onClick={e => e.stopPropagation()}
-          />
+            />
+          </div>
         </div>
       )}
     </div>
@@ -1219,10 +1221,10 @@ function ToolResult({ tool, result, onOpenImage }: {
     const h = result.vision_height ?? result.source_height;
     return (
       <div className="max-w-md">
-        <img src={small ?? ''} alt={result.name}
-             title={result.name}
-             onClick={() => big && onOpenImage(big)}
-             className="w-full max-h-96 object-contain rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+        <AuthImage src={small} alt={result.name}
+                   title={result.name}
+                   onOpen={() => big && onOpenImage(big)}
+                   className="w-full max-h-96 object-contain rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
         <div className="text-xs text-slate-500 mt-1">
           {result.name}{w && h ? ` · ${w}×${h}` : ''}
         </div>
@@ -1234,13 +1236,13 @@ function ToolResult({ tool, result, onOpenImage }: {
     return (
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {result.albums.map((a: any) => {
-          const src = imageDataUrl(a.cover_image_b64 ?? a.cover_b64 ?? a.cover_thumb_b64);
+          const { big, small: src } = photoImageSources(a);
           return (
             <div key={a.bucket_id} className="border rounded overflow-hidden">
               {src ? (
-                <img src={src} alt={a.name}
-                     onClick={() => onOpenImage(src)}
-                     className="w-full h-32 object-cover cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+                <AuthImage src={src} alt={a.name}
+                           onOpen={() => onOpenImage(big ?? src)}
+                           className="w-full h-32 object-cover cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
               ) : (
                 <div className="w-full h-32 bg-slate-200" />
               )}
@@ -1266,7 +1268,16 @@ function ToolResult({ tool, result, onOpenImage }: {
     return (
       <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
         {result.videos.map((v: any) => {
-          const src = v.thumb_b64 ? `data:image/jpeg;base64,${v.thumb_b64}` : null;
+          const src = firstImageUrl(
+            v.thumb_url,
+            v.thumbnail_url,
+            v.cover_image_url,
+            v.cover_url,
+            v.thumbUrl,
+            v.thumbnailUrl,
+            v.coverImageUrl,
+            v.coverUrl
+          ) ?? imageDataUrl(v.thumb_b64);
           const sec = v.duration_ms ? Math.round(v.duration_ms / 1000) : 0;
           const m = Math.floor(sec / 60);
           const s = sec % 60;
@@ -1274,10 +1285,10 @@ function ToolResult({ tool, result, onOpenImage }: {
           return (
             <div key={v.id} className="relative">
               {src ? (
-                <img src={src} alt={v.name}
-                     title={v.name}
-                     onClick={() => onOpenImage(src)}
-                     className="w-full h-32 object-cover rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+                <AuthImage src={src} alt={v.name}
+                           title={v.name}
+                           onOpen={() => onOpenImage(src)}
+                           className="w-full h-32 object-cover rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
               ) : (
                 <div className="w-full h-32 bg-slate-200 rounded" />
               )}
@@ -1305,10 +1316,10 @@ function SemanticPhotoResult({ result, onOpenImage }: { result: any; onOpenImage
     const h = primary.vision_height ?? primary.source_height;
     return (
       <div className="max-w-md">
-        <img src={small ?? ''} alt={primary.name}
-             title={primary.name}
-             onClick={() => big && onOpenImage(big)}
-             className="w-full max-h-96 object-contain rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+        <AuthImage src={small} alt={primary.name}
+                   title={primary.name}
+                   onOpen={() => big && onOpenImage(big)}
+                   className="w-full max-h-96 object-contain rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
         <div className="text-xs text-slate-500 mt-1">
           {primary.name}{w && h ? ` 路 ${w}脳${h}` : ''}
         </div>
@@ -1391,10 +1402,10 @@ function ThumbGrid({ items, onOpenImage }: { items: any[]; onOpenImage: OpenImag
           return <PhotoPlaceholder key={p.id} photo={p} />;
         }
         return (
-          <img key={p.id} src={src} alt={p.name}
-               title={p.name}
-               onClick={() => onOpenImage(big ?? src)}
-               className="w-full h-32 object-cover rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+          <AuthImage key={p.id} src={src} alt={p.name}
+                     title={p.name}
+                     onOpen={() => onOpenImage(big ?? src)}
+                     className="w-full h-32 object-cover rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
         );
       })}
     </div>
@@ -1428,6 +1439,81 @@ function PhotoPlaceholder({ photo }: { photo: any }) {
   );
 }
 
+function AuthImage({
+  src,
+  alt,
+  title,
+  className,
+  onOpen
+}: {
+  src: string | null;
+  alt?: string;
+  title?: string;
+  className?: string;
+  onOpen?: () => void;
+}) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!src || !needsAuthenticatedFetch(src)) {
+      setObjectUrl(null);
+      setFailed(false);
+      return;
+    }
+
+    let cancelled = false;
+    const ctrl = new AbortController();
+    const token = getToken();
+    setObjectUrl(null);
+    setFailed(false);
+
+    fetch(src, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: ctrl.signal
+    })
+      .then(resp => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.blob();
+      })
+      .then(blob => {
+        if (cancelled) return;
+        setObjectUrl(URL.createObjectURL(blob));
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+
+    return () => {
+      cancelled = true;
+      ctrl.abort();
+    };
+  }, [src]);
+
+  useEffect(() => {
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [objectUrl]);
+
+  const displaySrc = objectUrl ?? (src && !needsAuthenticatedFetch(src) ? src : null);
+  if (!displaySrc || failed) {
+    return <div className="w-full h-32 rounded border border-slate-200 bg-slate-100" />;
+  }
+
+  return (
+    <img src={displaySrc}
+         alt={alt}
+         title={title}
+         onClick={onOpen}
+         className={className} />
+  );
+}
+
+function needsAuthenticatedFetch(src: string) {
+  return src.startsWith('/api/uploads/');
+}
+
 function semanticPrimaryPhoto(result: any) {
   const primary = result?.primary_image ?? result?.primaryImage ?? result?.primary;
   const candidate = primary?.result ?? primary;
@@ -1446,7 +1532,28 @@ function hasPhotoImage(photo: unknown) {
 function photoImageSources(photo: unknown) {
   const p = asRecord(photo);
   if (!p) return { big: null, small: null };
-  const big = imageDataUrl(
+  const bigUrl = firstImageUrl(
+    p.image_url,
+    p.asset_url,
+    p.url,
+    p.cover_image_url,
+    p.cover_url,
+    p.imageUrl,
+    p.assetUrl,
+    p.coverImageUrl,
+    p.coverUrl
+  );
+  const smallUrl = firstImageUrl(
+    p.thumb_url,
+    p.thumbnail_url,
+    p.cover_thumb_url,
+    p.cover_thumbnail_url,
+    p.thumbUrl,
+    p.thumbnailUrl,
+    p.coverThumbUrl,
+    p.coverThumbnailUrl
+  );
+  const bigB64 = imageDataUrl(
     p.image_b64 ??
     p.vision_b64 ??
     p.image_base64 ??
@@ -1454,7 +1561,8 @@ function photoImageSources(photo: unknown) {
     p.cover_b64 ??
     p.full_b64
   );
-  const small = big ?? imageDataUrl(p.thumb_b64 ?? p.thumbnail_b64 ?? p.cover_thumb_b64);
+  const big = bigUrl ?? bigB64;
+  const small = smallUrl ?? big ?? imageDataUrl(p.thumb_b64 ?? p.thumbnail_b64 ?? p.cover_thumb_b64);
   return { big, small };
 }
 
@@ -1477,4 +1585,23 @@ function imageDataUrl(value: unknown) {
   if (clean.length < 16 || clean.startsWith('<')) return null;
   if (clean.startsWith('data:image/')) return clean;
   return `data:image/jpeg;base64,${clean}`;
+}
+
+function firstImageUrl(...values: unknown[]) {
+  for (const value of values) {
+    const url = imageUrl(value);
+    if (url) return url;
+  }
+  return null;
+}
+
+function imageUrl(value: unknown): string | null {
+  if (asRecord(value)) return imageUrl(asRecord(value)?.url);
+  if (typeof value !== 'string') return null;
+  const clean = value.trim();
+  if (!clean || clean.startsWith('<')) return null;
+  if (clean.startsWith('data:image/')) return clean;
+  if (/^(https?:)?\/\//i.test(clean)) return clean;
+  if (/^(blob:|\/|\.\/|\.\.\/)/i.test(clean)) return clean;
+  return null;
 }

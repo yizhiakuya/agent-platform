@@ -16,7 +16,8 @@ import kotlinx.coroutines.withContext
 /**
  * Lists recent screenshots, matching either the typical filename pattern
  * (Screenshot_*) or the Screenshots / 截图 bucket — both because Chinese ROMs
- * use varied conventions. Returns cached display-sized original images.
+ * use varied conventions. Returns cached, uploaded display-sized original
+ * image assets.
  */
 class PhotosRecentScreenshotsTool(
     private val context: Context,
@@ -26,8 +27,8 @@ class PhotosRecentScreenshotsTool(
     override val name: String = "photos.recent_screenshots"
 
     override val description: String = """
-        List recent screenshots as cached display-sized original JPEG images
-        (base64, up to 2048px long edge). Matches common Screenshot filenames
+        List recent screenshots as cached display-sized original JPEG asset URLs
+        (up to 2048px long edge). Matches common Screenshot filenames
         and Screenshots albums across Android ROMs. Optional name_contains
         narrows within screenshots. Default limit is 6; cap is 50.
     """.trimIndent()
@@ -56,6 +57,7 @@ class PhotosRecentScreenshotsTool(
     override val confirmRequired: Boolean = false
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+        val uploader = PhotoAssetUploader(context, mapper)
         val limit = args.path("limit").asInt(6).coerceIn(1, 50)
         val nameContains = args.path("name_contains").asText("").trim().takeIf { it.isNotEmpty() }
 
@@ -144,11 +146,8 @@ class PhotosRecentScreenshotsTool(
                 photo.put("size_bytes", size)
                 photo.put("date_modified_sec", modified)
                 if (image != null) {
-                    photo.put("image_b64", image.b64)
-                    photo.put("image_bytes", image.bytes)
-                    photo.put("image_width", image.width)
-                    photo.put("image_height", image.height)
-                    photo.put("image_cache_hit", image.cacheHit)
+                    val upload = uploader.uploadDisplayJpeg(id, name, image)
+                    PhotoAssetUploader.putUploadFields(photo, upload, image)
                 }
                 photos.add(photo)
             }

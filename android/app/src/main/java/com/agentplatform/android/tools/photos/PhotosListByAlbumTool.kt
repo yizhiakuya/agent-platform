@@ -14,7 +14,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Lists cached display-sized original images inside one specific album bucket.
+ * Lists cached, uploaded display-sized original image assets inside one
+ * specific album bucket.
  */
 class PhotosListByAlbumTool(
     private val context: Context,
@@ -25,7 +26,7 @@ class PhotosListByAlbumTool(
 
     override val description: String = """
         List photos inside one specific album bucket as cached display-sized
-        original JPEG images (base64, up to 2048px long edge). `bucket_id`
+        original JPEG asset URLs (up to 2048px long edge). `bucket_id`
         comes from photos.list_albums. Optional date_after/date_before filter
         the album by UNIX milliseconds. Default limit is 6; cap is 50.
     """.trimIndent()
@@ -63,6 +64,7 @@ class PhotosListByAlbumTool(
     override val confirmRequired: Boolean = false
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+        val uploader = PhotoAssetUploader(context, mapper)
         val bucketId = args.path("bucket_id").asText("").trim()
         require(bucketId.isNotEmpty()) { "bucket_id is required" }
         val limit = args.path("limit").asInt(6).coerceIn(1, 50)
@@ -151,11 +153,8 @@ class PhotosListByAlbumTool(
                 photo.put("size_bytes", size)
                 photo.put("date_modified_sec", modified)
                 if (image != null) {
-                    photo.put("image_b64", image.b64)
-                    photo.put("image_bytes", image.bytes)
-                    photo.put("image_width", image.width)
-                    photo.put("image_height", image.height)
-                    photo.put("image_cache_hit", image.cacheHit)
+                    val upload = uploader.uploadDisplayJpeg(id, name, image)
+                    PhotoAssetUploader.putUploadFields(photo, upload, image)
                 }
                 photos.add(photo)
             }

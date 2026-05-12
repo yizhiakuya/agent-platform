@@ -4,13 +4,17 @@ import com.agentplatform.agent.config.AgentProperties;
 import com.agentplatform.api.hub.InternalCallRequest;
 import com.agentplatform.protocol.JsonRpcError;
 import com.agentplatform.protocol.ToolResult;
+import com.agentplatform.security.Principal;
+import com.agentplatform.security.TrustedHeaderAuthFilter;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Duration;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -56,4 +60,32 @@ public class DeviceToolDispatcher {
                     "device-hub call failed: " + e.getMessage()));
         }
     }
+
+    public Optional<FetchedAsset> fetchUploadAsset(UUID userId, String imageUrl) {
+        if (imageUrl == null || !imageUrl.startsWith("/api/uploads/photos/")) {
+            return Optional.empty();
+        }
+        try {
+            ResponseEntity<byte[]> response = webClient.get()
+                    .uri(baseUri + imageUrl)
+                    .header(TrustedHeaderAuthFilter.H_TYPE, Principal.TYPE_USER)
+                    .header(TrustedHeaderAuthFilter.H_USER, userId == null ? "" : userId.toString())
+                    .header(TrustedHeaderAuthFilter.H_JTI, "agent-service")
+                    .retrieve()
+                    .toEntity(byte[].class)
+                    .block(timeout);
+            if (response == null || response.getBody() == null || response.getBody().length == 0) {
+                return Optional.empty();
+            }
+            String contentType = response.getHeaders().getContentType() == null
+                    ? "image/jpeg"
+                    : response.getHeaders().getContentType().toString();
+            return Optional.of(new FetchedAsset(contentType, response.getBody()));
+        } catch (Exception e) {
+            log.warn("fetchUploadAsset({}) failed: {}", imageUrl, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    public record FetchedAsset(String contentType, byte[] bytes) {}
 }

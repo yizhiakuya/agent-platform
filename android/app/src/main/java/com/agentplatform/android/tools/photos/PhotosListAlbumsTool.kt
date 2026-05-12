@@ -27,7 +27,7 @@ class PhotosListAlbumsTool(
 
     override val description: String = """
         List device photo albums/buckets. Each album includes its latest photo
-        as a cached display-sized original JPEG cover image, not a thumbnail.
+        as a cached display-sized original JPEG cover asset URL, not a thumbnail.
         Return bucket_id values for photos.list_by_album. Default limit is 30;
         cap is 100.
     """.trimIndent()
@@ -52,6 +52,7 @@ class PhotosListAlbumsTool(
     override val confirmRequired: Boolean = false
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+        val uploader = PhotoAssetUploader(context, mapper)
         val limit = args.path("limit").asInt(30).coerceIn(1, 100)
 
         // Aggregate per bucket — MediaStore has no real GROUP BY surface, so we
@@ -150,11 +151,21 @@ class PhotosListAlbumsTool(
                 null
             }
             if (cover != null) {
-                obj.put("cover_image_b64", cover.b64)
-                obj.put("cover_image_bytes", cover.bytes)
-                obj.put("cover_image_width", cover.width)
-                obj.put("cover_image_height", cover.height)
-                obj.put("cover_image_cache_hit", cover.cacheHit)
+                val upload = uploader.uploadDisplayJpeg(a.coverId, a.name, cover)
+                PhotoAssetUploader.putUploadFields(
+                    obj,
+                    upload,
+                    cover,
+                    imageUrlField = "cover_image_url",
+                    assetIdField = "cover_asset_id",
+                    contentTypeField = "cover_content_type",
+                    bytesField = "cover_image_bytes",
+                    widthField = "cover_image_width",
+                    heightField = "cover_image_height",
+                    cacheHitField = "cover_image_cache_hit",
+                    assetCacheHitField = "cover_asset_cache_hit",
+                    errorField = "cover_upload_error"
+                )
             }
             albums.add(obj)
         }
