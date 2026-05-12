@@ -180,6 +180,7 @@ public class CodexResponsesLoopRunner {
                                     AtomicBoolean cancelled) {
         JsonNode completed = null;
         JsonNode lastResponse = null;
+        ArrayNode outputItems = mapper.createArrayNode();
         for (ServerSentEvent<String> event : client.post()
                 .uri("/v1/responses")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + provider.apiKey())
@@ -208,6 +209,11 @@ public class CodexResponsesLoopRunner {
                     textBuf.append(delta);
                     sink.emit(SseEvent.assistantMessage(mapper, delta));
                 }
+            } else if ("response.output_item.done".equals(type)) {
+                JsonNode item = node.path("item");
+                if (!item.isMissingNode() && !item.isNull()) {
+                    outputItems.add(item.deepCopy());
+                }
             } else if ("error".equals(type) || "response.error".equals(type)) {
                 throw new RuntimeException(streamErrorMessage(node));
             } else if ("response.completed".equals(type)
@@ -216,10 +222,10 @@ public class CodexResponsesLoopRunner {
                     || "response.incomplete".equals(type)) {
                 JsonNode response = node.path("response");
                 if (!response.isMissingNode() && !response.isNull()) {
-                    completed = response;
+                    completed = response.deepCopy();
                     lastResponse = response;
                 } else if (node.has("output") || node.has("output_text") || node.has("status")) {
-                    completed = node;
+                    completed = node.deepCopy();
                     lastResponse = node;
                 }
             } else {
@@ -232,18 +238,31 @@ public class CodexResponsesLoopRunner {
             }
         }
         if (completed != null) {
-            return completed;
+            return withStreamedOutput(completed, outputItems);
         }
         if (lastResponse != null) {
-            return lastResponse;
+            return withStreamedOutput(lastResponse, outputItems);
         }
         if (!textBuf.isEmpty()) {
             ObjectNode fallback = mapper.createObjectNode();
             fallback.put("status", "completed");
             fallback.put("output_text", "");
-            return fallback;
+            return withStreamedOutput(fallback, outputItems);
         }
         return null;
+    }
+
+    private JsonNode withStreamedOutput(JsonNode response, ArrayNode outputItems) {
+        if (!response.isObject() || outputItems == null || outputItems.isEmpty()) {
+            return response;
+        }
+        JsonNode output = response.path("output");
+        if (output.isArray() && !output.isEmpty()) {
+            return response;
+        }
+        ObjectNode copy = (ObjectNode) response.deepCopy();
+        copy.set("output", outputItems.deepCopy());
+        return copy;
     }
 
     private JsonNode parseStreamData(String data) {

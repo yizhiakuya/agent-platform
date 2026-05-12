@@ -179,6 +179,39 @@ class CodexResponsesLoopRunnerTest {
         }
     }
 
+    @Test
+    void runPersistsTextFromOutputItemWhenCompletedResponseOutputIsEmpty() throws Exception {
+        ObjectNode completed = mapper.createObjectNode();
+        completed.put("id", "resp_empty_output");
+        completed.put("status", "completed");
+        completed.set("output", mapper.createArrayNode());
+
+        ObjectNode message = completedMessageItem("streamed text");
+        List<List<JsonNode>> streams = List.of(List.of(
+                streamEvent("response.output_text.delta", "delta", "streamed text"),
+                streamEvent("response.output_item.done", "item", message),
+                streamEvent("response.completed", "response", completed)
+        ));
+
+        try (ResponsesStubServer server = ResponsesStubServer.fromStreams(mapper, streams)) {
+            CodexResponsesLoopRunner runner = runner(memory(false));
+
+            RunResult result = runner.run(
+                    new ConfiguredProvider("test", "codex-responses", null, server.baseUrl(), "token", "model"),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new ResolvedTools(List.of(), Map.of()),
+                    "system",
+                    List.of(),
+                    "say text",
+                    event -> {
+                    },
+                    new SseEmitter());
+
+            assertThat(result.assistantText()).isEqualTo("streamed text");
+        }
+    }
+
     private CodexResponsesLoopRunner runner(AgentProperties.Memory memory) {
         return runner(memory, new ServerToolRegistry(List.of(), mapper), WebClient.builder());
     }
@@ -343,16 +376,22 @@ class CodexResponsesLoopRunnerTest {
         completed.put("id", "resp_1");
         completed.put("status", "completed");
         ArrayNode output = mapper.createArrayNode();
+        output.add(completedMessageItem(value));
+        completed.set("output", output);
+        return completed;
+    }
+
+    private ObjectNode completedMessageItem(String value) {
         ObjectNode message = mapper.createObjectNode();
         message.put("type", "message");
+        message.put("status", "completed");
+        message.put("role", "assistant");
         ArrayNode content = mapper.createArrayNode();
         ObjectNode text = mapper.createObjectNode();
         text.put("type", "output_text");
         text.put("text", value);
         content.add(text);
         message.set("content", content);
-        output.add(message);
-        completed.set("output", output);
-        return completed;
+        return message;
     }
 }
