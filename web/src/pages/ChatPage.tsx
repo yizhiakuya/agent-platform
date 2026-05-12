@@ -519,22 +519,36 @@ export default function ChatPage() {
               工具。
             </div>
           )}
-          {timelineItems.map(item => item.kind === 'event' ? (
-            <Bubble
-              key={`${item.event.type}-${item.index}`}
-              ev={item.event}
-              nextToolResult={matchingToolResult(events, item.index)}
-              onOpenImage={setLightboxSrc}
-            />
-          ) : (
-            <ProcessPanel
-              key={`process-${item.startIndex}`}
-              item={item}
-              busy={busy && item.endIndex >= events.length - 1}
-              now={now}
-              onOpenImage={setLightboxSrc}
-            />
-          ))}
+          {timelineItems.map(item => {
+            if (item.kind === 'event') {
+              return (
+                <Bubble
+                  key={`${item.event.type}-${item.index}`}
+                  ev={item.event}
+                  nextToolResult={matchingToolResult(events, item.index)}
+                  onOpenImage={setLightboxSrc}
+                />
+              );
+            }
+            if (item.kind === 'media_result') {
+              return (
+                <VisibleToolResult
+                  key={`media-${item.event.data?.tool}-${item.index}`}
+                  ev={item.event}
+                  onOpenImage={setLightboxSrc}
+                />
+              );
+            }
+            return (
+              <ProcessPanel
+                key={`process-${item.startIndex}`}
+                item={item}
+                busy={busy && item.endIndex >= events.length - 1}
+                now={now}
+                onOpenImage={setLightboxSrc}
+              />
+            );
+          })}
           {busy && <ThinkingRow startedAt={turnStartedAtRef.current} now={now} />}
         </div>
 
@@ -584,7 +598,8 @@ type OpenImage = (src: string) => void;
 
 type TimelineItem =
   | { kind: 'event'; event: ChatEvent; index: number }
-  | { kind: 'process'; events: ChatEvent[]; startIndex: number; endIndex: number };
+  | { kind: 'process'; events: ChatEvent[]; startIndex: number; endIndex: number }
+  | { kind: 'media_result'; event: ChatEvent; index: number };
 
 function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
   const items: TimelineItem[] = [];
@@ -619,6 +634,7 @@ function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
         startIndex: segmentStart,
         endIndex: segmentStart + segment.length - 1
       });
+      pushVisibleToolResults(items, segment, segmentStart);
       continue;
     }
 
@@ -630,6 +646,7 @@ function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
         startIndex: segmentStart,
         endIndex: segmentStart + finalAssistantOffset - 1
       });
+      pushVisibleToolResults(items, processEvents, segmentStart);
     }
     items.push({
       kind: 'event',
@@ -646,6 +663,7 @@ function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
           startIndex: segmentStart + finalAssistantOffset + 1,
           endIndex: segmentStart + segment.length - 1
         });
+        pushVisibleToolResults(items, trailing, segmentStart + finalAssistantOffset + 1);
       } else {
         trailing.forEach((event, offset) => {
           items.push({ kind: 'event', event, index: segmentStart + finalAssistantOffset + 1 + offset });
@@ -654,6 +672,14 @@ function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
     }
   }
   return items;
+}
+
+function pushVisibleToolResults(items: TimelineItem[], events: ChatEvent[], startIndex: number) {
+  events.forEach((event, offset) => {
+    if (shouldShowToolResultOutsideProcess(event)) {
+      items.push({ kind: 'media_result', event, index: startIndex + offset });
+    }
+  });
 }
 
 function isToolActivityEvent(ev: ChatEvent | undefined) {
@@ -746,6 +772,18 @@ function hasRicherToolHistory(cached: ChatEvent[], loaded: ChatEvent[]) {
   const cachedRenderable = cached.some(ev => ev.type === 'tool_call_result' && isRenderableToolResult(ev));
   const loadedRenderable = loaded.some(ev => ev.type === 'tool_call_result' && isRenderableToolResult(ev));
   return cachedRenderable && !loadedRenderable;
+}
+
+function shouldShowToolResultOutsideProcess(ev: ChatEvent) {
+  if (ev.type !== 'tool_call_result') return false;
+  const tool = ev.data?.tool;
+  const result = ev.data?.result;
+  return (
+    (isPhotoListTool(tool) && hasAnyPhotoImage(result?.photos)) ||
+    (tool === 'photos.semantic_search' && (Boolean(semanticPrimaryPhoto(result)) || hasAnyPhotoImage(result?.photos))) ||
+    (tool === 'photos.get_full' && hasPhotoImage(result)) ||
+    (tool === 'videos.list_recent' && hasAnyVideoPreview(result?.videos))
+  );
 }
 
 function isRenderableToolResult(ev: ChatEvent) {
@@ -1049,6 +1087,28 @@ function ToolCallDetail({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: Chat
       </div>
     </div>
   );
+}
+
+function VisibleToolResult({ ev, onOpenImage }: { ev: ChatEvent; onOpenImage: OpenImage }) {
+  const tool = String(ev.data?.tool ?? 'tool');
+  return (
+    <div className="flex justify-start">
+      <div className="w-full max-w-3xl rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="mb-2 flex items-center gap-2 text-xs text-slate-500">
+          <span className="h-2 w-2 rounded-full bg-blue-500" />
+          <span className="font-medium text-slate-600">{toolResultTitle(tool)}</span>
+          <code className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">{tool}</code>
+        </div>
+        <ToolResult tool={tool} result={ev.data?.result} onOpenImage={onOpenImage} />
+      </div>
+    </div>
+  );
+}
+
+function toolResultTitle(tool: string) {
+  if (isPhotoListTool(tool) || tool === 'photos.semantic_search' || tool === 'photos.get_full') return '图片结果';
+  if (tool === 'videos.list_recent') return '视频结果';
+  return '工具结果';
 }
 
 function Bubble({
@@ -1369,6 +1429,13 @@ function semanticPrimaryPhoto(result: any) {
 
 function hasAnyPhotoImage(items: unknown) {
   return Array.isArray(items) && items.some(item => hasPhotoImage(item));
+}
+
+function hasAnyVideoPreview(items: unknown) {
+  return Array.isArray(items) && items.some(item => {
+    const v = asRecord(item);
+    return Boolean(imageDataUrl(v?.thumb_b64 ?? v?.thumbnail_b64 ?? v?.cover_thumb_b64));
+  });
 }
 
 function hasPhotoImage(photo: unknown) {

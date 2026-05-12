@@ -173,7 +173,7 @@ Web at `http://localhost` (or whatever `WEB_PUBLIC_URL` is); first user register
 
 - Before deployment or image builds, run `git status --short` and keep the worktree clean. If there are pending changes, either commit them in a named branch or intentionally stash/park them before building, so a deploy never accidentally includes unrelated dirty worktree changes.
 - Before editing code symbols, follow `AGENTS.md`: run GitNexus impact analysis and warn if risk is HIGH/CRITICAL. Before committing, run `gitnexus_detect_changes()`.
-- Web changes: run `npm run build` in `web/`.
+- Web changes: run `npm run build` in `web/`. When online deployment is available, prefer deploying and testing the live web environment directly after a successful build; use local mocked previews only when live validation is unavailable or risk isolation is needed.
 - Android ADB path on this machine is `C:\Users\admin\AppData\Local\Android\Sdk\platform-tools\adb.exe`; `adb` is not necessarily on PATH.
 - For Xiaomi/HyperOS background-launch blocks, grant standard appops plus MIUI private numeric ops for `com.agentplatform.android`: `10004 10017 10018 10020 10021 10022 10045`. Do not use the displayed names like `MIUIOP(10021)` in `appops set`; they are only display labels and Android rejects them.
 - Android builds should use process-local `JAVA_HOME=C:\Users\admin\.jdks\ms-21.0.10`. Do not use `C:\Users\admin\.jdks\openjdk-26`; Gradle/AGP fails with a bare `* What went wrong: 26`.
