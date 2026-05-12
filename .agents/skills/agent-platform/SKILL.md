@@ -143,6 +143,8 @@ Add a new interceptor by creating a `@Component implements ToolPreInterceptor` â
 17. **Health checks need readiness retry.** `docker compose up -d --force-recreate agent-service` can return before Spring Boot is listening on `8082`; a single immediate `curl` may falsely fail. Use a short retry loop against `/actuator/health` before treating deploy as broken.
 18. **Remote base64 scripts must be literal before encoding.** In PowerShell, use a single-quoted here-string (`@' ... '@`) for remote bash. A double-quoted here-string expands remote `$(seq ...)` and `$VAR` locally, corrupting the script before it reaches megumin.
 19. **Container health ports differ by service.** `agent-service` listens on 8082, but `chat-service` currently listens on 8084 in production; do not health-check chat on 8083.
+20. **HyperOS/MIUI private appops must be set by numeric op.** `adb shell appops get com.agentplatform.android` prints entries like `MIUIOP(10021)`, but `appops set ... 'MIUIOP(10021)' allow` fails with `Unknown operation string`. Use the numeric op instead, e.g. `adb shell appops set --user 0 com.agentplatform.android 10021 allow`, then verify with a real hub `ui.open_app` call.
+21. **`ui.open_app` can restore the last app page, not a cold-start home page.** Meituan Waimai (`com.sankuai.meituan.takeoutnew`) restored `GlobalSearchActivity` because the user had previously left it on a search results page. Always call `ui.dump_tree` after opening an app and classify the current page before deciding the next step; never assume the entry page.
 
 ## Critical files (read these first when picking up the project)
 
@@ -169,11 +171,15 @@ Web at `http://localhost` (or whatever `WEB_PUBLIC_URL` is); first user register
 
 ## Validation checklist
 
+- Before deployment or image builds, run `git status --short` and keep the worktree clean. If there are pending changes, either commit them in a named branch or intentionally stash/park them before building, so a deploy never accidentally includes unrelated dirty worktree changes.
 - Before editing code symbols, follow `AGENTS.md`: run GitNexus impact analysis and warn if risk is HIGH/CRITICAL. Before committing, run `gitnexus_detect_changes()`.
 - Web changes: run `npm run build` in `web/`.
 - Android ADB path on this machine is `C:\Users\admin\AppData\Local\Android\Sdk\platform-tools\adb.exe`; `adb` is not necessarily on PATH.
+- For Xiaomi/HyperOS background-launch blocks, grant standard appops plus MIUI private numeric ops for `com.agentplatform.android`: `10004 10017 10018 10020 10021 10022 10045`. Do not use the displayed names like `MIUIOP(10021)` in `appops set`; they are only display labels and Android rejects them.
 - Android builds should use process-local `JAVA_HOME=C:\Users\admin\.jdks\ms-21.0.10`. Do not use `C:\Users\admin\.jdks\openjdk-26`; Gradle/AGP fails with a bare `* What went wrong: 26`.
 - The Android Gradle wrapper lives under `android/`, not the repository root. Run `.\gradlew.bat assembleDebug` with `workdir=D:\agent-platform\android`.
+- APK install preference: when the user is outside the home/LAN environment, provide the current public APK URL `https://agentdl.rainaki.top/agent-platform-debug.apk` after publishing `build/apk-publish/agent-platform-debug.apk`. When the user is at home/on the LAN, remind them to install with ADB instead.
+- Mobile voice/local model direction was removed at the user's request. Do not re-add Qwen/Gemma on-device LLM routing, model download UI, microphone permission, or Voice Agent UI unless the user explicitly asks to bring that feature back.
 - For quote-heavy Android shell edits, pipe a script into `adb shell run-as com.agentplatform.android sh`; PowerShell plus inline `adb shell ... sh -c` quoting is fragile and can corrupt commands.
 - Agent-service targeted tests from Windows/Docker:
 
