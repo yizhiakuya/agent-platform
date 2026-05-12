@@ -1532,6 +1532,7 @@ function hasPhotoImage(photo: unknown) {
 function photoImageSources(photo: unknown) {
   const p = asRecord(photo);
   if (!p) return { big: null, small: null };
+  const uploadUrl = uploadAssetUrl(p.asset_id ?? p.assetId);
   const bigUrl = firstImageUrl(
     p.image_url,
     p.asset_url,
@@ -1540,6 +1541,7 @@ function photoImageSources(photo: unknown) {
     p.cover_url,
     p.imageUrl,
     p.assetUrl,
+    uploadUrl,
     p.coverImageUrl,
     p.coverUrl
   );
@@ -1564,6 +1566,15 @@ function photoImageSources(photo: unknown) {
   const big = bigUrl ?? bigB64;
   const small = smallUrl ?? big ?? imageDataUrl(p.thumb_b64 ?? p.thumbnail_b64 ?? p.cover_thumb_b64);
   return { big, small };
+}
+
+function uploadAssetUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const clean = value.trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clean)) {
+    return null;
+  }
+  return `/api/uploads/photos/${clean}`;
 }
 
 function formatPhotoDate(value: unknown) {
