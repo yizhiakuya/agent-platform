@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api, MessageDto, SessionDto } from '../api/client';
@@ -300,6 +300,7 @@ export default function ChatPage() {
   }
 
   const activeSession = sessionId ? sessions.find(s => s.id === sessionId) : null;
+  const timelineItems = useMemo(() => buildTimelineItems(events), [events]);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)] gap-4 h-[calc(100vh-100px)] min-h-[560px]">
@@ -518,11 +519,19 @@ export default function ChatPage() {
               工具。
             </div>
           )}
-          {events.map((e, i) => (
+          {timelineItems.map(item => item.kind === 'event' ? (
             <Bubble
-              key={`${e.type}-${i}`}
-              ev={e}
-              nextToolResult={matchingToolResult(events, i)}
+              key={`${item.event.type}-${item.index}`}
+              ev={item.event}
+              nextToolResult={matchingToolResult(events, item.index)}
+              onOpenImage={setLightboxSrc}
+            />
+          ) : (
+            <ProcessPanel
+              key={`process-${item.startIndex}`}
+              item={item}
+              busy={busy && item.endIndex >= events.length - 1}
+              now={now}
               onOpenImage={setLightboxSrc}
             />
           ))}
@@ -572,6 +581,94 @@ export default function ChatPage() {
 }
 
 type OpenImage = (src: string) => void;
+
+type TimelineItem =
+  | { kind: 'event'; event: ChatEvent; index: number }
+  | { kind: 'process'; events: ChatEvent[]; startIndex: number; endIndex: number };
+
+function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
+  const items: TimelineItem[] = [];
+  let i = 0;
+  while (i < events.length) {
+    const ev = events[i];
+    if (ev.type === 'user_message') {
+      items.push({ kind: 'event', event: ev, index: i });
+      i += 1;
+      continue;
+    }
+
+    const segmentStart = i;
+    const segment: ChatEvent[] = [];
+    while (i < events.length && events[i].type !== 'user_message') {
+      segment.push(events[i]);
+      i += 1;
+    }
+
+    if (!segment.some(isToolActivityEvent)) {
+      segment.forEach((event, offset) => {
+        items.push({ kind: 'event', event, index: segmentStart + offset });
+      });
+      continue;
+    }
+
+    const finalAssistantOffset = finalAssistantIndex(segment);
+    if (finalAssistantOffset < 0) {
+      items.push({
+        kind: 'process',
+        events: segment,
+        startIndex: segmentStart,
+        endIndex: segmentStart + segment.length - 1
+      });
+      continue;
+    }
+
+    const processEvents = segment.slice(0, finalAssistantOffset);
+    if (processEvents.length > 0) {
+      items.push({
+        kind: 'process',
+        events: processEvents,
+        startIndex: segmentStart,
+        endIndex: segmentStart + finalAssistantOffset - 1
+      });
+    }
+    items.push({
+      kind: 'event',
+      event: segment[finalAssistantOffset],
+      index: segmentStart + finalAssistantOffset
+    });
+
+    const trailing = segment.slice(finalAssistantOffset + 1);
+    if (trailing.length > 0) {
+      if (trailing.some(isToolActivityEvent)) {
+        items.push({
+          kind: 'process',
+          events: trailing,
+          startIndex: segmentStart + finalAssistantOffset + 1,
+          endIndex: segmentStart + segment.length - 1
+        });
+      } else {
+        trailing.forEach((event, offset) => {
+          items.push({ kind: 'event', event, index: segmentStart + finalAssistantOffset + 1 + offset });
+        });
+      }
+    }
+  }
+  return items;
+}
+
+function isToolActivityEvent(ev: ChatEvent | undefined) {
+  return ev?.type === 'tool_call_started' || ev?.type === 'tool_call_result';
+}
+
+function finalAssistantIndex(events: ChatEvent[]) {
+  let lastToolOffset = -1;
+  let lastAssistantOffset = -1;
+  events.forEach((ev, index) => {
+    if (isToolActivityEvent(ev)) lastToolOffset = index;
+    if (ev.type === 'assistant_message') lastAssistantOffset = index;
+  });
+  return lastAssistantOffset > lastToolOffset ? lastAssistantOffset : -1;
+}
 
 function messageToEvent(m: MessageDto): ChatEvent | null {
   const metadata = asRecord(m.metadata);
@@ -720,7 +817,67 @@ function elapsedSince(startedAt: number, now: number) {
   return formatDuration(Math.max(0, now - startedAt)) || '0s';
 }
 
-function matchingToolResult(events: ChatEvent[], index: number) {
+function processStartTime(item: Extract<TimelineItem, { kind: 'process' }>) {
+  for (const ev of item.events) {
+    const value = ev.data?.createdAt;
+    const time = typeof value === 'string' ? new Date(value).getTime() : NaN;
+    if (Number.isFinite(time)) return time;
+  }
+  return null;
+}
+
+function processDuration(item: Extract<TimelineItem, { kind: 'process' }>, now: number, isActive: boolean) {
+  const start = processStartTime(item);
+  if (!start) return '';
+  if (isActive) return elapsedSince(start, now);
+
+  for (let i = item.events.length - 1; i >= 0; i -= 1) {
+    const value = item.events[i].data?.createdAt;
+    const end = typeof value === 'string' ? new Date(value).getTime() : NaN;
+    if (Number.isFinite(end) && end >= start) {
+      return formatDuration(end - start);
+    }
+  }
+  return '';
+}
+
+function processStatus(item: Extract<TimelineItem, { kind: 'process' }>) {
+  const hasPendingCall = item.events.some((ev, index) => {
+    if (ev.type !== 'tool_call_started') return false;
+    const result = findResultForToolCall(item.events, index);
+    return !result;
+  });
+  const hasError = item.events.some(ev => ev.type === 'tool_call_result' && hasToolError(ev.data?.result));
+  if (hasError) return 'failed';
+  if (hasPendingCall) return 'running';
+  return 'succeeded';
+}
+
+function processToolNames(item: Extract<TimelineItem, { kind: 'process' }>) {
+  const names: string[] = [];
+  item.events.forEach(ev => {
+    if (ev.type !== 'tool_call_started') return;
+    const name = String(ev.data?.tool ?? 'tool');
+    if (!names.includes(name)) names.push(name);
+  });
+  return names;
+}
+
+function processSummary(item: Extract<TimelineItem, { kind: 'process' }>) {
+  const notes = item.events
+    .filter(ev => ev.type === 'assistant_message')
+    .map(ev => String(ev.data?.content ?? '').trim())
+    .filter(Boolean);
+  const lastNote = notes[notes.length - 1];
+  if (lastNote) return lastNote.replace(/\s+/g, ' ');
+
+  const names = processToolNames(item);
+  if (names.length === 0) return '';
+  if (names.length === 1) return names[0];
+  return `${names[0]} 等 ${names.length} 种工具`;
+}
+
+function findResultForToolCall(events: ChatEvent[], index: number) {
   const current = events[index];
   if (current?.type !== 'tool_call_started') return null;
   const tool = current.data?.tool;
@@ -740,6 +897,10 @@ function matchingToolResult(events: ChatEvent[], index: number) {
     }
   }
   return null;
+}
+
+function matchingToolResult(events: ChatEvent[], index: number) {
+  return findResultForToolCall(events, index);
 }
 
 function hasToolError(result: unknown) {
@@ -771,6 +932,121 @@ function ToolCallRow({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: ChatEve
       <span className={`inline-block w-2 h-2 rounded-full ${dotClass}`} />
       {label} <code className="bg-slate-100 px-1 rounded">{ev.data?.tool}</code>
       {ev.data?.args && <span className="truncate">({JSON.stringify(ev.data.args)})</span>}
+    </div>
+  );
+}
+
+function ProcessPanel({
+  item,
+  busy,
+  now,
+  onOpenImage
+}: {
+  item: Extract<TimelineItem, { kind: 'process' }>;
+  busy: boolean;
+  now: number;
+  onOpenImage: OpenImage;
+}) {
+  const status = processStatus(item);
+  const active = busy && status === 'running';
+  const duration = processDuration(item, now, active);
+  const toolCalls = item.events.filter(ev => ev.type === 'tool_call_started');
+  const toolResults = item.events.filter(ev => ev.type === 'tool_call_result');
+  const names = processToolNames(item);
+  const summary = processSummary(item);
+  const visibleNames = names.slice(0, 3);
+  const overflowNames = names.length - visibleNames.length;
+  const statusText = active
+    ? '处理中'
+    : status === 'failed'
+      ? '处理遇到问题'
+      : '已处理';
+  const dotClass = active
+    ? 'bg-amber-400 animate-pulse'
+    : status === 'failed'
+      ? 'bg-red-500'
+      : 'bg-emerald-500';
+
+  return (
+    <details className="group/process rounded-md border border-slate-200 bg-white open:bg-slate-50/60">
+      <summary className="flex cursor-pointer list-none items-start gap-2 px-3 py-2 text-xs text-slate-500 marker:hidden">
+        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
+        <span className="grid min-w-0 flex-1 gap-1">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-medium text-slate-600">{statusText}</span>
+            {duration && <span>{duration}</span>}
+            <span>{toolCalls.length} 次调用</span>
+            {toolResults.length > 0 && <span>{toolResults.length} 个结果</span>}
+            {visibleNames.map(name => (
+              <code key={name} className="rounded bg-slate-100 px-1 py-0.5 text-[11px] text-slate-600">
+                {name}
+              </code>
+            ))}
+            {overflowNames > 0 && <span>+{overflowNames}</span>}
+          </span>
+          {summary && <span className="min-w-0 truncate text-slate-500">{summary}</span>}
+        </span>
+        <span className="mt-0.5 shrink-0 text-slate-400 transition group-open/process:rotate-90">›</span>
+      </summary>
+      <div className="border-t border-slate-100 px-3 py-2">
+        <div className="space-y-2">
+          {item.events.map((ev, index) => ev.type === 'tool_call_started' ? (
+            <ToolCallDetail
+              key={`call-${item.startIndex}-${index}`}
+              ev={ev}
+              resultEvent={findResultForToolCall(item.events, index)}
+            />
+          ) : ev.type === 'tool_call_result' ? (
+            <div key={`result-${item.startIndex}-${index}`} className="rounded-md border border-slate-200 bg-white p-2">
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-600">
+                <span className="text-slate-400">工具</span>
+                <code className="rounded bg-slate-100 px-1.5 py-0.5">{ev.data?.tool}</code>
+                <span>返回结果</span>
+              </div>
+              <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} />
+            </div>
+          ) : ev.type === 'assistant_message' ? (
+            <div key={`note-${item.startIndex}-${index}`} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+              <MarkdownMessage content={ev.data?.content ?? ''} />
+            </div>
+          ) : (
+            <Bubble
+              key={`event-${item.startIndex}-${index}`}
+              ev={ev}
+              nextToolResult={findResultForToolCall(item.events, index)}
+              onOpenImage={onOpenImage}
+            />
+          ))}
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function ToolCallDetail({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: ChatEvent | null }) {
+  const status = resultEvent
+    ? hasToolError(resultEvent.data?.result) ? 'failed' : 'succeeded'
+    : 'running';
+  const dotClass = status === 'running'
+    ? 'bg-amber-400 animate-pulse'
+    : status === 'failed'
+      ? 'bg-red-500'
+      : 'bg-emerald-500';
+  const label = status === 'running'
+    ? '调用中'
+    : status === 'failed'
+      ? '调用失败'
+      : '调用完成';
+  const args = ev.data?.args;
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-2 text-xs text-slate-600">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
+        <span className="shrink-0">{label}</span>
+        <code className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700">{ev.data?.tool}</code>
+        {args && <span className="min-w-0 truncate text-slate-400">({JSON.stringify(args)})</span>}
+      </div>
     </div>
   );
 }
