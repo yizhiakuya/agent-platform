@@ -31,6 +31,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -60,15 +61,48 @@ class ChatServiceProviderFailoverTest {
         assertThat(codexCalls.get()).isZero();
     }
 
+    @Test
+    void specifiedDeviceWithoutToolsShortCircuitsBeforeProviderCall() throws Exception {
+        AtomicInteger codexCalls = new AtomicInteger();
+        AgentLoopRunner agentLoop = mock(AgentLoopRunner.class);
+        ChatService service = service(codexCalls, agentLoop, new ResolvedTools(List.of(), Map.of()));
+
+        Method method = ChatService.class.getDeclaredMethod(
+                "handleWithLlm",
+                UUID.class,
+                UUID.class,
+                ChatRequest.class,
+                SseEmitter.class);
+        method.setAccessible(true);
+        method.invoke(
+                service,
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new ChatRequest("open wechat", null, UUID.randomUUID()),
+                new SseEmitter());
+
+        assertThat(codexCalls.get()).isZero();
+        verifyNoInteractions(agentLoop);
+    }
+
     private ChatService service(AtomicInteger codexCalls) {
+        return service(codexCalls, new StartedThenFailingAgentLoopRunner(mapper, props()),
+                new ResolvedTools(List.of(), Map.of()));
+    }
+
+    private ChatService service(AtomicInteger codexCalls,
+                                AgentLoopRunner agentLoop,
+                                ResolvedTools resolvedTools) {
         InternalChatFeignClient chatClient = mock(InternalChatFeignClient.class);
         AgentProperties props = props();
         SkillLoadCallback skillLoad = new SkillLoadCallback(new SkillRegistry(chatClient), mapper);
         ServerToolRegistry serverTools = new ServerToolRegistry(List.of(new MarkerTool()), mapper);
         ContextAssembler contextAssembler = mock(ContextAssembler.class);
         RemoteDeviceToolCallbackProvider toolProvider = mock(RemoteDeviceToolCallbackProvider.class);
-        when(toolProvider.getForUser(org.mockito.ArgumentMatchers.any()))
-                .thenReturn(new ResolvedTools(List.of(), Map.of()));
+        when(toolProvider.getForUser(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(resolvedTools);
         when(contextAssembler.assemble(
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
@@ -99,7 +133,7 @@ class ChatServiceProviderFailoverTest {
                 serverTools,
                 mock(EmbeddingService.class),
                 mock(MemoryExtractor.class),
-                new StartedThenFailingAgentLoopRunner(mapper, props),
+                agentLoop,
                 new CountingCodexRunner(mapper, props, codexCalls),
                 contextAssembler,
                 new ToolArtifactExtractor(mapper),

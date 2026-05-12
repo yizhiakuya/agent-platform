@@ -74,15 +74,22 @@ public class RemoteDeviceToolCallbackProvider {
      * hasn't yet reported a manifest.
      */
     public ResolvedTools getForUser(UUID userId) {
+        return getForUser(userId, null);
+    }
+
+    public ResolvedTools getForUser(UUID userId, UUID preferredDeviceId) {
         List<OnlineDeviceDto> online = deviceHubClient.listOnlineByUser(userId);
         if (online == null || online.isEmpty()) {
             return new ResolvedTools(List.of(), Map.of());
         }
-        OnlineDeviceDto first = online.get(0);
-        if (first.manifest() == null || first.manifest().tools() == null) {
+        OnlineDeviceDto selected = selectDevice(online, preferredDeviceId);
+        if (selected == null) {
             return new ResolvedTools(List.of(), Map.of());
         }
-        List<ToolSpec> specs = first.manifest().tools();
+        if (selected.manifest() == null || selected.manifest().tools() == null) {
+            return new ResolvedTools(List.of(), Map.of());
+        }
+        List<ToolSpec> specs = selected.manifest().tools();
         List<Tool> defs = new ArrayList<>(specs.size() + 1);
         Map<String, RemoteToolCallback> dispatch = new HashMap<>((specs.size() + 1) * 2);
         boolean hasSemanticCandidates = false;
@@ -92,18 +99,28 @@ public class RemoteDeviceToolCallbackProvider {
                 continue;
             }
             RemoteToolCallback cb = new RemoteToolCallback(
-                    first.deviceId(), userId, spec, dispatcher, mapper,
+                    selected.deviceId(), userId, spec, dispatcher, mapper,
                     preInterceptors, events, visionToolResults);
             defs.add(cb.toAnthropicTool());
             dispatch.put(cb.name(), cb);
         }
         if (hasSemanticCandidates) {
             SemanticPhotoSearchCallback cb = new SemanticPhotoSearchCallback(
-                    first.deviceId(), userId, dispatcher, mapper, embeddingService,
+                    selected.deviceId(), userId, dispatcher, mapper, embeddingService,
                     photoEmbeddingService, internalChatClient, events, visionToolResults, props);
             defs.add(cb.toAnthropicTool());
             dispatch.put(cb.name(), cb);
         }
         return new ResolvedTools(defs, dispatch);
+    }
+
+    private OnlineDeviceDto selectDevice(List<OnlineDeviceDto> online, UUID preferredDeviceId) {
+        if (preferredDeviceId == null) {
+            return online.get(0);
+        }
+        return online.stream()
+                .filter(d -> preferredDeviceId.equals(d.deviceId()))
+                .findFirst()
+                .orElse(null);
     }
 }

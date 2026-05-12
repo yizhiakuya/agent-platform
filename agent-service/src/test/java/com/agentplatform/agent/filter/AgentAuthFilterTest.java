@@ -38,7 +38,6 @@ class AgentAuthFilterTest {
         assertThat(res.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
         assertThat(PrincipalContext.current()).isNull();
     }
-
     private static JwtUtil jwt() {
         String secret = Base64.getEncoder().encodeToString(
                 "0123456789abcdef0123456789abcdef".getBytes(StandardCharsets.UTF_8));

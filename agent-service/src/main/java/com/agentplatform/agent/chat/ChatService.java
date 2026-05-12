@@ -156,7 +156,14 @@ public class ChatService {
     /* -------------------- real LLM path -------------------- */
 
     private void handleWithLlm(UUID userId, UUID sessionId, ChatRequest req, SseEmitter emitter) {
-        ResolvedTools resolved = toolProvider.getForUser(userId);
+        ResolvedTools resolved = toolProvider.getForUser(userId, req.deviceId());
+        if (req.deviceId() != null && resolved.definitions().isEmpty()) {
+            log.info("Requested device {} has no online tools for user {}", req.deviceId(), userId);
+            safeSend(emitter, SseEvent.error(mapper,
+                    "Target device is not connected yet, or it has not reported its tool manifest."));
+            emitter.complete();
+            return;
+        }
         if (resolved.definitions().isEmpty() && serverToolRegistry.toAnthropicTools().isEmpty()) {
             // No tools registered yet (no real device bound). Fall back to the
             // mock path so we still emit a useful SSE response —
