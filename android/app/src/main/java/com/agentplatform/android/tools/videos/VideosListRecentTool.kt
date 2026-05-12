@@ -76,8 +76,8 @@ class VideosListRecentTool(
     override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
         val limit = args.path("limit").asInt(10).coerceIn(1, 30)
         val nameContains = args.path("name_contains").asText("").trim().takeIf { it.isNotEmpty() }
-        val dateAfter = args.path("date_after").let { if (it.isNumber) it.asLong() else null }
-        val dateBefore = args.path("date_before").let { if (it.isNumber) it.asLong() else null }
+        val dateAfter = args.path("date_after").let { if (it.isNumber && it.asLong() > 0L) it.asLong() else null }
+        val dateBefore = args.path("date_before").let { if (it.isNumber && it.asLong() > 0L) it.asLong() else null }
 
         val clauses = mutableListOf<String>()
         val params = mutableListOf<String>()

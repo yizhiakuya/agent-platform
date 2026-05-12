@@ -646,13 +646,13 @@ function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
         startIndex: segmentStart,
         endIndex: segmentStart + finalAssistantOffset - 1
       });
-      pushVisibleToolResults(items, processEvents, segmentStart);
     }
     items.push({
       kind: 'event',
       event: segment[finalAssistantOffset],
       index: segmentStart + finalAssistantOffset
     });
+    pushVisibleToolResults(items, processEvents, segmentStart);
 
     const trailing = segment.slice(finalAssistantOffset + 1);
     if (trailing.length > 0) {
@@ -782,7 +782,7 @@ function shouldShowToolResultOutsideProcess(ev: ChatEvent) {
     (isPhotoListTool(tool) && hasAnyPhotoImage(result?.photos)) ||
     (tool === 'photos.semantic_search' && (Boolean(semanticPrimaryPhoto(result)) || hasAnyPhotoImage(result?.photos))) ||
     (tool === 'photos.get_full' && hasPhotoImage(result)) ||
-    (tool === 'videos.list_recent' && hasAnyVideoPreview(result?.videos))
+    (tool === 'videos.list_recent' && Array.isArray(result?.videos))
   );
 }
 
@@ -1256,6 +1256,13 @@ function ToolResult({ tool, result, onOpenImage }: {
   }
 
   if (tool === 'videos.list_recent' && Array.isArray(result?.videos)) {
+    if (result.videos.length === 0) {
+      return (
+        <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+          没查到视频。可能是手机里最近没有视频，或还没授予“读取视频”权限。
+        </div>
+      );
+    }
     return (
       <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
         {result.videos.map((v: any) => {
@@ -1429,13 +1436,6 @@ function semanticPrimaryPhoto(result: any) {
 
 function hasAnyPhotoImage(items: unknown) {
   return Array.isArray(items) && items.some(item => hasPhotoImage(item));
-}
-
-function hasAnyVideoPreview(items: unknown) {
-  return Array.isArray(items) && items.some(item => {
-    const v = asRecord(item);
-    return Boolean(imageDataUrl(v?.thumb_b64 ?? v?.thumbnail_b64 ?? v?.cover_thumb_b64));
-  });
 }
 
 function hasPhotoImage(photo: unknown) {

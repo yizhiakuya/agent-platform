@@ -57,6 +57,27 @@ class PhotoToolArgsSanitizerTest {
         assertEquals(0, out.path("date_after").asInt());
     }
 
+    @Test
+    void dropsEmptyFiltersFromVideoListTool() {
+        ObjectNode args = mapper.createObjectNode();
+        args.put("limit", 6);
+        args.put("name_contains", "");
+        args.put("date_after", 0);
+        args.put("date_before", 0);
+
+        JsonNode out = sanitizer.before(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                spec("videos.list_recent"),
+                args,
+                Map.of());
+
+        assertEquals(6, out.path("limit").asInt());
+        assertFalse(out.has("name_contains"));
+        assertFalse(out.has("date_after"));
+        assertFalse(out.has("date_before"));
+    }
+
     private ToolSpec spec(String name) {
         return new ToolSpec(name, "test", mapper.createObjectNode(), false);
     }

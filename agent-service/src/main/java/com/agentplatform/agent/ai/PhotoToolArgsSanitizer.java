@@ -12,7 +12,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Normalizes common LLM default-value mistakes before photo tools hit Android.
+ * Normalizes common LLM default-value mistakes before media tools hit Android.
  */
 @Component
 @Order(10)
@@ -22,7 +22,8 @@ public class PhotoToolArgsSanitizer implements ToolPreInterceptor {
             "photos.list_recent",
             "photos.list_by_album",
             "photos.recent_screenshots",
-            "photos.semantic_candidates");
+            "photos.semantic_candidates",
+            "videos.list_recent");
     private static final Set<String> EMPTY_STRING_FIELDS = Set.of(
             "bucket_id",
             "name_contains");
