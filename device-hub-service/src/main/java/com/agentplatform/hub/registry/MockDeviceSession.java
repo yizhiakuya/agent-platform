@@ -24,8 +24,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * Network-free mock session. Whenever {@link #send} receives a
  * {@link JsonRpcMethods#TOOL_CALL} request, it schedules a fake successful
  * result {@code fakeLatencyMs} later, completing the corresponding callId in
- * {@link PendingCallRegistry}. Lets PR 5 exercise the controller's
- * async/timeout/cancel paths without a real Android device.
+ * {@link PendingCallRegistry}. This keeps controller async/timeout/cancel
+ * paths testable without a real Android device.
  */
 public class MockDeviceSession implements DeviceSession {
 

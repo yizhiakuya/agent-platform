@@ -3,8 +3,7 @@ package com.agentplatform.android.core.tool
 import com.fasterxml.jackson.databind.JsonNode
 
 /**
- * Single capability the device exposes. PR 11 adds {@code PhotosListRecentTool}
- * as the first concrete implementation; later PRs add clipboard/notifications/etc.
+ * Single capability the device exposes.
  *
  * <p>All execution is suspending so tool implementations can do {@code IO}
  * dispatches without blocking OkHttp's WebSocket thread.

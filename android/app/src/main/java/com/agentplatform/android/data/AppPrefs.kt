@@ -7,8 +7,8 @@ import android.content.Context
  * which server it's bound to and the long-lived device JWT issued by
  * {@code POST /api/auth/redeem/{token}}.
  *
- * <p>For PR 13 we'll back this with EncryptedSharedPreferences (AndroidX
- * Security) so the JWT isn't readable from a rooted device's filesystem.
+ * <p>This is plain app-private SharedPreferences. A rooted device can still
+ * read it, so do not treat the device JWT as hardware-backed secret storage.
  */
 class AppPrefs(context: Context) {
 

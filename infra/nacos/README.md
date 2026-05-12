@@ -1,9 +1,9 @@
 # Nacos config (placeholder)
 
 Nacos runs in **standalone** mode for development (in-memory derby DB), so no
-extra config is required for PR 1.
+extra config is required for local development.
 
-For PR 13 / PR 14 (production hardening) this directory will hold:
+If production Nacos hardening is needed, this directory can hold:
 
 - `application.properties` — overrides mounted into the container
 - `mysql/` — MySQL schema if you switch from derby to MySQL persistence

@@ -9,7 +9,7 @@ public record HubProperties(
         long toolCallTimeoutMs,
         boolean mockMode,
         long mockFakeLatencyMs,
-        /* WebSocket-specific knobs (PR 6) */
+        /* WebSocket-specific knobs */
         List<String> wsAllowedOrigins,
         long wsHeartbeatIntervalMs
 ) {

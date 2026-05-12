@@ -16,7 +16,7 @@ import java.util.Set;
 /**
  * Cheap PII / payload sanitiser applied to messages on the way into the DB.
  *
- * <p>Two policies in PR 9:
+ * <p>Current policies:
  * <ol>
  *   <li><b>Truncate big bodies</b> — message {@code content} longer than
  *       {@code agent-platform.chat.max-content-bytes} is cut, with a
@@ -26,8 +26,6 @@ import java.util.Set;
  *       thumbnails are intentionally preserved so historical tool bubbles can
  *       render after switching sessions.</li>
  * </ol>
- *
- * <p>PR 13 will extend with regex-based PII rules (phone numbers, GPS coords).
  */
 @Component
 public class PiiSanitizer {

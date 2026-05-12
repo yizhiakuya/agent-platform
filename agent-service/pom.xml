@@ -13,7 +13,7 @@
 
     <artifactId>agent-service</artifactId>
     <name>Agent Service</name>
-    <description>LLM tool routing + SSE streaming. PR 7 = HTTP/SSE plumbing with mock LLM. PR 8 plugs in Spring AI.</description>
+    <description>LLM provider routing, SSE streaming, memory, skills, and remote device-tool orchestration.</description>
 
     <dependencies>
         <dependency>
@@ -33,7 +33,6 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!-- PR 13: expose Prometheus metrics at /actuator/prometheus -->
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>

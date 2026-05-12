@@ -9,8 +9,6 @@ import com.agentplatform.agent.ai.ResolvedTools;
 import com.agentplatform.agent.ai.ServerToolRegistry;
 import com.agentplatform.agent.ai.SessionSummaryRefresher;
 import com.agentplatform.agent.ai.SkillLoadCallback;
-import com.agentplatform.agent.client.DeviceHubClient;
-import com.agentplatform.agent.client.DeviceToolDispatcher;
 import com.agentplatform.agent.client.InternalChatFeignClient;
 import com.agentplatform.agent.config.AgentProperties;
 import com.agentplatform.api.chat.CreateSessionRequest;
@@ -21,8 +19,6 @@ import com.agentplatform.api.chat.QueryFactRequest;
 import com.agentplatform.api.chat.SessionDto;
 import com.agentplatform.api.chat.UpsertSessionArtifactRequest;
 import com.agentplatform.api.chat.WriteMessageRequest;
-import com.agentplatform.api.hub.OnlineDeviceDto;
-import com.agentplatform.protocol.ToolResult;
 import com.anthropic.models.messages.MessageParam;
 import com.anthropic.models.messages.TextBlockParam;
 import com.anthropic.models.messages.ThinkingConfigEnabled;
@@ -49,10 +45,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * SSE-streaming chat orchestrator. Per-request flow:
  * <ol>
  *   <li>Create / resolve {@code sessionId}; persist the user turn.</li>
- *   <li>If a real LLM provider is configured, drive
- *       {@link AgentLoopRunner#run} through the SDK agentic loop;
- *       otherwise fall back to {@link #handleWithMock} (one hard-coded tool
- *       call, dev-only).</li>
+ *   <li>Drive {@link AgentLoopRunner#run} or {@link CodexResponsesLoopRunner#run}
+ *       through the configured provider's agentic loop.</li>
  *   <li>Persist the final assistant text + trigger async memory extraction.</li>
  * </ol>
  *
@@ -73,8 +67,6 @@ public class ChatService {
     /** Hard cap matching MemoryService.MAX_TOP_K — avoids pointless inflation. */
     private static final int MAX_MEMORY_TOP_K = 50;
 
-    private final DeviceHubClient deviceHubClient;
-    private final DeviceToolDispatcher dispatcher;
     private final RemoteDeviceToolCallbackProvider toolProvider;
     private final InternalChatFeignClient chatClientFeign;
     private final ExecutorService chatExecutor;
@@ -91,9 +83,7 @@ public class ChatService {
     private final ToolArtifactExtractor artifactExtractor;
     private final SessionSummaryRefresher sessionSummaryRefresher;
 
-    public ChatService(DeviceHubClient deviceHubClient,
-                       DeviceToolDispatcher dispatcher,
-                       RemoteDeviceToolCallbackProvider toolProvider,
+    public ChatService(RemoteDeviceToolCallbackProvider toolProvider,
                        InternalChatFeignClient chatClientFeign,
                        ExecutorService chatExecutor,
                        ObjectMapper mapper,
@@ -108,8 +98,6 @@ public class ChatService {
                        ContextAssembler contextAssembler,
                        ToolArtifactExtractor artifactExtractor,
                        SessionSummaryRefresher sessionSummaryRefresher) {
-        this.deviceHubClient = deviceHubClient;
-        this.dispatcher = dispatcher;
         this.toolProvider = toolProvider;
         this.chatClientFeign = chatClientFeign;
         this.chatExecutor = chatExecutor;
@@ -141,11 +129,13 @@ public class ChatService {
             send(emitter, SseEvent.userMessage(mapper, req.message()));
             persist(sessionId, userId, MessageRole.USER, req.message(), null);
 
-            if (!chatClients.isEmpty()) {
-                handleWithLlm(userId, sessionId, req, emitter);
-            } else {
-                handleWithMock(userId, sessionId, req, emitter);
+            if (chatClients.isEmpty()) {
+                safeSend(emitter, SseEvent.error(mapper, "模型服务未配置，请配置可用的 LLM provider 后再试。"));
+                emitter.complete();
+                return;
             }
+
+            handleWithLlm(userId, sessionId, req, emitter);
         } catch (Exception e) {
             log.warn("Chat handling failed for user {}", userId, e);
             safeSend(emitter, SseEvent.error(mapper, userFacingGeneralFailureMessage(e)));
@@ -162,20 +152,6 @@ public class ChatService {
             safeSend(emitter, SseEvent.error(mapper,
                     "Target device is not connected yet, or it has not reported its tool manifest."));
             emitter.complete();
-            return;
-        }
-        if (resolved.definitions().isEmpty() && serverToolRegistry.toAnthropicTools().isEmpty()) {
-            // No tools registered yet (no real device bound). Fall back to the
-            // mock path so we still emit a useful SSE response —
-            // InternalToolController auto-provisions a MockDeviceSession when
-            // mock-mode is on.
-            log.info("LLM path has no device tools — falling back to mock for user {}", userId);
-            try {
-                handleWithMock(userId, sessionId, req, emitter);
-            } catch (IOException e) {
-                safeSend(emitter, SseEvent.error(mapper, "Fallback failed: " + e.getMessage()));
-                emitter.completeWithError(e);
-            }
             return;
         }
 
@@ -375,48 +351,6 @@ public class ChatService {
             log.info("promptUsage user={} provider=codex usage={} dur={}ms",
                     userId, usage == null ? "unavailable" : usage, durMs);
         }
-    }
-
-    /* -------------------- mock path -------------------- */
-
-    private void handleWithMock(UUID userId, UUID sessionId, ChatRequest req, SseEmitter emitter) throws IOException {
-        UUID deviceId = req.deviceId();
-        if (deviceId == null) {
-            List<OnlineDeviceDto> online = deviceHubClient.listOnlineByUser(userId);
-            if (online == null || online.isEmpty()) {
-                send(emitter, SseEvent.error(mapper, "No online devices for this user"));
-                emitter.complete();
-                return;
-            }
-            deviceId = online.get(0).deviceId();
-        }
-
-        String toolName = props.agent().mockToolName();
-        JsonNode args = mapper.readTree(props.agent().mockToolArgsJson());
-
-        send(emitter, SseEvent.toolCallStarted(mapper, deviceId, toolName, args));
-        persist(sessionId, userId, MessageRole.TOOL_CALL, "calling " + toolName,
-                toolCallMetadata(deviceId, toolName, args));
-
-        ToolResult result = dispatcher.dispatch(deviceId, userId, toolName, args);
-
-        if (result.hasError()) {
-            send(emitter, SseEvent.error(mapper,
-                    "Tool '" + toolName + "' failed: " + result.error().message()));
-            persist(sessionId, userId, MessageRole.TOOL_RESULT,
-                    "tool " + toolName + " failed: " + result.error().message(), null);
-        } else {
-            send(emitter, SseEvent.toolCallResult(mapper, toolName, result.value()));
-            MessageDto saved = persist(sessionId, userId, MessageRole.TOOL_RESULT,
-                    "tool " + toolName + " returned",
-                    toolResultMetadata(toolName, result.value()));
-            persistArtifacts(sessionId, userId, saved == null ? null : saved.id(), toolName, result.value());
-            String reply = "[mock-llm] Tool '" + toolName + "' returned the result above. " +
-                    "Set ANTHROPIC_API_KEY to use a real LLM.";
-            send(emitter, SseEvent.assistantMessage(mapper, reply));
-            persist(sessionId, userId, MessageRole.ASSISTANT, reply, null);
-        }
-        emitter.complete();
     }
 
     /* -------------------- per-request loaders -------------------- */

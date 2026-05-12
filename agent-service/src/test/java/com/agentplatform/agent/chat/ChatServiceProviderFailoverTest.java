@@ -11,8 +11,6 @@ import com.agentplatform.agent.ai.ServerToolRegistry;
 import com.agentplatform.agent.ai.SessionSummaryRefresher;
 import com.agentplatform.agent.ai.SkillLoadCallback;
 import com.agentplatform.agent.ai.SkillRegistry;
-import com.agentplatform.agent.client.DeviceHubClient;
-import com.agentplatform.agent.client.DeviceToolDispatcher;
 import com.agentplatform.agent.client.InternalChatFeignClient;
 import com.agentplatform.agent.config.AgentProperties;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -20,17 +18,22 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -85,6 +88,43 @@ class ChatServiceProviderFailoverTest {
         verifyNoInteractions(agentLoop);
     }
 
+    @Test
+    void noConfiguredProviderFailsFastWithoutDeviceMockFallback() throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            RemoteDeviceToolCallbackProvider toolProvider = mock(RemoteDeviceToolCallbackProvider.class);
+            InternalChatFeignClient chatClient = mock(InternalChatFeignClient.class);
+            ChatService service = new ChatService(
+                    toolProvider,
+                    chatClient,
+                    executor,
+                    mapper,
+                    props(),
+                    List.of(),
+                    mock(SkillLoadCallback.class),
+                    new ServerToolRegistry(List.of(), mapper),
+                    mock(EmbeddingService.class),
+                    mock(MemoryExtractor.class),
+                    mock(AgentLoopRunner.class),
+                    mock(CodexResponsesLoopRunner.class),
+                    mock(ContextAssembler.class),
+                    new ToolArtifactExtractor(mapper),
+                    mock(SessionSummaryRefresher.class));
+            CapturingEmitter emitter = new CapturingEmitter();
+
+            service.handle(UUID.randomUUID(), new ChatRequest("hello", null, null), emitter);
+
+            await().atMost(java.time.Duration.ofSeconds(2))
+                    .untilAsserted(() -> assertThat(emitter.events)
+                            .anyMatch(e -> "error".equals(e.type())
+                                    && e.data().path("message").asText().contains("模型服务未配置")));
+            verifyNoInteractions(toolProvider);
+        } finally {
+            executor.shutdownNow();
+            executor.awaitTermination(1, TimeUnit.SECONDS);
+        }
+    }
+
     private ChatService service(AtomicInteger codexCalls) {
         return service(codexCalls, new StartedThenFailingAgentLoopRunner(mapper, props()),
                 new ResolvedTools(List.of(), Map.of()));
@@ -119,8 +159,6 @@ class ChatServiceProviderFailoverTest {
                         new ContextStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 48_000)));
 
         return new ChatService(
-                mock(DeviceHubClient.class),
-                mock(DeviceToolDispatcher.class),
                 toolProvider,
                 chatClient,
                 mock(ExecutorService.class),
@@ -144,8 +182,6 @@ class ChatServiceProviderFailoverTest {
         return new AgentProperties(
                 new AgentProperties.Jwt("secret", "issuer"),
                 new AgentProperties.Agent(
-                        "photos.list_recent",
-                        "{\"limit\":5}",
                         35_000,
                         "http://device-hub-service:8080",
                         4096,
@@ -230,6 +266,38 @@ class ChatServiceProviderFailoverTest {
                              SseEmitter emitter) {
             calls.incrementAndGet();
             return new RunResult("fallback", null, false);
+        }
+    }
+
+    private static class CapturingEmitter extends SseEmitter {
+        private final List<SseEvent> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override
+        public synchronized void send(SseEventBuilder builder) throws IOException {
+            for (ResponseBodyEmitter.DataWithMediaType item : builder.build()) {
+                if (item.getData() instanceof com.fasterxml.jackson.databind.JsonNode data
+                        && data.has("message")) {
+                    events.add(new SseEvent("error", data));
+                } else if (item.getData() instanceof com.fasterxml.jackson.databind.JsonNode data
+                        && data.has("sessionId")) {
+                    events.add(new SseEvent("session", data));
+                } else if (item.getData() instanceof com.fasterxml.jackson.databind.JsonNode data
+                        && data.has("content")) {
+                    events.add(new SseEvent("message", data));
+                }
+            }
+        }
+
+        @Override
+        public void send(Object object) throws IOException {
+            if (object instanceof SseEvent event) {
+                events.add(event);
+            }
+        }
+
+        @Override
+        public void send(Object object, org.springframework.http.MediaType mediaType) throws IOException {
+            send(object);
         }
     }
 }

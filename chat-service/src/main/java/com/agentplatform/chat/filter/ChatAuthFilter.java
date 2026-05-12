@@ -21,9 +21,6 @@ import java.util.List;
  * Same hybrid auth as agent-service: gateway-injected trust headers first,
  * Bearer JWT fallback for direct dev access. {@code /api/} paths require
  * authentication; {@code /internal/} paths are gateway-only and trusted as-is.
- *
- * <p>(PR 13 hardening will refactor agent/chat services onto a shared
- * {@code PathBasedHybridAuthFilter} in common-security.)
  */
 public class ChatAuthFilter extends AbstractAuthFilter {
 

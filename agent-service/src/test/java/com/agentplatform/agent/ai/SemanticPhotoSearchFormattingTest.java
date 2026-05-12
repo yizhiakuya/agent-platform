@@ -378,8 +378,6 @@ class SemanticPhotoSearchFormattingTest {
                 8,
                 5);
         AgentProperties.Agent agent = new AgentProperties.Agent(
-                null,
-                null,
                 0,
                 null,
                 4096,

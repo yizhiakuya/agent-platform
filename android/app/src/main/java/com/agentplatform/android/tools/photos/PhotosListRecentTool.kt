@@ -19,8 +19,8 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 
 /**
- * The MVP-1 hero tool: returns the N most-recent photos from the device's
- * gallery as 256×256 JPEG thumbnails (base64). Used by the LLM to answer
+ * Returns the N most-recent photos from the device's gallery as 256×256 JPEG
+ * thumbnails (base64). Used by the LLM to answer
  * "show me my recent photos".
  *
  * <p>Permission: requires {@code READ_MEDIA_IMAGES} (Android 13+) or the
@@ -30,8 +30,7 @@ import java.io.ByteArrayOutputStream
  *
  * <p>Thumbnails are bounded at 256×256 and JPEG-compressed at quality 70.
  * Larger payloads should go through the side-channel upload endpoint
- * ({@code /api/uploads/{call_id}/{idx}}) — but PR 11 keeps things inline so the
- * end-to-end path is easy to demo.
+ * ({@code /api/uploads/{call_id}/{idx}}).
  */
 class PhotosListRecentTool(
     private val context: Context,

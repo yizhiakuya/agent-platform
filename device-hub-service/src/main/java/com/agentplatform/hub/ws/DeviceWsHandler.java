@@ -30,9 +30,9 @@ import java.util.UUID;
  * <ul>
  *   <li>{@code hello}            (request)        — reply with sessionId/protocolVersion</li>
  *   <li>{@code tool.manifest}    (notification)   — store on the session</li>
- *   <li>{@code tool.confirm.ack} (notification)   — TODO PR 13 (sensitive-tool approval)</li>
+ *   <li>{@code tool.confirm.ack} (notification)   — acknowledgement for confirmation flows</li>
  *   <li>{@code heartbeat}        (notification)   — bookkeeping only</li>
- *   <li>{@code $/progress}       (notification)   — forward to agent-service later (PR 7)</li>
+ *   <li>{@code $/progress}       (notification)   — device-side progress signal</li>
  *   <li>JSON-RPC response (id present, no method) — resolve {@link PendingCallRegistry}</li>
  * </ul>
  *
@@ -112,7 +112,7 @@ public class DeviceWsHandler extends TextWebSocketHandler {
         switch (note.method()) {
             case JsonRpcMethods.TOOL_MANIFEST -> handleToolManifest(deviceId, note);
             case JsonRpcMethods.HEARTBEAT, JsonRpcMethods.PROGRESS, JsonRpcMethods.CONFIRM_ACK -> {
-                // bookkeeping / fan-out to agent-service comes in later PRs
+                // Bookkeeping / future fan-out to agent-service.
                 log.debug("Notification {} from {}", note.method(), deviceId);
             }
             default -> log.debug("Ignored notification method '{}' from {}", note.method(), deviceId);

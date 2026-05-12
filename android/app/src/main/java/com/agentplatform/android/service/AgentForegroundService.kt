@@ -69,7 +69,7 @@ class AgentForegroundService : Service() {
         super.onCreate()
         startForeground(NOTI_ID, buildNotification(getString(android.R.string.dialog_alert_title)))
 
-        // PR 11: register the device's tools. Add more here as we ship them.
+        // Register the device tools exposed to the server-side agent.
         toolRegistry.register(PhotosListRecentTool(applicationContext, mapper))
         toolRegistry.register(PhotosGetMetadataTool(applicationContext, mapper))
         toolRegistry.register(PhotosGetFullTool(applicationContext, mapper))
@@ -162,7 +162,7 @@ class AgentForegroundService : Service() {
     }
 
     private fun handleNotification(note: JsonRpcNotification) {
-        // PR 13 may handle $/cancel here to abort an in-flight tool job.
+        // Future cancellation support can abort in-flight tool jobs here.
         Log.d(TAG, "Notification: ${note.method}")
     }
 

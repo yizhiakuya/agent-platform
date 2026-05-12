@@ -18,14 +18,14 @@ import java.util.concurrent.TimeUnit;
  * Maps in-flight tool {@code callId}s to their {@link DeferredResult}. The HTTP
  * controller registers a callId, sends the JSON-RPC request to the device, and
  * returns the DeferredResult — Tomcat's worker thread is freed immediately.
- * When the device responds (PR 6: real WS handler; PR 5: mock scheduled task),
+ * When the device responds through WebSocket or a dev mock session,
  * {@link #complete} resolves the DeferredResult and Spring writes the response.
  *
  * <p>Timeouts are driven by an explicit {@link ScheduledExecutorService} (not by
  * {@code DeferredResult}'s built-in timeoutValue, which relies on servlet
  * container async timeout — that doesn't fire in MockMvc tests). When the timer
  * fires we set the fallback result and invoke the {@code onTimeoutCancel} hook
- * (PR 6: send {@code $/cancel} JSON-RPC notification to the device).
+ * to send {@code $/cancel} JSON-RPC notification to the device.
  */
 @Component
 public class PendingCallRegistry {
@@ -47,8 +47,8 @@ public class PendingCallRegistry {
      * the timer is cancelled.
      *
      * @param onTimeoutCancel optional hook fired exactly once when the timer
-     *                        expires before the call is resolved. PR 6 will use
-     *                        this to send {@code $/cancel} to the device.
+     *                        expires before the call is resolved. Used to send
+     *                        {@code $/cancel} to the device.
      */
     public DeferredResult<ToolResult> register(UUID callId, long timeoutMs, Runnable onTimeoutCancel) {
         DeferredResult<ToolResult> dr = new DeferredResult<>();

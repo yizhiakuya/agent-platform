@@ -110,8 +110,6 @@ class CodexResponsesLoopRunnerTest {
                                             ServerToolRegistry serverToolRegistry,
                                             WebClient.Builder webClientBuilder) {
         AgentProperties.Agent agent = new AgentProperties.Agent(
-                "photos.list_recent",
-                "{\"limit\":5}",
                 35_000,
                 "http://device-hub-service:8080",
                 4096,

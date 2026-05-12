@@ -24,8 +24,8 @@ import java.util.List;
  *       absence/invalidity is not an error.</li>
  * </ul>
  * <p>Behind the gateway in production this is replaced by
- * {@code TrustedHeaderAuthFilter} (auth-service won't see direct traffic).
- * For PR 3 this filter is what makes /api/me/** secure when running standalone.
+ * {@code TrustedHeaderAuthFilter}; this filter still protects direct dev
+ * traffic such as /api/me/** when the service runs standalone.
  */
 public class PathBasedJwtFilter extends AbstractAuthFilter {
 

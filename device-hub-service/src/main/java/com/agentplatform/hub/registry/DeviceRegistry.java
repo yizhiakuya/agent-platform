@@ -11,9 +11,9 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * In-memory directory of online devices. Single instance per hub process — when
- * we add multi-instance hub (PR 13/14 hardening) this needs to become a
- * Redis-backed pub/sub directory plus per-node {@code DeviceSession} ownership.
+ * In-memory directory of online devices. This assumes a single hub process or
+ * sticky routing; multi-instance hub deployments need a shared directory plus
+ * per-node {@code DeviceSession} ownership.
  */
 @Component
 public class DeviceRegistry {

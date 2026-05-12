@@ -16,10 +16,10 @@ import java.util.UUID;
  * data: {"tool":"photos.list_recent","result":{...}}
  * </pre>
  *
- * <p>Six event types in PR 7:
+ * <p>Common event types:
  * <ul>
  *   <li>{@code user_message}      — echoes the user's prompt back to the stream</li>
- *   <li>{@code assistant_message} — final LLM text (mocked in PR 7)</li>
+ *   <li>{@code assistant_message} — streamed or final LLM text</li>
  *   <li>{@code tool_call_started} — about to call a tool, includes deviceId/tool/args</li>
  *   <li>{@code tool_call_result}  — tool returned, includes raw result JSON</li>
  *   <li>{@code error}             — any failure, includes message</li>

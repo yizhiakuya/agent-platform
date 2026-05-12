@@ -25,9 +25,6 @@ agent-platform:
     secret: ${JWT_SECRET:?JWT_SECRET must be set (base64-encoded, >= 32 raw bytes)}
     issuer: agent-platform
   agent:
-    # PR 7: hard-coded tool the mock LLM always picks. PR 8 swaps in Spring AI.
-    mock-tool-name: ${AGENT_MOCK_TOOL:photos.list_recent}
-    mock-tool-args-json: ${AGENT_MOCK_TOOL_ARGS:{"limit":5}}
     # Per-tool-call timeout when calling device-hub /internal/tools/call
     tool-call-timeout-ms: ${AGENT_TOOL_TIMEOUT_MS:35000}
     # Where to find device-hub (load-balanced via Nacos by service name)

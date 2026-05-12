@@ -7,9 +7,9 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
- * Abstract device-side connection. PR 5 ships {@link MockDeviceSession}
- * (no real I/O, fake results). PR 6 adds {@code WsDeviceSession} backed by
- * Spring WebSocket. Both speak JSON-RPC 2.0 (see {@link JsonRpcMessage}).
+ * Abstract device-side connection. Production sessions are backed by Spring
+ * WebSocket; tests and explicit dev mock mode can use {@link MockDeviceSession}.
+ * Both speak JSON-RPC 2.0 (see {@link JsonRpcMessage}).
  */
 public interface DeviceSession {
 

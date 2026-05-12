@@ -24,14 +24,14 @@ import java.util.List;
  * X-Jti} headers on the upstream request so downstream services don't have to
  * re-verify.
  *
- * <p>WS paths ({@code /ws/**}) are passed through untouched in PR 4 — WS handshake
- * authentication will be added in PR 6 ({@code DeviceWsAuthFilter}) which has to
- * read {@code Sec-WebSocket-Protocol} and call auth-service's verify endpoint.
+ * <p>WS paths ({@code /ws/**}) are passed through untouched here. The
+ * device-hub WebSocket handshake validates the device bearer token from
+ * {@code Sec-WebSocket-Protocol}.
  *
  * <p>JWT verification is done locally with the shared {@link JwtUtil} (same secret
  * as auth-service issued with), avoiding a round-trip to auth-service per request.
- * Revocation lookup is sacrificed at this stage; PR 13 will add a remote verify
- * call (with caching) to honour the jti blacklist.
+ * Gateway-local verification does not consult the jti blacklist; endpoints that
+ * need revocation awareness should call auth-service verify.
  */
 @Component
 public class JwtAuthFilter implements GlobalFilter, Ordered {
@@ -61,7 +61,7 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
         ServerHttpRequest req = exchange.getRequest();
         String path = req.getURI().getPath();
 
-        // PR 4: WebSocket paths bypass JWT (handshake auth comes in PR 6)
+        // WebSocket paths authenticate in device-hub during the handshake.
         if (path.startsWith("/ws/")) {
             return chain.filter(exchange);
         }

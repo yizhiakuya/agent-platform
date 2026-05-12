@@ -32,7 +32,7 @@ public class Message {
     private String content;
 
     @Column(columnDefinition = "TEXT")
-    private String metadata;       // JSON-as-text; we keep it stringly-typed in PR 9
+    private String metadata;       // JSON-as-text for flexible tool/session metadata.
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();

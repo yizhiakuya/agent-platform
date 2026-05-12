@@ -13,7 +13,7 @@
 
     <artifactId>device-hub-service</artifactId>
     <name>Device Hub Service</name>
-    <description>WebSocket hub for Android devices. PR 5 = HTTP path + DeferredResult async + mock device session. PR 6 adds real WS.</description>
+    <description>WebSocket hub for Android devices plus internal DeferredResult tool dispatch.</description>
 
     <dependencies>
         <dependency>

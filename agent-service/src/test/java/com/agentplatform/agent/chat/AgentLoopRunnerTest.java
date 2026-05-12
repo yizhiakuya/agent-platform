@@ -79,8 +79,6 @@ class AgentLoopRunnerTest {
         return new AgentProperties(
                 new AgentProperties.Jwt("secret", "issuer"),
                 new AgentProperties.Agent(
-                        "photos.list_recent",
-                        "{\"limit\":5}",
                         35_000,
                         "http://device-hub-service:8080",
                         4096,

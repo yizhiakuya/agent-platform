@@ -8,9 +8,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode
  * In-process map of tool name → Tool implementation. The Foreground Service
  * builds one of these on startup, registers the tools the device supports,
  * and reports the resulting {@code tool.manifest} to the server.
- *
- * <p>For PR 10 the registry is empty by default — PR 11 adds
- * {@code PhotosListRecentTool}.
  */
 class ToolRegistry {
 

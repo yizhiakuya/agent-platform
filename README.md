@@ -1,153 +1,106 @@
 # Agent Platform
 
-Self-host mobile agent platform. Run the server stack with Docker on your own
-machine; install the Android app on your phone; chat with an LLM agent from a
-Web UI (Telegram / CLI to come) that can drive your phone — read photos, save
-files, manage notifications, etc.
+Self-hosted Android agent platform. Run the server stack on your own machine,
+install the Android app on your phone, then chat with an LLM agent from the web
+UI while it drives phone-side tools over WebSocket.
 
-**Status**: MVP phase 1 — all 14 PRs landed. End-to-end runnable with
-`docker compose up` (mock mode) or with a real Android device + Anthropic API
-key.
+The current product direction is server-side LLM orchestration plus Android
+device tools. Mobile voice entry, XiaoAI integration, and on-device local LLM
+experiments are intentionally not part of the active codebase.
 
----
+## Architecture
 
-## Architecture (one screenful)
-
-```
-       Web (React + Vite + SSE)        Telegram bot       CLI
-                       ╲                   │                ╱
-                        ╲                  │               ╱
-                         ▼                 ▼              ▼
-                    ┌──────────────── Gateway ────────────────┐
-                    │  Spring Cloud Gateway · JWT filter      │
-                    │  CORS · WS routing · X-Forwarded headers│
-                    └──────────────┬──────────────────────────┘
-                                   │
-            ┌──────────────────────┼─────────────────────┐
-            ▼                      ▼                     ▼
-       ┌─────────┐         ┌────────────┐       ┌────────────────┐
-       │  auth   │  ◀──    │  agent     │  ──▶  │ device-hub     │
-       │ service │  Feign  │  service   │  WebClient (lb)         │
-       │         │         │ (Spring AI │       │  WebSocket hub  │
-       │ users/  │         │  ChatClient│       │  per-device     │
-       │ devices │         │  +tools)   │       │  JSON-RPC 2.0   │
-       │ JWT     │         └─────┬──────┘       └────────┬───────┘
-       └─────────┘               │ Feign                 │ wss
-                                 ▼                        │
-                          ┌────────────┐                  │
-                          │ chat-svc   │                  │
-                          │ session +  │                  │
-                          │ message +  │                  ▼
-                          │ PII filter │           ┌────────────┐
-                          └────────────┘           │  Android   │
-                                                   │ ForeService│
-                                                   │ Tool host  │
-                                                   └────────────┘
+```text
+Web UI (React + SSE)
+        |
+        v
+Spring Cloud Gateway -- auth-service
+        |
+        v
+agent-service -- chat-service (sessions, messages, memory, photo index)
+        |
+        v
+device-hub-service -- WebSocket / JSON-RPC -- Android foreground service
 ```
 
-Tools are dynamic: each Android client posts a `tool.manifest` on connect,
-agent-service injects them into Spring AI's function-calling list per chat
-request. Adding a new capability = a new `Tool` class on Android, **server
-unchanged**.
+Tools are dynamic: each Android client sends a `tool.manifest` after it
+connects. `agent-service` injects those tools into the model request for that
+chat turn. Adding a phone capability is normally an Android `Tool` class plus
+registration in `AgentForegroundService`; the server does not need a matching
+endpoint for every device tool.
 
----
-
-## Stack (locked)
+## Stack
 
 | Layer | Choice |
-|-------|--------|
-| Server | Java 21 · Spring Boot 3.5.6 · Spring Cloud 2025.0.0 (Northfields) · Spring Cloud Alibaba 2025.0.0.0 · Spring AI 1.0.6 (Anthropic) |
-| DB | PostgreSQL 16 — single DB, schema-per-service (`auth` / `chat` / `hub`) |
-| Realtime | raw JSON-RPC 2.0 over WebSocket |
-| Frontend | React + Vite + TypeScript + Tailwind + TanStack Query |
-| Android | Kotlin + Jetpack Compose + OkHttp + Foreground Service (`specialUse`) |
-| Build | Maven multi-module + `./mvnw` ; Gradle for Android |
-| Deploy | Docker Compose · multi-stage Alpine images |
-
-See [the plan file](C:\Users\admin\.claude\plans\rippling-crafting-mochi.md) for
-detailed design decisions.
-
----
+| --- | --- |
+| Server | Java 21, Spring Boot 3.5.6, Spring Cloud 2025.0.0, Spring Cloud Alibaba 2025.0.0.0 |
+| LLM | Configurable provider pool: Codex Responses-compatible endpoint first, Anthropic Messages fallback |
+| DB | PostgreSQL 16 + pgvector, schema-per-service (`auth`, `chat`, `hub`) |
+| Device realtime | JSON-RPC 2.0 over WebSocket |
+| Frontend | React, Vite, TypeScript, Tailwind, TanStack Query |
+| Android | Kotlin, Jetpack Compose, OkHttp, foreground service, accessibility/screen tools |
+| Deploy | Docker Compose, GHCR images, optional local photo embedding sidecar |
 
 ## Prerequisites
 
-- **Docker** ≥ 24
-- **JDK 21** (Eclipse Temurin recommended; the bundled JBR in Android Studio works for dev too)
-- **Node 20** + **pnpm 9** (only needed if you build the web outside Docker)
-- **Android Studio** (only for building the APK)
+- Docker 24+
+- JDK 21
+- Node 20 + pnpm 9 when building the web UI outside Docker
+- Android Studio or a configured Android SDK when building the APK
+- At least one usable LLM provider key in `.env`
 
-The project ships a Maven Wrapper (`./mvnw`) — no global Maven required.
-
----
-
-## Quick start (everything in Docker)
+## Quick Start
 
 ```bash
-# 1. Configure secrets
 cp .env.example .env
-# Edit .env:
-#   - JWT_SECRET            (openssl rand -base64 64)
-#   - NACOS_AUTH_TOKEN      (openssl rand -base64 32, only if NACOS_AUTH_ENABLE=true)
-#   - ANTHROPIC_API_KEY     (sk-ant-... — leave as PLACEHOLDER for mock-LLM mode)
-#   - POSTGRES_PASSWORD, AUTH_DB_PASSWORD, CHAT_DB_PASSWORD, HUB_DB_PASSWORD
+# Fill JWT_SECRET, database passwords, and at least one of:
+#   CODEX_API_KEY or OPENAI_API_KEY for the Codex Responses-compatible provider
+#   ANTHROPIC_API_KEY for the Anthropic fallback provider
 
-# 2. Bring up the full stack
 docker compose up -d
-docker compose ps    # 8 containers should reach 'healthy' within ~60s
-
-# 3. Open the web UI
+docker compose ps
 open http://localhost:3000
-
-# 4. Register an account in the UI → login → go to Devices → "New enrollment"
-# 5. Install the Android APK (see "Building the Android app" below) and either
-#    scan the QR or paste the token + server URL on the bind screen
-# 6. Back in the web UI's chat page, type "show me my recent photos" — the LLM
-#    (or the mock LLM if no API key) will call photos.list_recent on your phone
 ```
 
-### Deploy from GHCR
+Then register an account, create a device enrollment from the Devices page,
+install the Android APK, and scan the QR code or paste the token and server URL
+on the bind screen.
+
+## Android App
+
+```bash
+cd android
+./gradlew :app:assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+The first launch asks for the server URL and enrollment token. The bound app
+runs a foreground service that connects to `/ws/device` and exposes registered
+tools such as photos and UI automation.
+
+## LLM And Embeddings
+
+`agent-service` reads providers from `agent-platform.agent.providers`:
+
+- Codex Responses-compatible endpoint: `CODEX_API_KEY`, `CODEX_BASE_URL`,
+  `CODEX_CHAT_MODEL`
+- Anthropic Messages endpoint: `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`,
+  `LLM_CHAT_MODEL`
+
+Blank or placeholder keys are skipped. If every provider is blank,
+`agent-service` fails fast instead of silently switching to a fake model.
+
+Memory and semantic photo search use embedding endpoints:
+
+- `MEMORY_EMBEDDING_*` for long-term memory recall and storage
+- `PHOTO_EMBEDDING_*` for multimodal photo indexing
+- `photo-embedding-sidecar` is optional and runs only with the `photo-local`
+  Compose profile
+
+## Deploy From GHCR
 
 Images are published by `.github/workflows/publish-ghcr.yml` on pushes to
-`main`, version tags, and manual workflow dispatch. The workflow uses
-`GITHUB_TOKEN` with `packages: write`, so no PAT is needed inside Actions.
-
-It publishes:
-
-```text
-ghcr.io/yizhiakuya/agent-platform-auth-service:latest
-ghcr.io/yizhiakuya/agent-platform-gateway:latest
-ghcr.io/yizhiakuya/agent-platform-device-hub-service:latest
-ghcr.io/yizhiakuya/agent-platform-agent-service:latest
-ghcr.io/yizhiakuya/agent-platform-chat-service:latest
-ghcr.io/yizhiakuya/agent-platform-web:latest
-```
-
-Optional local photo embedding sidecar:
-
-```bash
-docker compose --profile default --profile photo-local up -d --build photo-embedding-sidecar
-```
-
-Then point photo indexing at it:
-
-```bash
-PHOTO_EMBEDDING_BASE_URL=http://photo-embedding-sidecar:8000
-PHOTO_EMBEDDING_API_KEY=
-PHOTO_EMBEDDING_MODEL=jina-clip-v2
-PHOTO_EMBEDDING_IMAGE_TASK=
-PHOTO_SEARCH_MIN_SCORE=0.20
-PHOTO_INDEX_BATCH_SIZE=8
-```
-
-The sidecar stores no original images. Android uploads bounded thumbnails and
-metadata; agent-service sends those thumbnails to the sidecar as
-OpenAI-style `POST /v1/embeddings` requests with `input: [{"image":
-"<base64>"}]`. Text queries use the same endpoint with `input: [{"text":
-"..."}]`, so natural image searches run against real image/text vectors in
-pgvector instead of OCR-only text guesses.
-
-For a private repository/package, login on the deployment host with a classic
-PAT that has `read:packages`:
+`main`, version tags, and manual workflow dispatch.
 
 ```bash
 echo "$GHCR_TOKEN" | docker login ghcr.io -u yizhiakuya --password-stdin
@@ -155,127 +108,71 @@ docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d --no-build
 ```
 
-### Dev workflow (infra in Docker, services in IDE)
+Published image names use:
+
+```text
+ghcr.io/yizhiakuya/agent-platform-auth-service
+ghcr.io/yizhiakuya/agent-platform-gateway
+ghcr.io/yizhiakuya/agent-platform-device-hub-service
+ghcr.io/yizhiakuya/agent-platform-agent-service
+ghcr.io/yizhiakuya/agent-platform-chat-service
+ghcr.io/yizhiakuya/agent-platform-web
+```
+
+## Local Development
 
 ```bash
-# Start ONLY postgres + nacos
 docker compose up -d postgres nacos
-
-# Run the spring services from IntelliJ IDEA (one Run config each).
-# Set env: AUTH_DB_PASSWORD / CHAT_DB_PASSWORD / JWT_SECRET / ANTHROPIC_API_KEY
-# Then run the web frontend with:
-cd web && pnpm install && pnpm dev    # vite proxies /api → http://localhost:8080
+# Run Spring services from the IDE with the same env values as .env.
+cd web && pnpm install && pnpm dev
 ```
 
----
+The Vite dev server proxies API calls to the gateway.
 
-## Building the Android app
+## Smoke Checks
 
 ```bash
-cd android
-# Open this directory in Android Studio. It will sync Gradle and download SDKs.
-# Then: Run > Run 'app' on your connected device, OR
-./gradlew :app:assembleDebug          # produces app/build/outputs/apk/debug/app-debug.apk
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+curl -fsS http://localhost:8080/actuator/health
+curl -fsS http://localhost:8082/actuator/health
+curl -fsS http://localhost:8083/actuator/health
+curl -fsS http://localhost:8084/actuator/health
 ```
 
-On first launch the app prompts for the server URL and enrollment token. Generate
-the token in the web UI's **Devices → New enrollment** flow.
+For an end-to-end agent check, use the web UI with a configured LLM provider and
+a bound Android device. Device-free mock sessions are limited to hub tests and
+development of `/internal/tools/call`; they are not a replacement for the chat
+agent path.
 
----
+## Repo Layout
 
-## Smoke test (works with no Anthropic key, no Android device)
-
-```bash
-# Login
-TOKEN=$(curl -sS -X POST http://localhost:8080/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"<password>"}' | jq -r .token)
-
-# Stream a chat — mock-LLM path auto-provisions a fake device
-curl -N -X POST http://localhost:8080/api/chat/stream \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d "{\"message\":\"show me my photos\",\"deviceId\":\"$(uuidgen)\"}"
-
-# Expect to see (in order): user_message → tool_call_started → tool_call_result
-# → assistant_message events on the SSE stream.
-```
-
----
-
-## Repo layout
-
-```
+```text
 .
-├── pom.xml                      # parent (Spring Boot/Cloud/AI BOM)
-├── mvnw / mvnw.cmd              # Maven Wrapper
-├── docker-compose.yml           # full stack
-├── Dockerfile.spring            # universal Dockerfile for all 5 spring services
-├── .env.example                 # config template
-├── infra/
-│   ├── postgres/init/01-init.sh # creates per-service schemas + roles
-│   └── nacos/                   # placeholder for future Nacos custom config
-├── common/
-│   ├── common-protocol/         # JSON-RPC 2.0 messages + ToolSpec/ToolResult
-│   ├── common-security/         # JwtUtil, Principal, auth filters
-│   └── common-api/              # cross-service DTOs (hub.*, chat.*)
-├── auth-service/                # users, JWT, device enrollment
-├── gateway/                     # Spring Cloud Gateway
-├── device-hub-service/          # WS hub + DeferredResult tool dispatch
-├── agent-service/               # Spring AI ChatClient + RemoteToolCallback
-├── chat-service/                # session + message persistence
-├── web/                         # React UI (Vite + Tailwind)
-└── android/                     # Kotlin + Compose tool host
+|-- pom.xml
+|-- docker-compose.yml
+|-- docker-compose.ghcr.yml
+|-- Dockerfile.spring
+|-- common/
+|   |-- common-api/
+|   |-- common-protocol/
+|   `-- common-security/
+|-- auth-service/
+|-- gateway/
+|-- device-hub-service/
+|-- agent-service/
+|-- chat-service/
+|-- web/
+|-- android/
+|-- photo-embedding-sidecar/
+|-- infra/
+`-- docs/
 ```
 
----
-
-## Mock-LLM mode (default — no API key needed)
-
-Set `ANTHROPIC_API_KEY=` (empty) or leave the placeholder. agent-service detects
-this and replaces `ChatClient` with a mock that emits a fixed sequence:
-`user_message → tool_call_started(photos.list_recent) → tool_call_result →
-assistant_message`. The mock device-hub auto-provisions a fake `MockDeviceSession`
-when it sees an unknown deviceId, returning fake `echoed_params` JSON 100ms
-later. Lets you exercise the full chat path with zero Android setup and zero
-LLM bill.
-
-To switch to real Anthropic Claude:
-1. Put a real `sk-ant-...` key into `.env`'s `ANTHROPIC_API_KEY`
-2. `docker compose restart agent-service`
-
-agent-service log will say `Spring AI ChatClient ready (model=claude-sonnet-4-6)`.
-
----
-
-## Observability (PR 13)
-
-agent-service exposes Prometheus metrics at `/actuator/prometheus`. Other
-services have `/actuator/health` and `/actuator/info` enabled by default. To
-roll out Prometheus on more services, add to each service's pom:
-
-```xml
-<dependency>
-    <groupId>io.micrometer</groupId>
-    <artifactId>micrometer-registry-prometheus</artifactId>
-    <scope>runtime</scope>
-</dependency>
-```
-
-and `prometheus,metrics` to that service's `management.endpoints.web.exposure.include`.
-
----
-
-## Hardening / known gaps (future PRs)
+## Known Gaps
 
 | Item | Status |
-|---|---|
-| HMAC command signing | Cut (TLS+JWT covers the threat model — see plan §1.5) |
-| jti revocation list | ✅ DB table; gateway local-verify path doesn't consult it yet (PR 13) |
-| Nacos auth | Disabled in dev; enable via `NACOS_AUTH_ENABLE=true` after manual UI bootstrap |
-| Multi-instance device-hub (sticky/Redis pub-sub) | Not yet — single hub assumption |
-| Vendor-specific Android battery whitelist | XXPermissions hook stubbed — wire concrete intents in PR 13.5 |
-| FCM push wakeup | Not yet — `pingInterval=30s` Foreground Service for now |
-| EncryptedSharedPreferences for device JWT | Plain SharedPreferences in PR 10; switch in PR 13.5 |
-| End-to-end Playwright + adb suite | Skeleton in repo, full coverage TBD |
+| --- | --- |
+| Multi-instance device hub | Not yet; production assumes one hub instance or sticky routing |
+| FCM push wakeup | Not yet; Android uses a foreground service and WebSocket reconnect |
+| Encrypted device token storage | Still plain SharedPreferences |
+| End-to-end Playwright + adb suite | Partial test coverage only |
+| Provider failover mid-stream | Setup-stage failover exists; stream-stage failover is not implemented |

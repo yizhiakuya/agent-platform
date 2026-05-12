@@ -24,8 +24,6 @@ public record AgentProperties(
      * <p>{@code memory} controls the long-term-memory recall + fact-extraction pipeline.
      */
     public record Agent(
-            String mockToolName,
-            String mockToolArgsJson,
             long toolCallTimeoutMs,
             String hubBaseUri,
             int maxTokens,

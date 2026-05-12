@@ -38,8 +38,8 @@ public class HubBeans {
 
     /**
      * In mock-mode, every unknown deviceId gets auto-provisioned with a
-     * MockDeviceSession (so agent-service can run end-to-end without a real
-     * Android device). When mock-mode is off, return a no-op provisioner that
+     * MockDeviceSession for hub-level tests or explicit local development
+     * without a real Android device. When mock-mode is off, return a no-op provisioner that
      * never creates anything; missing devices then surface as 503 from
      * InternalToolController.
      */
@@ -56,7 +56,7 @@ public class HubBeans {
         return DeviceProvisioner.noop();
     }
 
-    /** Single shared JwtUtil — used by the WebSocket handshake interceptor (PR 6). */
+    /** Single shared JwtUtil used by the WebSocket handshake interceptor. */
     @Bean
     public JwtUtil jwtUtil(JwtProperties props) {
         return new JwtUtil(props.secret(), props.issuer());
@@ -76,8 +76,8 @@ public class HubBeans {
 
     /**
      * Tomcat's default {@code maxTextMessageBufferSize} is only 8KB, which
-     * truncates any tool result with a few base64 thumbnails (PR 11
-     * {@code photos.list_recent} returns 5×256×256 JPEGs ≈ 50-100KB) and the
+     * truncates any tool result with a few base64 thumbnails
+     * ({@code photos.list_recent} returns 5×256×256 JPEGs ≈ 50-100KB) and the
      * server closes the connection with code 1009. Bump to 4MB to match the
      * upload side-channel threshold; results larger than that should go via
      * {@code POST /api/uploads/...} instead of inline.

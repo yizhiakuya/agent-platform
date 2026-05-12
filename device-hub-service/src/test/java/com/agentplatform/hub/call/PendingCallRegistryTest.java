@@ -20,8 +20,7 @@ import java.time.Duration;
 
 /**
  * Unit tests for {@link PendingCallRegistry}. Covers the three resolution
- * paths required by the PR 5 verification rubric: dispatch (complete) /
- * timeout / cancel.
+ * paths: dispatch (complete), timeout, and cancel.
  */
 class PendingCallRegistryTest {
 

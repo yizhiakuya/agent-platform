@@ -130,8 +130,6 @@ class PhotoEmbeddingServiceTest {
                 25,
                 45);
         AgentProperties.Agent agent = new AgentProperties.Agent(
-                null,
-                null,
                 0,
                 null,
                 4096,
