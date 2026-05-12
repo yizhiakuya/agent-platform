@@ -21,6 +21,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -71,7 +72,7 @@ class CodexResponsesLoopRunnerTest {
         ObjectNode second = mapper.createObjectNode();
         second.put("output_text", "recovered");
 
-        try (ResponsesStubServer server = new ResponsesStubServer(mapper, List.of(first, second))) {
+        try (ResponsesStubServer server = ResponsesStubServer.fromResponses(mapper, List.of(first, second))) {
             CodexResponsesLoopRunner runner = runner(
                     memory(false),
                     new ServerToolRegistry(List.of(new ThrowingTool()), mapper),
@@ -99,6 +100,82 @@ class CodexResponsesLoopRunnerTest {
                         assertThat(output.path("error").asText())
                                 .isEqualTo("tool execution failed: unexpected boom");
                     });
+        }
+    }
+
+    @Test
+    void runStreamsOutputTextDeltasToSink() throws Exception {
+        ObjectNode completed = mapper.createObjectNode();
+        completed.put("id", "resp_1");
+        completed.put("status", "completed");
+        ArrayNode output = mapper.createArrayNode();
+        ObjectNode message = mapper.createObjectNode();
+        message.put("type", "message");
+        ArrayNode content = mapper.createArrayNode();
+        ObjectNode text = mapper.createObjectNode();
+        text.put("type", "output_text");
+        text.put("text", "hello world");
+        content.add(text);
+        message.set("content", content);
+        output.add(message);
+        completed.set("output", output);
+
+        List<List<JsonNode>> streams = List.of(List.of(
+                streamEvent("response.output_text.delta", "delta", "hello "),
+                streamEvent("response.output_text.delta", "delta", "world"),
+                streamEvent("response.completed", "response", completed)
+        ));
+
+        try (ResponsesStubServer server = ResponsesStubServer.fromStreams(mapper, streams)) {
+            CodexResponsesLoopRunner runner = runner(memory(false));
+            List<SseEvent> events = new ArrayList<>();
+
+            RunResult result = runner.run(
+                    new ConfiguredProvider("test", "codex-responses", null, server.baseUrl(), "token", "model"),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new ResolvedTools(List.of(), Map.of()),
+                    "system",
+                    List.of(),
+                    "say hello",
+                    events::add,
+                    new SseEmitter());
+
+            assertThat(result.assistantText()).isEqualTo("hello world");
+            assertThat(events)
+                    .extracting(SseEvent::type)
+                    .containsExactly("assistant_message", "assistant_message");
+            assertThat(events)
+                    .extracting(event -> event.data().path("content").asText())
+                    .containsExactly("hello ", "world");
+            assertThat(server.requests().getFirst().path("stream").asBoolean()).isTrue();
+        }
+    }
+
+    @Test
+    void runAcceptsResponseDoneAsTerminalStreamEvent() throws Exception {
+        ObjectNode completed = completedTextResponse("done text");
+        List<List<JsonNode>> streams = List.of(List.of(
+                streamEvent("response.output_text.delta", "delta", "done text"),
+                streamEvent("response.done", "response", completed)
+        ));
+
+        try (ResponsesStubServer server = ResponsesStubServer.fromStreams(mapper, streams)) {
+            CodexResponsesLoopRunner runner = runner(memory(false));
+
+            RunResult result = runner.run(
+                    new ConfiguredProvider("test", "codex-responses", null, server.baseUrl(), "token", "model"),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new ResolvedTools(List.of(), Map.of()),
+                    "system",
+                    List.of(),
+                    "say done",
+                    event -> {
+                    },
+                    new SseEmitter());
+
+            assertThat(result.assistantText()).isEqualTo("done text");
         }
     }
 
@@ -194,14 +271,25 @@ class CodexResponsesLoopRunnerTest {
     private static class ResponsesStubServer implements AutoCloseable {
 
         private final ObjectMapper mapper;
-        private final List<JsonNode> responses;
+        private final List<List<JsonNode>> streams;
         private final List<JsonNode> requests = new ArrayList<>();
         private final HttpServer server;
         private int index;
 
-        ResponsesStubServer(ObjectMapper mapper, List<JsonNode> responses) throws IOException {
+        static ResponsesStubServer fromResponses(ObjectMapper mapper, List<JsonNode> responses) throws IOException {
+            List<List<JsonNode>> streams = responses.stream()
+                    .map(response -> List.<JsonNode>of(streamEvent("response.completed", "response", response)))
+                    .toList();
+            return new ResponsesStubServer(mapper, streams);
+        }
+
+        static ResponsesStubServer fromStreams(ObjectMapper mapper, List<List<JsonNode>> streams) throws IOException {
+            return new ResponsesStubServer(mapper, streams);
+        }
+
+        private ResponsesStubServer(ObjectMapper mapper, List<List<JsonNode>> streams) throws IOException {
             this.mapper = mapper;
-            this.responses = responses;
+            this.streams = streams;
             this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             this.server.createContext("/v1/responses", this::handle);
             this.server.start();
@@ -218,16 +306,53 @@ class CodexResponsesLoopRunnerTest {
         private void handle(HttpExchange exchange) throws IOException {
             byte[] body = exchange.getRequestBody().readAllBytes();
             requests.add(mapper.readTree(body));
-            byte[] response = responses.get(index++).toString().getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, response.length);
-            exchange.getResponseBody().write(response);
-            exchange.close();
+            List<JsonNode> events = streams.get(index++);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, 0);
+            try (OutputStream out = exchange.getResponseBody()) {
+                for (JsonNode event : events) {
+                    out.write(("data: " + event + "\n\n").getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                }
+                out.write("data: [DONE]\n\n".getBytes(StandardCharsets.UTF_8));
+            }
         }
 
         @Override
         public void close() {
             server.stop(0);
         }
+    }
+
+    private static ObjectNode streamEvent(String type, String field, JsonNode value) {
+        ObjectNode event = new ObjectMapper().createObjectNode();
+        event.put("type", type);
+        event.set(field, value);
+        return event;
+    }
+
+    private static ObjectNode streamEvent(String type, String field, String value) {
+        ObjectNode event = new ObjectMapper().createObjectNode();
+        event.put("type", type);
+        event.put(field, value);
+        return event;
+    }
+
+    private ObjectNode completedTextResponse(String value) {
+        ObjectNode completed = mapper.createObjectNode();
+        completed.put("id", "resp_1");
+        completed.put("status", "completed");
+        ArrayNode output = mapper.createArrayNode();
+        ObjectNode message = mapper.createObjectNode();
+        message.put("type", "message");
+        ArrayNode content = mapper.createArrayNode();
+        ObjectNode text = mapper.createObjectNode();
+        text.put("type", "output_text");
+        text.put("text", value);
+        content.add(text);
+        message.set("content", content);
+        output.add(message);
+        completed.set("output", output);
+        return completed;
     }
 }

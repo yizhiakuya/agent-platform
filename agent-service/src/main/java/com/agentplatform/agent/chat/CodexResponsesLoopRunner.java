@@ -18,8 +18,10 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -27,7 +29,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -48,6 +49,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class CodexResponsesLoopRunner {
 
     private static final Logger log = LoggerFactory.getLogger(CodexResponsesLoopRunner.class);
+    private static final ParameterizedTypeReference<ServerSentEvent<String>> SSE_EVENT_TYPE =
+            new ParameterizedTypeReference<>() {};
+
     private final ObjectMapper mapper;
     private final AgentProperties props;
     private final SkillLoadCallback skillLoadCallback;
@@ -102,6 +106,7 @@ public class CodexResponsesLoopRunner {
             ObjectNode request = mapper.createObjectNode();
             request.put("model", provider.model());
             request.put("max_output_tokens", props.agent().maxTokens());
+            request.put("stream", true);
             if (systemText != null && !systemText.isBlank()) {
                 request.put("instructions", systemText);
             }
@@ -111,15 +116,12 @@ public class CodexResponsesLoopRunner {
                 request.put("parallel_tool_calls", false);
             }
 
-            JsonNode resp = client.post()
-                    .uri("/v1/responses")
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + provider.apiKey())
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(request)
-                    .retrieve()
-                    .bodyToMono(JsonNode.class)
-                    .block(Duration.ofMinutes(10));
+            int textLenBeforeRequest = textBuf.length();
+            JsonNode resp = streamResponse(client, provider, request, textBuf, sink, cancelled);
             if (resp == null) {
+                if (cancelled.get()) {
+                    return new RunResult(textBuf.toString(), lastUsage, true);
+                }
                 throw new IllegalStateException("empty Codex Responses API response");
             }
             JsonNode usage = resp.get("usage");
@@ -127,11 +129,14 @@ public class CodexResponsesLoopRunner {
                 lastUsage = usage;
             }
 
-            String text = extractOutputText(resp);
-            if (!text.isEmpty()) {
-                textBuf.append(text);
-                sink.emit(SseEvent.assistantMessage(mapper, text));
+            if (textBuf.length() == textLenBeforeRequest) {
+                String text = extractOutputText(resp);
+                if (!text.isEmpty()) {
+                    textBuf.append(text);
+                    sink.emit(SseEvent.assistantMessage(mapper, text));
+                }
             }
+            checkResponseStatus(resp);
 
             List<FunctionCall> calls = extractFunctionCalls(resp);
             if (calls.isEmpty()) {
@@ -165,6 +170,114 @@ public class CodexResponsesLoopRunner {
                 lastUsage,
                 "任务还没完成，但本轮工具调用次数已达到上限（" + maxIterations + " 轮）。请继续发送“继续”，我会接着当前页面状态往下做。"
         );
+    }
+
+    private JsonNode streamResponse(WebClient client,
+                                    ConfiguredProvider provider,
+                                    ObjectNode request,
+                                    StringBuilder textBuf,
+                                    ChatEventSink sink,
+                                    AtomicBoolean cancelled) {
+        JsonNode completed = null;
+        JsonNode lastResponse = null;
+        for (ServerSentEvent<String> event : client.post()
+                .uri("/v1/responses")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + provider.apiKey())
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToFlux(SSE_EVENT_TYPE)
+                .timeout(Duration.ofMinutes(10))
+                .toIterable()) {
+            if (cancelled.get()) {
+                return null;
+            }
+            String data = event.data();
+            if (data == null || data.isBlank() || "[DONE]".equals(data.trim())) {
+                continue;
+            }
+            JsonNode node = parseStreamData(data);
+            if (node == null) {
+                continue;
+            }
+            String type = node.path("type").asText(event.event() == null ? "" : event.event());
+            if ("response.output_text.delta".equals(type)) {
+                String delta = node.path("delta").asText("");
+                if (!delta.isEmpty()) {
+                    textBuf.append(delta);
+                    sink.emit(SseEvent.assistantMessage(mapper, delta));
+                }
+            } else if ("error".equals(type) || "response.error".equals(type)) {
+                throw new RuntimeException(streamErrorMessage(node));
+            } else if ("response.completed".equals(type)
+                    || "response.done".equals(type)
+                    || "response.failed".equals(type)
+                    || "response.incomplete".equals(type)) {
+                JsonNode response = node.path("response");
+                if (!response.isMissingNode() && !response.isNull()) {
+                    completed = response;
+                    lastResponse = response;
+                } else if (node.has("output") || node.has("output_text") || node.has("status")) {
+                    completed = node;
+                    lastResponse = node;
+                }
+            } else {
+                JsonNode response = node.path("response");
+                if (!response.isMissingNode() && !response.isNull()) {
+                    lastResponse = response;
+                } else if (node.has("output") || node.has("output_text")) {
+                    lastResponse = node;
+                }
+            }
+        }
+        if (completed != null) {
+            return completed;
+        }
+        if (lastResponse != null) {
+            return lastResponse;
+        }
+        if (!textBuf.isEmpty()) {
+            ObjectNode fallback = mapper.createObjectNode();
+            fallback.put("status", "completed");
+            fallback.put("output_text", "");
+            return fallback;
+        }
+        return null;
+    }
+
+    private JsonNode parseStreamData(String data) {
+        try {
+            return mapper.readTree(data);
+        } catch (Exception e) {
+            log.debug("Ignoring malformed Responses stream event: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private String streamErrorMessage(JsonNode node) {
+        JsonNode error = node.path("error");
+        String message = error.path("message").asText("");
+        if (!message.isBlank()) {
+            return message;
+        }
+        message = node.path("message").asText("");
+        return message.isBlank() ? "Codex Responses stream failed" : message;
+    }
+
+    private void checkResponseStatus(JsonNode resp) {
+        String status = resp.path("status").asText("");
+        if (!"failed".equals(status) && !"incomplete".equals(status) && !"cancelled".equals(status)) {
+            return;
+        }
+        String message = resp.path("error").path("message").asText("");
+        if (message.isBlank()) {
+            message = resp.path("incomplete_details").path("reason").asText("");
+        }
+        if (message.isBlank()) {
+            message = "Codex Responses ended with status=" + status;
+        }
+        throw new RuntimeException(message);
     }
 
     private List<JsonNode> buildInitialInput(List<MessageDto> history, String userText) {
