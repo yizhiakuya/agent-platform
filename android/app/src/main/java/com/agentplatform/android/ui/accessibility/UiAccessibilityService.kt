@@ -53,6 +53,39 @@ class UiAccessibilityService : AccessibilityService() {
         private const val TAG = "UiAccessibilityService"
         private const val MIN_LONG_PRESS_MS = 300L
         private const val MAX_LONG_PRESS_MS = 3_000L
+        private const val MEDIA_CONFIRM_AUTO_APPROVE_MS = 12_000L
+
+        private val mediaStoreConfirmPackages = setOf(
+            "com.google.android.providers.media.module",
+            "com.android.providers.media.module",
+            "com.android.providers.media",
+            "com.android.packageinstaller",
+            "com.google.android.packageinstaller",
+            "com.miui.securitycenter"
+        )
+
+        private val mediaStoreConfirmTextHints = listOf(
+            "移至回收站",
+            "移到回收站",
+            "放入回收站",
+            "删除",
+            "Trash",
+            "Move to trash",
+            "move to trash"
+        )
+
+        private val mediaStoreApproveTextHints = listOf(
+            "允许",
+            "确定",
+            "确认",
+            "删除",
+            "移至回收站",
+            "移到回收站",
+            "Allow",
+            "OK",
+            "Move to trash",
+            "Trash"
+        )
 
         @Volatile
         private var instance: UiAccessibilityService? = null
@@ -63,6 +96,9 @@ class UiAccessibilityService : AccessibilityService() {
         @Volatile
         private var currentPackageUpdatedAtMs: Long = 0L
 
+        @Volatile
+        private var mediaStoreConfirmAutoApproveUntilMs: Long = 0L
+
         /** True when the user has enabled the service and the system has
          *  bound to it (onServiceConnected fired). */
         fun isAvailable(): Boolean = instance != null
@@ -72,6 +108,15 @@ class UiAccessibilityService : AccessibilityService() {
 
         fun currentPackage(minUpdatedAtMs: Long = 0L): String =
             if (currentPackageUpdatedAtMs >= minUpdatedAtMs) currentPackageName else ""
+
+        fun armMediaStoreConfirmationAutoApprove() {
+            mediaStoreConfirmAutoApproveUntilMs =
+                System.currentTimeMillis() + MEDIA_CONFIRM_AUTO_APPROVE_MS
+        }
+
+        fun disarmMediaStoreConfirmationAutoApprove() {
+            mediaStoreConfirmAutoApproveUntilMs = 0L
+        }
 
         /** Internal — tools should not directly hold this; they go through
          *  the public methods so we can swap implementation later (e.g.
@@ -387,6 +432,94 @@ class UiAccessibilityService : AccessibilityService() {
                 }
             }
         }
+
+        private fun shouldAutoApproveMediaStoreConfirmation(event: AccessibilityEvent?): Boolean {
+            if (mediaStoreConfirmAutoApproveUntilMs < System.currentTimeMillis()) return false
+            val packageName = event?.packageName?.toString() ?: currentPackageName
+            if (packageName !in mediaStoreConfirmPackages) return false
+            val root = instance?.rootInActiveWindow ?: return false
+            return try {
+                treeContainsAny(root, mediaStoreConfirmTextHints)
+            } finally {
+                root.recycle()
+            }
+        }
+
+        private fun tryAutoApproveMediaStoreConfirmation(): Boolean {
+            val s = instance ?: return false
+            val root = s.rootInActiveWindow ?: return false
+            return try {
+                val button = findClickableByText(root, mediaStoreApproveTextHints)
+                if (button != null) {
+                    try {
+                        button.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    } finally {
+                        button.recycle()
+                    }
+                } else {
+                    false
+                }
+            } finally {
+                root.recycle()
+            }
+        }
+
+        private fun treeContainsAny(node: AccessibilityNodeInfo, hints: List<String>): Boolean {
+            if (nodeMatchesAny(node, hints)) return true
+            val n = node.childCount
+            for (i in 0 until n) {
+                val child = node.getChild(i) ?: continue
+                try {
+                    if (treeContainsAny(child, hints)) return true
+                } finally {
+                    child.recycle()
+                }
+            }
+            return false
+        }
+
+        private fun findClickableByText(
+            node: AccessibilityNodeInfo,
+            hints: List<String>
+        ): AccessibilityNodeInfo? {
+            if (node.isVisibleToUser && node.isEnabled && node.isClickable && nodeMatchesAny(node, hints)) {
+                return AccessibilityNodeInfo.obtain(node)
+            }
+            if (node.isVisibleToUser && node.isEnabled && nodeMatchesAny(node, hints)) {
+                nearestClickable(node)?.let { return it }
+            }
+            val n = node.childCount
+            for (i in 0 until n) {
+                val child = node.getChild(i) ?: continue
+                try {
+                    findClickableByText(child, hints)?.let { return it }
+                } finally {
+                    child.recycle()
+                }
+            }
+            return null
+        }
+
+        private fun nearestClickable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            var parent = node.parent
+            while (parent != null) {
+                if (parent.isVisibleToUser && parent.isEnabled && parent.isClickable) {
+                    return parent
+                }
+                val next = parent.parent
+                parent.recycle()
+                parent = next
+            }
+            return null
+        }
+
+        private fun nodeMatchesAny(node: AccessibilityNodeInfo, hints: List<String>): Boolean {
+            val values = listOfNotNull(
+                node.text?.toString(),
+                node.contentDescription?.toString()
+            )
+            return values.any { value -> hints.any { hint -> value.contains(hint, ignoreCase = true) } }
+        }
     }
 
     private suspend fun dispatchGestureAwait(gesture: GestureDescription): Boolean =
@@ -418,6 +551,10 @@ class UiAccessibilityService : AccessibilityService() {
         if (!packageName.isNullOrBlank()) {
             currentPackageName = packageName
             currentPackageUpdatedAtMs = System.currentTimeMillis()
+        }
+        if (shouldAutoApproveMediaStoreConfirmation(event) && tryAutoApproveMediaStoreConfirmation()) {
+            mediaStoreConfirmAutoApproveUntilMs = 0L
+            Log.i(TAG, "Auto-approved Android MediaStore confirmation")
         }
     }
 

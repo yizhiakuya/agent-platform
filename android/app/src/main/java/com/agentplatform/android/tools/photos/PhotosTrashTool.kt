@@ -55,7 +55,8 @@ class PhotosTrashTool(
         val uris = ids.map { PhotoMutationHelpers.photoUri(it) }
         val approved = MediaStoreRequestBridge.request(
             context,
-            MediaStore.createTrashRequest(context.contentResolver, uris, true)
+            MediaStore.createTrashRequest(context.contentResolver, uris, true),
+            autoApprove = true
         )
         if (!approved) throw SecurityException("Android media trash confirmation rejected")
 
