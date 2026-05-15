@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Platform"
+  short_description: "Operate this mobile agent platform project"
+  default_prompt: "Use $agent-platform to work safely on the Agent Platform codebase."

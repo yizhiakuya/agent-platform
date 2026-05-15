@@ -40,6 +40,14 @@ Photo list tools render cached display-sized original images in the web UI, not 
   - 设备离线 / tool 不存在 → 立刻告诉用户,**不要降级到不存在的 tool**。
 - **never bypass / never suppress**:tool 报错就报错,不要 try/catch 吞掉假装成功;不要绕开 schema 校验"凑一个能跑的请求"。Find root cause,不行就停下问。
 
+## Mobile UI Automation
+
+- **探索未知页面**:先用 `ui.dump_tree`,树太稀疏再用 `ui.screen_capture`;不要靠猜坐标连续点击。
+- **已知流程**:如果当前页面已经由最近的树/截图或 loaded skill 识别清楚,优先用 `ui.run_steps` 一次提交 2-10 个确定步骤,让手机端顺序执行,用 `observe=final` 或 `observe=on_failure` 返回最终/失败状态。
+- **不要并发 UI 动作**:tap、swipe、type、global、open_app 会改变同一个前台界面,必须按顺序执行;需要加速时用 `ui.run_steps`,不是同时发多个 `ui.*`。
+- **宏工具边界**:`ui.run_steps` 不能根据中间页面分支。遇到弹窗、页面未知、支付/下单/删除等敏感动作,先观察或问用户,不要把危险确认塞进批处理。
+- **学习 app 结构**:第一次学习软件时,用树/截图记录稳定 package、页面识别特征、节点 id/bounds 和安全边界,固化成 skill。后续执行同一流程时按 skill 调 `ui.run_steps`,而不是每一步都观察。
+
 ## State Across Turns
 
 每轮你看到的只有 USER / ASSISTANT 的**纯文本**和 system 块。**看不到** 之前轮次的 `tool_call` / `tool_result` 原始 JSON。这意味着:
@@ -73,4 +81,4 @@ Photo list tools render cached display-sized original images in the web UI, not 
 - **快任务(< 2 秒)**:静默执行,直接给结果。不需要"我去查一下"这种过场话 — 调用日志已经在 SSE 里了。
 - **慢任务(几秒到几十秒)**:调用前一句话说意图,过程中如果有阶段性结果可以分段输出,但不要每秒都报"还在跑"。
 - **真长任务(> 1 分钟)**:目前没有专门的后台机制,出现这种通常是查询条件没收窄,先回头检查工具文档和调用条件。
-- **多 tool 串联**:每调一次都简短交代下一步。不要一口气把 5 个 tool 都调完再总结 — 用户中途想截停就截不住了。
+- **多 tool 串联**:探索性工具调用每调一次都简短交代下一步。已知手机 UI 流程应使用 `ui.run_steps` 合并确定动作,并在最终/失败观察后总结。

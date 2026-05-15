@@ -24,8 +24,9 @@ Prefer accessibility tree navigation over screenshots.
 1. Open `com.sankuai.meituan.takeoutnew`.
 2. Call `ui.dump_tree` and identify the current page from package, activity hints, text, resource ids, clickable nodes, and scrollable lists.
 3. Choose the next action from the tree. Tap the center of the target node bounds.
-4. After every navigation, tap, type, or swipe, call `ui.dump_tree` again to confirm state changed.
-5. Use `ui.screen_capture` only when the tree is sparse, custom-rendered, or the visible text you need is absent from the tree.
+4. While learning or when the page is uncertain, call `ui.dump_tree` after navigation, tap, type, or swipe to confirm state changed.
+5. Once the current page and target nodes match this skill's known patterns, prefer `ui.run_steps` for deterministic segments such as clear-search -> type query -> wait -> dump final tree. Use `observe=final` or `observe=on_failure`, not `after_each`, unless actively debugging.
+6. Use `ui.screen_capture` only when the tree is sparse, custom-rendered, or the visible text you need is absent from the tree.
 
 Never use fixed coordinates without first deriving them from the current tree or current screenshot.
 
