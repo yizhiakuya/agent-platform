@@ -23,6 +23,7 @@ export default function ChatPage() {
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightboxScale, setLightboxScale] = useState(1);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [composerError, setComposerError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -252,6 +253,27 @@ export default function ChatPage() {
     abortRef.current = null;
     appendCancelEvent(setEvents, sentEventsIdxRef.current);
     setBusy(false);
+  }
+
+  function openLightbox(src: string) {
+    setLightboxSrc(src);
+    setLightboxScale(1);
+  }
+
+  function closeLightbox() {
+    setLightboxSrc(null);
+    setLightboxScale(1);
+  }
+
+  function zoomLightbox(delta: number) {
+    setLightboxScale(scale => clampZoom(scale + delta));
+  }
+
+  function handleLightboxWheel(e: React.WheelEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const direction = e.deltaY > 0 ? -1 : 1;
+    const step = e.ctrlKey ? 0.35 : 0.18;
+    zoomLightbox(direction * step);
   }
 
   useEffect(() => {
@@ -649,7 +671,7 @@ export default function ChatPage() {
                   key={`${item.event.type}-${item.index}`}
                   ev={item.event}
                   nextToolResult={matchingToolResult(events, item.index)}
-                  onOpenImage={setLightboxSrc}
+                  onOpenImage={openLightbox}
                 />
               );
             }
@@ -658,7 +680,7 @@ export default function ChatPage() {
                 <VisibleToolResult
                   key={`media-${item.event.data?.tool}-${item.index}`}
                   ev={item.event}
-                  onOpenImage={setLightboxSrc}
+                  onOpenImage={openLightbox}
                 />
               );
             }
@@ -668,7 +690,7 @@ export default function ChatPage() {
                 item={item}
                 busy={busy && item.endIndex >= events.length - 1}
                 now={now}
-                onOpenImage={setLightboxSrc}
+                onOpenImage={openLightbox}
               />
             );
           })}
@@ -798,9 +820,38 @@ export default function ChatPage() {
       {lightboxSrc && (
         <div
           className="fixed inset-0 z-50 bg-slate-950/90"
-          onClick={() => setLightboxSrc(null)}
+          onClick={closeLightbox}
+          onWheel={handleLightboxWheel}
         >
           <div className="absolute right-3 top-3 flex items-center gap-2" onClick={e => e.stopPropagation()}>
+            <div className="rounded-md bg-white/95 px-3 py-2 text-sm font-semibold text-slate-700 shadow">
+              {Math.round(lightboxScale * 100)}%
+            </div>
+            <button
+              type="button"
+              onClick={() => zoomLightbox(-0.25)}
+              className="icon-button border-white/20 bg-white text-slate-900"
+              aria-label="缩小图片"
+              title="缩小"
+            >
+              -
+            </button>
+            <button
+              type="button"
+              onClick={() => zoomLightbox(0.25)}
+              className="icon-button border-white/20 bg-white text-slate-900"
+              aria-label="放大图片"
+              title="放大"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              onClick={() => setLightboxScale(1)}
+              className="btn-secondary bg-white"
+            >
+              适应
+            </button>
             <button
               type="button"
               onClick={() => void downloadImage(lightboxSrc)}
@@ -810,7 +861,7 @@ export default function ChatPage() {
             </button>
             <button
               type="button"
-              onClick={() => setLightboxSrc(null)}
+              onClick={closeLightbox}
               className="icon-button border-white/20 bg-white text-slate-900"
               aria-label="关闭预览"
               title="关闭"
@@ -819,15 +870,21 @@ export default function ChatPage() {
             </button>
           </div>
           <div
-            className="flex h-full w-full items-center justify-center p-4 pt-16"
-            onClick={e => e.stopPropagation()}
+            className="flex h-full w-full cursor-zoom-out items-center justify-center overflow-auto p-4 pt-16"
             onContextMenu={e => e.stopPropagation()}
           >
-            <AuthImage
-              src={lightboxSrc}
-              className="max-w-[95vw] max-h-[85vh] object-contain"
-              alt="预览"
-            />
+            <div
+              className="cursor-default rounded-md bg-white/5 p-2 shadow-2xl"
+              style={{ transform: `scale(${lightboxScale})`, transformOrigin: 'center center' }}
+              onClick={e => e.stopPropagation()}
+            >
+              <AuthImage
+                src={lightboxSrc}
+                className="max-h-[82vh] max-w-[92vw] select-none object-contain"
+                alt="预览"
+                draggable={false}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -1291,6 +1348,10 @@ function formatDuration(ms: unknown) {
   const minutes = Math.floor(seconds / 60);
   const rest = Math.round(seconds % 60);
   return `${minutes}m ${rest}s`;
+}
+
+function clampZoom(value: number) {
+  return Math.min(5, Math.max(0.25, Number(value.toFixed(2))));
 }
 
 function elapsedSince(startedAt: number, now: number) {
@@ -2051,13 +2112,15 @@ function AuthImage({
   alt,
   title,
   className,
-  onOpen
+  onOpen,
+  draggable
 }: {
   src: string | null;
   alt?: string;
   title?: string;
   className?: string;
   onOpen?: () => void;
+  draggable?: boolean;
 }) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -2112,6 +2175,7 @@ function AuthImage({
     <img src={displaySrc}
          alt={alt}
          title={title}
+         draggable={draggable}
          onClick={onOpen}
          className={className} />
   );
