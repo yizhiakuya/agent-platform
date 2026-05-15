@@ -21,6 +21,13 @@ export interface PendingDraftImage {
   height?: number;
 }
 
+export interface QueuedChatTurn {
+  id: string;
+  message: string;
+  attachments: PendingDraftImage[];
+  createdAt: string;
+}
+
 interface ChatStore {
   events: ChatEvent[];
   setEvents: React.Dispatch<React.SetStateAction<ChatEvent[]>>;
@@ -31,6 +38,9 @@ interface ChatStore {
   setDraftForKey: (key: string, value: string) => void;
   pendingImagesByKey: Record<string, PendingDraftImage[]>;
   setPendingImagesForKey: (key: string, updater: React.SetStateAction<PendingDraftImage[]>) => void;
+  queuedTurnsByKey: Record<string, QueuedChatTurn[]>;
+  setQueuedTurnsForKey: (key: string, updater: React.SetStateAction<QueuedChatTurn[]>) => void;
+  moveQueuedTurns: (fromKey: string, toKey: string) => void;
   eventsByKey: Record<string, ChatEvent[]>;
   setEventsForKey: (key: string, updater: React.SetStateAction<ChatEvent[]>) => void;
   runsByKey: Record<string, ChatRunState>;
@@ -61,6 +71,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const [sessionIdState, setSessionIdState] = useState<string | null>(() => readStoredSessionId());
   const [draftByKey, setDraftByKey] = useState<Record<string, string>>({});
   const [pendingImagesByKey, setPendingImagesByKey] = useState<Record<string, PendingDraftImage[]>>({});
+  const [queuedTurnsByKey, setQueuedTurnsByKey] = useState<Record<string, QueuedChatTurn[]>>({});
   const [eventsByKey, setEventsByKey] = useState<Record<string, ChatEvent[]>>({});
   const [runsByKey, setRunsByKey] = useState<Record<string, ChatRunState>>({});
   const abortRef = useRef<AbortController | null>(null);
@@ -97,6 +108,29 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const setQueuedTurnsForKey = useCallback((key: string, updater: React.SetStateAction<QueuedChatTurn[]>) => {
+    setQueuedTurnsByKey(prev => {
+      const current = prev[key] ?? [];
+      const next = typeof updater === 'function'
+        ? (updater as (value: QueuedChatTurn[]) => QueuedChatTurn[])(current)
+        : updater;
+      return { ...prev, [key]: next };
+    });
+  }, []);
+
+  const moveQueuedTurns = useCallback((fromKey: string, toKey: string) => {
+    if (fromKey === toKey) return;
+    setQueuedTurnsByKey(prev => {
+      const moving = prev[fromKey] ?? [];
+      if (moving.length === 0) return prev;
+      return {
+        ...prev,
+        [fromKey]: [],
+        [toKey]: [...(prev[toKey] ?? []), ...moving]
+      };
+    });
+  }, []);
+
   const setEventsForKey = useCallback((key: string, updater: React.SetStateAction<ChatEvent[]>) => {
     setEventsByKey(prev => {
       const current = prev[key] ?? [];
@@ -113,6 +147,7 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
       sessionId: sessionIdState, setSessionId,
       activeDraftKey, draftByKey, setDraftForKey,
       pendingImagesByKey, setPendingImagesForKey,
+      queuedTurnsByKey, setQueuedTurnsForKey, moveQueuedTurns,
       eventsByKey, setEventsForKey,
       runsByKey, setRunsByKey,
       abortRef, lastSentRef, sentEventsIdxRef, turnStartedAtRef, eventCacheRef,

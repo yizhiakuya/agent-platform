@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api, MessageDto, SessionDto } from '../api/client';
 import { streamChat } from '../api/sse';
-import { ChatEvent, ChatRunState, NEW_SESSION_KEY, PendingDraftImage, useChatStore } from '../lib/chatStore';
+import { ChatEvent, ChatRunState, NEW_SESSION_KEY, PendingDraftImage, QueuedChatTurn, useChatStore } from '../lib/chatStore';
 import { getToken } from '../lib/auth';
 
 export default function ChatPage() {
@@ -12,12 +12,14 @@ export default function ChatPage() {
     sessionId, setSessionId,
     activeDraftKey, draftByKey, setDraftForKey,
     pendingImagesByKey, setPendingImagesForKey,
+    queuedTurnsByKey, setQueuedTurnsForKey, moveQueuedTurns,
     eventsByKey, setEventsForKey,
     runsByKey, setRunsByKey,
     abortRef, lastSentRef, sentEventsIdxRef, turnStartedAtRef, eventCacheRef,
   } = useChatStore();
   const input = draftByKey[activeDraftKey] ?? '';
   const pendingImages = pendingImagesByKey[activeDraftKey] ?? [];
+  const queuedTurns = queuedTurnsByKey[activeDraftKey] ?? [];
   const activeRun = runsByKey[activeDraftKey];
   const busy = Boolean(activeRun);
   const anyBusy = Object.keys(runsByKey).length > 0;
@@ -37,6 +39,7 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const selectAllRef = useRef<HTMLInputElement | null>(null);
   const activeDraftKeyRef = useRef(activeDraftKey);
+  const queuedTurnsRef = useRef(queuedTurnsByKey);
   const sessionCount = sessions.length;
   const selectedCount = selectedSessionIds.size;
   const allSessionsSelected = sessionCount > 0 && selectedCount === sessionCount;
@@ -286,6 +289,48 @@ export default function ChatPage() {
     setEventsForDraftKey(key, prev => appendCancelEvent(prev, sentEventsIndex));
   }
 
+  function setQueuedTurnsForKeySync(key: string, updater: React.SetStateAction<QueuedChatTurn[]>) {
+    const current = queuedTurnsRef.current[key] ?? [];
+    const next = typeof updater === 'function'
+      ? (updater as (value: QueuedChatTurn[]) => QueuedChatTurn[])(current)
+      : updater;
+    queuedTurnsRef.current = { ...queuedTurnsRef.current, [key]: next };
+    setQueuedTurnsForKey(key, next);
+  }
+
+  function moveQueuedTurnsSync(fromKey: string, toKey: string) {
+    if (fromKey === toKey) return;
+    const moving = queuedTurnsRef.current[fromKey] ?? [];
+    if (moving.length === 0) return;
+    queuedTurnsRef.current = {
+      ...queuedTurnsRef.current,
+      [fromKey]: [],
+      [toKey]: [...(queuedTurnsRef.current[toKey] ?? []), ...moving]
+    };
+    moveQueuedTurns(fromKey, toKey);
+  }
+
+  function enqueueTurn(key: string, message: string, attachments: PendingDraftImage[]) {
+    setQueuedTurnsForKeySync(key, prev => [
+      ...prev,
+      {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        message,
+        attachments,
+        createdAt: new Date().toISOString()
+      }
+    ]);
+  }
+
+  function runNextQueuedTurn(key: string, sessionIdForKey: string | null) {
+    const queueKey = sessionIdForKey ?? key;
+    const queued = queuedTurnsRef.current[queueKey] ?? [];
+    const [nextTurn] = queued;
+    if (!nextTurn) return;
+    setQueuedTurnsForKeySync(queueKey, prev => prev.filter(turn => turn.id !== nextTurn.id));
+    void runTurn(nextTurn, queueKey, sessionIdForKey);
+  }
+
   function openLightbox(src: string) {
     setLightboxSrc(src);
     setLightboxScale(1);
@@ -310,6 +355,10 @@ export default function ChatPage() {
   useEffect(() => {
     activeDraftKeyRef.current = activeDraftKey;
   }, [activeDraftKey]);
+
+  useEffect(() => {
+    queuedTurnsRef.current = queuedTurnsByKey;
+  }, [queuedTurnsByKey]);
 
   useEffect(() => {
     void refreshSessions();
@@ -379,15 +428,30 @@ export default function ChatPage() {
   async function send() {
     const message = input.trim();
     const attachmentsToSend = pendingImages;
-    if ((!message && attachmentsToSend.length === 0) || busy) return;
-    const sentAt = new Date().toISOString();
+    if (!message && attachmentsToSend.length === 0) return;
     const originalKey = activeDraftKey;
-    let targetKey = activeDraftKey;
-    let targetSessionId = sessionId;
     const runId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setDraftForKey(originalKey, '');
     setPendingImagesForKey(originalKey, []);
     setComposerError(null);
+    if (busy) {
+      enqueueTurn(originalKey, message, attachmentsToSend);
+      return;
+    }
+    void runTurn({
+      id: runId,
+      message,
+      attachments: attachmentsToSend,
+      createdAt: new Date().toISOString()
+    }, originalKey, sessionId);
+  }
+
+  async function runTurn(turn: QueuedChatTurn, originalKey: string, originalSessionId: string | null) {
+    const message = turn.message;
+    const attachmentsToSend = turn.attachments;
+    const runId = turn.id;
+    let targetKey = originalKey;
+    let targetSessionId = originalSessionId;
     lastSentRef.current = message;
     const startedAt = Date.now();
     turnStartedAtRef.current = startedAt;
@@ -399,9 +463,18 @@ export default function ChatPage() {
     let uploadedAttachments: UploadedChatImage[] = [];
     let turnStarted = false;
     let sentEventsIndex = -1;
+    const run: ChatRunState = {
+      runId,
+      sessionId: targetSessionId,
+      startedAt,
+      abortController: ctrl,
+      sentEventsIndex: -1
+    };
+    setRunsByKey(prev => ({ ...prev, [targetKey]: run }));
     try {
       if (!targetSessionId) {
         const created = await api.createSession(message || '图片对话');
+        const previousKey = targetKey;
         targetSessionId = created.id;
         targetKey = created.id;
         setSessions(prev => sortSessions([created, ...prev.filter(s => s.id !== created.id)]));
@@ -409,15 +482,16 @@ export default function ChatPage() {
         setEventsForKey(NEW_SESSION_KEY, []);
         setEventsForKey(created.id, eventsByKey[NEW_SESSION_KEY] ?? []);
         setEvents(eventsByKey[NEW_SESSION_KEY] ?? []);
+        moveQueuedTurnsSync(NEW_SESSION_KEY, created.id);
+        setRunsByKey(prev => {
+          const current = prev[previousKey];
+          if (current?.runId !== runId) return prev;
+          const next = { ...prev };
+          delete next[previousKey];
+          next[targetKey] = { ...current, sessionId: targetSessionId };
+          return next;
+        });
       }
-      const run: ChatRunState = {
-        runId,
-        sessionId: targetSessionId,
-        startedAt,
-        abortController: ctrl,
-        sentEventsIndex: -1
-      };
-      setRunsByKey(prev => ({ ...prev, [targetKey]: run }));
       uploadedAttachments = await uploadPendingImages(attachmentsToSend);
       attachmentsToSend.forEach(img => URL.revokeObjectURL(img.previewUrl));
       setEventsForDraftKey(targetKey, prev => {
@@ -425,7 +499,7 @@ export default function ChatPage() {
         sentEventsIdxRef.current = sentEventsIndex;
         return [...prev, {
           type: 'user_message',
-          data: { content: message, attachments: uploadedAttachments, createdAt: sentAt }
+          data: { content: message, attachments: uploadedAttachments, createdAt: turn.createdAt }
         }];
       });
       setRunsByKey(prev => {
@@ -507,6 +581,7 @@ export default function ChatPage() {
         return next;
       });
       abortRef.current = null;
+      runNextQueuedTurn(targetKey, targetSessionId);
     }
   }
 
@@ -775,6 +850,9 @@ export default function ChatPage() {
             );
           })}
           {activeRun && <ThinkingRow startedAt={activeRun.startedAt} now={now} />}
+          {queuedTurns.length > 0 && (
+            <QueuedTurnsNotice count={queuedTurns.length} />
+          )}
         </div>
 
         <form
@@ -826,16 +904,16 @@ export default function ChatPage() {
                 }
               }}
               rows={1}
-              placeholder={busy ? '当前会话生成中，可以继续编辑下一条...' : '输入消息或粘贴图片...'}
+              placeholder={busy ? '当前会话生成中，可以继续输入下一条...' : '输入消息或粘贴图片...'}
               className="field-input mt-0 min-h-[42px] max-h-32 flex-1 resize-none"
               disabled={messagesLoading}
             />
             <button
               type="submit"
-              disabled={(!input.trim() && pendingImages.length === 0) || busy || messagesLoading}
+              disabled={(!input.trim() && pendingImages.length === 0) || messagesLoading}
               className="btn-primary h-[42px] px-4"
             >
-              发送
+              {busy ? '排队' : '发送'}
             </button>
           </div>
         </form>
@@ -852,11 +930,12 @@ export default function ChatPage() {
               <span className={['h-2 w-2 rounded-full', anyBusy ? 'animate-pulse bg-amber-300' : 'bg-emerald-300'].join(' ')} />
               <span>{anyBusy ? `处理中 ${Object.keys(runsByKey).length}` : '空闲'}</span>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-3">
+            <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-3">
               <Metric label="消息" value={String(events.filter(ev => ev.type === 'user_message' || ev.type === 'assistant_message').length)} />
               <Metric label="工具" value={String(toolCallCount)} />
               <Metric label="结果" value={String(toolResultCount)} />
               <Metric label="图片" value={String(pendingImages.length)} />
+              <Metric label="排队" value={String(queuedTurns.length)} />
             </div>
           </div>
 
@@ -1791,6 +1870,16 @@ function ThinkingRow({ startedAt, now }: { startedAt: number; now: number }) {
           <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-bounce" />
         </span>
         <span>回复中 · {elapsedSince(startedAt, now)}</span>
+      </div>
+    </div>
+  );
+}
+
+function QueuedTurnsNotice({ count }: { count: number }) {
+  return (
+    <div className="flex justify-end">
+      <div className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700">
+        已排队 {count} 条，当前回复结束后自动发送
       </div>
     </div>
   );
