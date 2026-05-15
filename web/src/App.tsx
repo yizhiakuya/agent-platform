@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes, Link, Outlet } from 'react-router-dom';
+import { Navigate, NavLink, Route, Routes, Outlet } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
 import DevicesPage from './pages/DevicesPage';
 import ChatPage from './pages/ChatPage';
@@ -11,27 +11,51 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 }
 
 function Shell() {
+  const navItems = [
+    { to: '/chat', label: '聊天', mark: 'C' },
+    { to: '/devices', label: '设备', mark: 'D' },
+    { to: '/settings', label: '设置', mark: 'S' }
+  ];
+
   return (
-    <div className="app-shell flex flex-col">
-      <header className="app-header">
-        <div className="app-container flex min-h-14 flex-wrap items-center justify-between gap-3 py-2">
-          <Link to="/chat" className="text-sm font-semibold tracking-normal text-slate-950">
-            Agent Platform
-          </Link>
-          <nav className="flex min-w-0 flex-wrap items-center gap-1 text-sm">
-            <Link to="/devices" className="btn-ghost min-h-9 px-2.5">设备</Link>
-            <Link to="/chat" className="btn-ghost min-h-9 px-2.5">聊天</Link>
-            <Link to="/settings" className="btn-ghost min-h-9 px-2.5">设置</Link>
-            <button
-              className="btn-ghost min-h-9 px-2.5 text-slate-500 hover:text-red-600"
-              onClick={() => { setToken(null); window.location.assign('/login'); }}
-            >
-              退出登录
-            </button>
-          </nav>
+    <div className="app-shell">
+      <aside className="app-rail">
+        <div className="brand-lockup">
+          <div className="brand-mark">AP</div>
+          <div className="min-w-0">
+            <div className="brand-name">Agent Platform</div>
+            <div className="brand-subtitle">Mobile agent console</div>
+          </div>
         </div>
-      </header>
-      <main className="app-container flex-1 py-4 sm:py-6">
+
+        <nav className="rail-nav" aria-label="主导航">
+          {navItems.map(item => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) => ['rail-link', isActive ? 'rail-link-active' : ''].join(' ')}
+            >
+              <span className="rail-link-mark">{item.mark}</span>
+              <span>{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="rail-footer">
+          <div className="rail-status">
+            <span className="status-dot bg-emerald-400" />
+            <span>服务在线</span>
+          </div>
+          <button
+            className="rail-logout"
+            onClick={() => { setToken(null); window.location.assign('/login'); }}
+          >
+            退出登录
+          </button>
+        </div>
+      </aside>
+
+      <main className="app-main">
         <Outlet />
       </main>
     </div>

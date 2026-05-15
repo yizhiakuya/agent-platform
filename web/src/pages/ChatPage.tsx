@@ -414,55 +414,56 @@ export default function ChatPage() {
 
   const activeSession = sessionId ? sessions.find(s => s.id === sessionId) : null;
   const timelineItems = useMemo(() => buildTimelineItems(events), [events]);
+  const toolCallCount = events.filter(ev => ev.type === 'tool_call_started').length;
+  const toolResultCount = events.filter(ev => ev.type === 'tool_call_result').length;
+  const lastActivity = activeSession?.lastMessageAt ?? activeSession?.createdAt;
 
   return (
-    <div className="grid min-h-[calc(100vh-7rem)] gap-4 lg:h-[calc(100vh-7rem)] lg:grid-cols-[20rem_minmax(0,1fr)]">
-      <aside className="page-panel flex min-h-[20rem] flex-col overflow-hidden lg:min-h-0">
-        <div className="flex items-center justify-between gap-2 border-b border-slate-200 p-3">
-          <div>
-            <h1 className="font-semibold leading-tight text-slate-950">会话</h1>
-            <div className="mt-0.5 text-xs text-slate-500">
-              {selectionMode ? `已选 ${selectedCount} / 共 ${sessionCount}` : `${sessionCount} 条历史`}
+    <div className="workbench chat-shell">
+      <aside className="sidebar-panel">
+        <div className="panel-header">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="section-title">Sessions</div>
+              <h1 className="mt-1 truncate text-xl font-semibold text-slate-950">会话工作区</h1>
+              <div className="mt-1 text-xs text-slate-500">
+                {selectionMode ? `已选 ${selectedCount} / ${sessionCount}` : `${sessionCount} 条历史`}
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={startNewSession}
+              disabled={busy}
+              className="btn-accent min-h-9 px-3 py-1.5"
+            >
+              新建
+            </button>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="mt-3 flex items-center gap-2">
             {sessionCount > 0 && (
               <button
                 type="button"
                 onClick={toggleSelectionMode}
                 disabled={busy || bulkDeleting}
-                className={[
-                  'inline-flex min-h-9 items-center rounded-md border px-2.5 py-1.5 text-sm transition disabled:opacity-50',
-                  selectionMode
-                    ? 'bg-slate-900 border-slate-900 text-white'
-                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                ].join(' ')}
+                className={selectionMode ? 'btn-primary min-h-8 px-3 py-1 text-xs' : 'btn-secondary min-h-8 px-3 py-1 text-xs'}
               >
-                {selectionMode ? '退出' : '多选'}
+                {selectionMode ? '完成' : '多选'}
               </button>
             )}
-            <button
-              type="button"
-              onClick={startNewSession}
-              disabled={busy}
-              className="btn-primary min-h-9 px-2.5 py-1.5"
-            >
-              + 新建
-            </button>
           </div>
         </div>
 
         {selectionMode && (
-          <div className="space-y-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="space-y-2 border-b border-slate-200 bg-slate-50 px-3 py-3">
             <div className="flex items-center justify-between gap-2">
-              <label className="inline-flex min-w-0 items-center gap-2 text-xs font-medium text-slate-700">
+              <label className="inline-flex min-w-0 items-center gap-2 text-xs font-semibold text-slate-700">
                 <input
                   ref={selectAllRef}
                   type="checkbox"
                   checked={allSessionsSelected}
                   onChange={e => e.currentTarget.checked ? selectAllSessions() : clearSelectedSessions()}
                   disabled={busy || bulkDeleting || sessionCount === 0}
-                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+                  className="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500 disabled:opacity-50"
                   aria-label="选择全部会话"
                 />
                 <span className="truncate">已选 {selectedCount} / {sessionCount}</span>
@@ -471,34 +472,25 @@ export default function ChatPage() {
                 type="button"
                 onClick={exitSelectionMode}
                 disabled={busy || bulkDeleting}
-                className="text-xs text-slate-500 transition hover:text-slate-900 disabled:opacity-50"
+                className="text-xs font-medium text-slate-500 transition hover:text-slate-900 disabled:opacity-50"
               >
                 退出
               </button>
             </div>
             <div className="grid grid-cols-3 gap-1.5">
-              <button
-                type="button"
-                onClick={selectAllSessions}
-                disabled={busy || bulkDeleting || sessionCount === 0 || allSessionsSelected}
-                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
-              >
+              <button type="button" onClick={selectAllSessions}
+                      disabled={busy || bulkDeleting || sessionCount === 0 || allSessionsSelected}
+                      className="btn-secondary min-h-8 px-2 py-1 text-xs">
                 全选
               </button>
-              <button
-                type="button"
-                onClick={invertSelectedSessions}
-                disabled={busy || bulkDeleting || sessionCount === 0}
-                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
-              >
+              <button type="button" onClick={invertSelectedSessions}
+                      disabled={busy || bulkDeleting || sessionCount === 0}
+                      className="btn-secondary min-h-8 px-2 py-1 text-xs">
                 反选
               </button>
-              <button
-                type="button"
-                onClick={clearSelectedSessions}
-                disabled={busy || bulkDeleting || selectedCount === 0}
-                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
-              >
+              <button type="button" onClick={clearSelectedSessions}
+                      disabled={busy || bulkDeleting || selectedCount === 0}
+                      className="btn-secondary min-h-8 px-2 py-1 text-xs">
                 清空
               </button>
             </div>
@@ -506,36 +498,42 @@ export default function ChatPage() {
               type="button"
               onClick={() => void deleteSelectedSessions()}
               disabled={busy || bulkDeleting || selectedCount === 0}
-              className="w-full rounded-md bg-red-600 px-2.5 py-1.5 text-xs text-white transition hover:bg-red-700 disabled:opacity-50"
+              className="btn-danger w-full min-h-8 px-3 py-1 text-xs"
             >
               {bulkDeleting ? '删除中...' : `删除已选 ${selectedCount}`}
             </button>
           </div>
         )}
 
-        <div className="border-b border-slate-200 p-2">
+        <div className="border-b border-slate-200 bg-white px-3 py-3">
           <button
             type="button"
             onClick={startNewSession}
             disabled={busy}
             className={[
-              'w-full rounded-md border px-3 py-2 text-left text-sm transition',
+              'w-full rounded-md border px-3 py-3 text-left transition',
               sessionId === null
-                ? 'bg-blue-50 border-blue-200 text-blue-900'
-                : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700',
-              busy ? 'opacity-60 cursor-not-allowed' : ''
+                ? 'border-cyan-300 bg-cyan-50 text-slate-950'
+                : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white',
+              busy ? 'opacity-60' : ''
             ].join(' ')}
           >
-            <span className="font-medium">新会话</span>
-            <span className="block text-xs text-slate-500 mt-0.5">第一条消息会自动创建历史记录</span>
+            <span className="block text-sm font-semibold">新会话</span>
+            <span className="mt-1 block text-xs text-slate-500">待创建历史记录</span>
           </button>
         </div>
 
-        <div className="flex-1 space-y-1 overflow-y-auto p-2">
-          {sessionsLoading && <div className="text-sm text-slate-500 px-2 py-3">加载中...</div>}
-          {sessionsError && <div className="text-sm text-red-600 px-2 py-3">{sessionsError}</div>}
+        <div className="flex-1 space-y-1 overflow-y-auto bg-slate-50/80 p-2">
+          {sessionsLoading && <div className="px-2 py-3 text-sm text-slate-500">加载中...</div>}
+          {sessionsError && (
+            <div className="m-1 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              会话加载失败: {sessionsError}
+            </div>
+          )}
           {!sessionsLoading && !sessionsError && sessions.length === 0 && (
-            <div className="text-sm text-slate-500 px-2 py-3">还没有历史会话。</div>
+            <div className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
+              暂无历史会话。
+            </div>
           )}
           {sessions.map(s => {
             const active = s.id === sessionId;
@@ -544,19 +542,19 @@ export default function ChatPage() {
               <div
                 key={s.id}
                 className={[
-                  'group flex items-stretch gap-1 rounded-md border transition',
-                  active ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white border-transparent hover:border-slate-200 hover:bg-slate-50',
-                  selected && !active ? 'border-blue-300 bg-blue-50' : ''
+                  'session-row group',
+                  active ? 'session-row-active' : 'session-row-idle',
+                  selected && !active ? 'session-row-selected' : ''
                 ].join(' ')}
               >
                 {selectionMode && (
-                  <label className="flex items-center pl-2 cursor-pointer">
+                  <label className="flex cursor-pointer items-center pl-2">
                     <input
                       type="checkbox"
                       checked={selected}
                       disabled={busy || bulkDeleting}
                       onChange={() => toggleSessionSelected(s.id)}
-                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      className="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
                       aria-label={`选择 ${sessionTitle(s)}`}
                     />
                   </label>
@@ -565,71 +563,83 @@ export default function ChatPage() {
                   type="button"
                   onClick={() => selectionMode ? toggleSessionSelected(s.id) : void loadSession(s.id)}
                   disabled={busy || messagesLoading || bulkDeleting}
-                  className="min-w-0 flex-1 text-left px-3 py-2 disabled:cursor-not-allowed"
+                  className="min-w-0 flex-1 px-3 py-2.5 text-left disabled:cursor-not-allowed"
                   aria-current={active ? 'page' : undefined}
                 >
-                  <div className="font-medium text-sm truncate">{sessionTitle(s)}</div>
-                  <div className={['text-xs mt-1 truncate', active ? 'text-slate-300' : 'text-slate-500'].join(' ')}>
-                    {formatSessionTime(s)}
+                  <div className="truncate text-sm font-semibold">{sessionTitle(s)}</div>
+                  <div className={['mt-1 flex items-center gap-2 text-xs', active ? 'text-slate-300' : 'text-slate-500'].join(' ')}>
+                    <span className="h-1.5 w-1.5 rounded-full bg-current opacity-60" />
+                    <span className="truncate">{formatSessionTime(s)}</span>
                   </div>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void exportSession(s.id)}
-                  disabled={busy || selectionMode || bulkDeleting}
-                  className={[
-                    'px-2 text-xs opacity-0 group-hover:opacity-100 focus:opacity-100 disabled:opacity-40',
-                    active ? 'text-slate-300 hover:text-white' : 'text-slate-400 hover:text-slate-700'
-                  ].join(' ')}
-                  title="导出 JSONL"
-                >
-                  导出
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void deleteSession(s.id)}
-                  disabled={busy || selectionMode || bulkDeleting || deleteBusyId === s.id}
-                  className={[
-                    'px-2 text-xs rounded-r opacity-0 group-hover:opacity-100 focus:opacity-100 disabled:opacity-40',
-                    active ? 'text-slate-300 hover:text-white' : 'text-slate-400 hover:text-red-600'
-                  ].join(' ')}
-                  title="删除会话"
-                >
-                  删除
-                </button>
+                <div className="flex shrink-0 items-center pr-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                  <button
+                    type="button"
+                    onClick={() => void exportSession(s.id)}
+                    disabled={busy || selectionMode || bulkDeleting}
+                    className={active ? 'px-2 text-xs text-slate-300 hover:text-white disabled:opacity-40' : 'px-2 text-xs text-slate-400 hover:text-slate-800 disabled:opacity-40'}
+                    title="导出 JSONL"
+                  >
+                    导出
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void deleteSession(s.id)}
+                    disabled={busy || selectionMode || bulkDeleting || deleteBusyId === s.id}
+                    className={active ? 'px-2 text-xs text-slate-300 hover:text-white disabled:opacity-40' : 'px-2 text-xs text-slate-400 hover:text-red-600 disabled:opacity-40'}
+                    title="删除会话"
+                  >
+                    删除
+                  </button>
+                </div>
               </div>
             );
           })}
         </div>
       </aside>
 
-      <section className="page-panel flex min-w-0 flex-col overflow-hidden lg:min-h-0">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-          <div className="min-w-0">
-            <div className="truncate font-semibold text-slate-950">{activeSession ? sessionTitle(activeSession) : '新会话'}</div>
-            <div className="mt-0.5 text-xs text-slate-500">
-              {sessionId ? `会话 ${sessionId.slice(0, 8)}` : '发送第一条消息后保存到历史'}
-              {messagesLoading ? ' · 正在加载消息' : ''}
+      <section className="chat-panel">
+        <div className="panel-header bg-white">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="section-title">Conversation</div>
+              <div className="mt-1 truncate text-xl font-semibold text-slate-950">
+                {activeSession ? sessionTitle(activeSession) : '新会话'}
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                <span>{sessionId ? `会话 ${sessionId.slice(0, 8)}` : '尚未保存'}</span>
+                {messagesLoading && <span>加载消息中</span>}
+                <span>{events.length} 条事件</span>
+              </div>
             </div>
+            {busy && (
+              <button
+                type="button"
+                onClick={handleStop}
+                className="btn-danger min-h-9 px-3 py-1.5"
+                title="中断当前回复"
+              >
+                停止
+              </button>
+            )}
           </div>
-          {busy && (
-            <button
-              type="button"
-              onClick={handleStop}
-              className="inline-flex min-h-9 items-center rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-red-700"
-              title="按 Esc 也可中断"
-            >
-              停止
-            </button>
-          )}
         </div>
 
-        <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto bg-slate-50/60 p-3 sm:p-4">
+        <div ref={scrollRef} className="message-stream">
           {events.length === 0 && (
-            <div className="status-muted">
-              试试:<em>"列出我最近的照片"</em>。助手会在你绑定的设备上调用
-              <code className="mx-1 px-1.5 py-0.5 bg-slate-100 rounded">photos.list_recent</code>
-              工具。
+            <div className="mx-auto flex min-h-[48vh] max-w-2xl flex-col items-center justify-center text-center">
+              <div className="grid h-14 w-14 place-items-center rounded-lg bg-slate-950 text-sm font-black text-cyan-200">
+                AP
+              </div>
+              <h2 className="mt-4 text-2xl font-semibold text-slate-950">新会话已准备</h2>
+              <p className="mt-2 max-w-sm text-sm leading-6 text-slate-500">
+                当前没有消息记录。
+              </p>
+              <div className="mt-6 grid w-full gap-2 sm:grid-cols-3">
+                <EmptyHint title="图片理解" body="粘贴或上传图片给 agent 分析。" />
+                <EmptyHint title="手机操作" body="让 agent 调用已连接设备工具。" />
+                <EmptyHint title="工作流" body="复杂任务会展示工具运行轨迹。" />
+              </div>
             </div>
           )}
           {timelineItems.map(item => {
@@ -669,7 +679,7 @@ export default function ChatPage() {
           onSubmit={ev => { ev.preventDefault(); void send(); }}
           onDrop={handleDrop}
           onDragOver={handleDragOver}
-          className="space-y-2 border-t border-slate-200 bg-white p-3"
+          className="composer space-y-3"
         >
           {(pendingImages.length > 0 || composerError) && (
             <div className="space-y-2">
@@ -714,38 +724,94 @@ export default function ChatPage() {
                 }
               }}
               rows={1}
-              placeholder={busy ? '生成中... 按 Esc 或点"停止"中断' : '输入消息或粘贴图片...'}
+              placeholder={busy ? '生成中...' : '输入消息或粘贴图片...'}
               className="field-input mt-0 min-h-[42px] max-h-32 flex-1 resize-none"
               disabled={busy || messagesLoading}
             />
-          <button
-            type="submit"
-            disabled={(!input.trim() && pendingImages.length === 0) || busy || messagesLoading}
-            className="btn-primary h-[42px]"
-          >
-            发送
-          </button>
+            <button
+              type="submit"
+              disabled={(!input.trim() && pendingImages.length === 0) || busy || messagesLoading}
+              className="btn-accent h-[42px] px-4"
+            >
+              发送
+            </button>
           </div>
         </form>
       </section>
 
+      <aside className="context-panel">
+        <div className="panel-header">
+          <div className="section-title">Status</div>
+          <div className="mt-1 text-xl font-semibold text-slate-950">运行状态</div>
+        </div>
+        <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50/80 p-3">
+          <div className="rounded-lg bg-slate-950 p-4 text-white">
+            <div className="flex items-center gap-2 text-xs text-slate-300">
+              <span className={['h-2 w-2 rounded-full', busy ? 'animate-pulse bg-amber-300' : 'bg-emerald-300'].join(' ')} />
+              <span>{busy ? '处理中' : '空闲'}</span>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <Metric label="消息" value={String(events.filter(ev => ev.type === 'user_message' || ev.type === 'assistant_message').length)} />
+              <Metric label="工具" value={String(toolCallCount)} />
+              <Metric label="结果" value={String(toolResultCount)} />
+              <Metric label="图片" value={String(pendingImages.length)} />
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white p-3">
+            <div className="text-xs font-semibold uppercase text-slate-500">当前会话</div>
+            <div className="mt-2 min-w-0 truncate text-sm font-semibold text-slate-950">
+              {activeSession ? sessionTitle(activeSession) : '新会话'}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              {sessionId ? sessionId : 'pending'}
+            </div>
+            {lastActivity && (
+              <div className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
+                最近活动 {new Date(lastActivity).toLocaleString()}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white p-3">
+            <div className="text-xs font-semibold uppercase text-slate-500">通道</div>
+            <div className="mt-3 grid gap-2 text-xs text-slate-600">
+              <div className="flex items-center justify-between">
+                <span>SSE</span>
+                <span className="font-semibold text-emerald-600">ready</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Uploads</span>
+                <span className="font-semibold text-emerald-600">ready</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Device tools</span>
+                <span className={busy ? 'font-semibold text-amber-600' : 'font-semibold text-slate-500'}>
+                  {busy ? 'active' : 'idle'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
       {lightboxSrc && (
         <div
-          className="fixed inset-0 bg-black/85 z-50"
+          className="fixed inset-0 z-50 bg-slate-950/90"
           onClick={() => setLightboxSrc(null)}
         >
           <div className="absolute right-3 top-3 flex items-center gap-2" onClick={e => e.stopPropagation()}>
             <button
               type="button"
               onClick={() => void downloadImage(lightboxSrc)}
-              className="rounded bg-white/95 px-3 py-2 text-sm font-medium text-slate-800 shadow hover:bg-white"
+              className="btn-accent"
             >
               保存图片
             </button>
             <button
               type="button"
               onClick={() => setLightboxSrc(null)}
-              className="h-9 w-9 rounded bg-white/95 text-xl leading-9 text-slate-700 shadow hover:bg-white"
+              className="icon-button border-white/20 bg-white text-slate-900"
               aria-label="关闭预览"
               title="关闭"
             >
@@ -1342,6 +1408,24 @@ function hasToolError(result: unknown) {
   return false;
 }
 
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[11px] uppercase text-slate-400">{label}</div>
+      <div className="mt-1 text-xl font-semibold text-white">{value}</div>
+    </div>
+  );
+}
+
+function EmptyHint({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white/80 p-3 text-left shadow-sm">
+      <div className="text-sm font-semibold text-slate-950">{title}</div>
+      <div className="mt-1 text-xs leading-5 text-slate-500">{body}</div>
+    </div>
+  );
+}
+
 function ToolCallRow({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: ChatEvent | null }) {
   const status = resultEvent
     ? hasToolError(resultEvent.data?.result) ? 'failed' : 'succeeded'
@@ -1358,10 +1442,10 @@ function ToolCallRow({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: ChatEve
       : '调用完成';
 
   return (
-    <div className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-500">
+    <div className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white/90 px-3 py-2 text-xs text-slate-500 shadow-sm">
       <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
       <span className="shrink-0">{label}</span>
-      <code className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700">{ev.data?.tool}</code>
+      <code className="tool-chip">{ev.data?.tool}</code>
       {ev.data?.args && <span className="min-w-0 truncate text-slate-400">({JSON.stringify(ev.data.args)})</span>}
     </div>
   );
@@ -1379,7 +1463,7 @@ function PendingImageGrid({
   return (
     <div className="flex flex-wrap gap-2">
       {items.map(item => (
-        <div key={item.id} className="relative h-20 w-20 overflow-hidden rounded-md border border-slate-200 bg-slate-100">
+        <div key={item.id} className="relative h-20 w-20 overflow-hidden rounded-md border border-slate-200 bg-slate-100 shadow-sm">
           <img src={item.previewUrl} alt={item.file.name || '待发送图片'} className="h-full w-full object-cover" />
           <button
             type="button"
@@ -1416,7 +1500,7 @@ function MessageAttachmentGrid({
             alt={item.name ?? '图片附件'}
             title={item.name}
             onOpen={() => onOpenImage(src)}
-            className="h-32 w-32 cursor-zoom-in rounded-md border border-slate-200 object-cover transition hover:ring-2 hover:ring-blue-400"
+            className="media-thumb h-32 w-32"
           />
         );
       })}
@@ -1457,17 +1541,17 @@ function ProcessPanel({
       : 'bg-emerald-500';
 
   return (
-    <details className="group/process rounded-lg border border-slate-200 bg-white shadow-sm open:bg-slate-50/70">
-      <summary className="flex cursor-pointer list-none items-start gap-2 px-3 py-2 text-xs text-slate-500 marker:hidden">
+    <details className="group/process rounded-lg border border-slate-200 bg-white shadow-sm open:bg-slate-50/80">
+      <summary className="flex cursor-pointer list-none items-start gap-3 px-3 py-2.5 text-xs text-slate-500 marker:hidden">
         <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
         <span className="grid min-w-0 flex-1 gap-1">
           <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="font-medium text-slate-600">{statusText}</span>
+            <span className="font-semibold text-slate-700">{statusText}</span>
             {duration && <span>{duration}</span>}
             <span>{progress ? `${progress.index}/${progress.max}` : toolCalls.length} 次调用</span>
             {toolResults.length > 0 && <span>{toolResults.length} 个结果</span>}
             {visibleNames.map(name => (
-              <code key={name} className="rounded bg-slate-100 px-1 py-0.5 text-[11px] text-slate-600">
+              <code key={name} className="tool-chip">
                 {name}
               </code>
             ))}
@@ -1477,7 +1561,7 @@ function ProcessPanel({
         </span>
         <span className="mt-0.5 shrink-0 text-slate-400 transition group-open/process:rotate-90">›</span>
       </summary>
-      <div className="border-t border-slate-100 px-3 py-2">
+      <div className="border-t border-slate-100 px-3 py-3">
         <div className="space-y-2">
           {item.events.map((ev, index) => ev.type === 'tool_call_started' ? (
             <ToolCallDetail
@@ -1486,16 +1570,16 @@ function ProcessPanel({
               resultEvent={findResultForToolCall(item.events, index)}
             />
           ) : ev.type === 'tool_call_result' ? (
-            <div key={`result-${item.startIndex}-${index}`} className="rounded-md border border-slate-200 bg-white p-2">
+            <div key={`result-${item.startIndex}-${index}`} className="tool-card">
               <div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-600">
                 <span className="text-slate-400">工具</span>
-                <code className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700">{ev.data?.tool}</code>
+                <code className="tool-chip">{ev.data?.tool}</code>
                 <span>返回结果</span>
               </div>
               <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} />
             </div>
           ) : ev.type === 'assistant_message' ? (
-            <div key={`note-${item.startIndex}-${index}`} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+            <div key={`note-${item.startIndex}-${index}`} className="assistant-card">
               <MarkdownMessage content={ev.data?.content ?? ''} />
             </div>
           ) : (
@@ -1535,7 +1619,7 @@ function ToolCallDetail({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: Chat
         <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
         <span className="shrink-0">{label}</span>
         {progress && <span className="shrink-0 text-slate-400">第 {progress.index}/{progress.max} 个工具</span>}
-        <code className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700">{ev.data?.tool}</code>
+        <code className="tool-chip">{ev.data?.tool}</code>
         {args && <span className="min-w-0 truncate text-slate-400">({JSON.stringify(args)})</span>}
       </div>
     </div>
@@ -1546,11 +1630,11 @@ function VisibleToolResult({ ev, onOpenImage }: { ev: ChatEvent; onOpenImage: Op
   const tool = String(ev.data?.tool ?? 'tool');
   return (
     <div className="flex justify-start">
-      <div className="w-full max-w-3xl rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="tool-card w-full max-w-3xl">
         <div className="mb-2 flex items-center gap-2 text-xs text-slate-500">
-          <span className="h-2 w-2 rounded-full bg-blue-500" />
+          <span className="h-2 w-2 rounded-full bg-cyan-500" />
           <span className="font-medium text-slate-600">{toolResultTitle(tool)}</span>
-          <code className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">{tool}</code>
+          <code className="tool-chip">{tool}</code>
         </div>
         <ToolResult tool={tool} result={ev.data?.result} onOpenImage={onOpenImage} />
       </div>
@@ -1579,7 +1663,7 @@ function Bubble({
       const attachments = normalizeMessageAttachments(ev.data?.attachments);
       return (
         <div className="flex justify-end">
-          <div className="max-w-[min(42rem,85%)]">
+          <div className="max-w-[min(42rem,86%)]">
             <div className="space-y-2">
               {attachments.length > 0 && (
                 <MessageAttachmentGrid
@@ -1588,7 +1672,7 @@ function Bubble({
                 />
               )}
               {ev.data?.content && (
-                <div className="rounded-lg bg-blue-600 px-3 py-2 text-sm leading-relaxed text-white shadow-sm whitespace-pre-wrap">
+                <div className="user-bubble whitespace-pre-wrap">
                   {ev.data.content}
                 </div>
               )}
@@ -1604,7 +1688,7 @@ function Bubble({
       return (
         <div className="flex justify-start">
           <div className="max-w-[min(46rem,92%)]">
-            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
+            <div className="assistant-card">
               <MarkdownMessage content={ev.data?.content ?? ''} />
             </div>
             {(time || duration) && (
@@ -1653,9 +1737,9 @@ function ThinkingRow({ startedAt, now }: { startedAt: number; now: number }) {
     <div className="flex justify-start">
       <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 shadow-sm">
         <span className="flex items-center gap-1" aria-label="回复中">
-          <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:-0.2s]" />
-          <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:-0.1s]" />
-          <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce" />
+          <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-bounce [animation-delay:-0.2s]" />
+          <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-bounce [animation-delay:-0.1s]" />
+          <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-bounce" />
         </span>
         <span>回复中 · {elapsedSince(startedAt, now)}</span>
       </div>
@@ -1691,7 +1775,7 @@ function ToolResult({ tool, result, onOpenImage }: {
         <AuthImage src={small} alt={result.name}
                    title={result.name}
                    onOpen={() => big && onOpenImage(big)}
-                   className="max-h-96 w-full cursor-zoom-in rounded-md border border-slate-200 object-contain transition hover:ring-2 hover:ring-blue-400" />
+                   className="media-thumb max-h-96 w-full object-contain" />
         <div className="mt-1 text-xs text-slate-500">
           {result.name}{w && h ? ` · ${w}×${h}` : ''}
         </div>
@@ -1709,7 +1793,7 @@ function ToolResult({ tool, result, onOpenImage }: {
               {src ? (
                 <AuthImage src={src} alt={a.name}
                            onOpen={() => onOpenImage(big ?? src)}
-                           className="h-32 w-full cursor-zoom-in object-cover transition hover:ring-2 hover:ring-blue-400" />
+                           className="media-thumb h-32 w-full" />
               ) : (
                 <div className="w-full h-32 bg-slate-200" />
               )}
@@ -1755,7 +1839,7 @@ function ToolResult({ tool, result, onOpenImage }: {
                 <AuthImage src={src} alt={v.name}
                            title={v.name}
                            onOpen={() => onOpenImage(src)}
-                           className="h-32 w-full cursor-zoom-in rounded-md border border-slate-200 object-cover transition hover:ring-2 hover:ring-blue-400" />
+                           className="media-thumb h-32 w-full" />
               ) : (
                 <div className="h-32 w-full rounded-md bg-slate-200" />
               )}
@@ -1823,7 +1907,7 @@ function PrimaryPhotoCard({ photo, onOpenImage }: { photo: any; onOpenImage: Ope
       <AuthImage src={small} alt={photo?.name}
                  title={photo?.name}
                  onOpen={() => preview && onOpenImage(preview)}
-                 className="max-h-96 w-full cursor-zoom-in rounded-md border border-slate-200 object-contain transition hover:ring-2 hover:ring-blue-400" />
+                 className="media-thumb max-h-96 w-full object-contain" />
       <div className="mt-1 text-xs text-slate-500">
         {photo?.name ?? '图片结果'}{w && h ? ` · ${w}×${h}` : ''}
       </div>
@@ -1842,7 +1926,7 @@ function SemanticPhotoResult({ result, onOpenImage }: { result: any; onOpenImage
         <AuthImage src={small} alt={primary.name}
                    title={primary.name}
                    onOpen={() => big && onOpenImage(big)}
-                   className="max-h-96 w-full cursor-zoom-in rounded-md border border-slate-200 object-contain transition hover:ring-2 hover:ring-blue-400" />
+                   className="media-thumb max-h-96 w-full object-contain" />
         <div className="mt-1 text-xs text-slate-500">
           {primary.name}{w && h ? ` · ${w}×${h}` : ''}
         </div>
@@ -1918,7 +2002,7 @@ function SemanticPhotoResult({ result, onOpenImage }: { result: any; onOpenImage
 
 function ThumbGrid({ items, onOpenImage }: { items: any[]; onOpenImage: OpenImage }) {
   return (
-    <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-5">
       {items.map((p: any) => {
         const { big, small: src } = photoImageSources(p);
         if (!src) {
@@ -1928,7 +2012,7 @@ function ThumbGrid({ items, onOpenImage }: { items: any[]; onOpenImage: OpenImag
           <AuthImage key={p.id} src={src} alt={p.name}
                      title={p.name}
                      onOpen={() => onOpenImage(big ?? src)}
-                     className="h-32 w-full cursor-zoom-in rounded-md border border-slate-200 object-cover transition hover:ring-2 hover:ring-blue-400" />
+                     className="media-thumb h-32 w-full" />
         );
       })}
     </div>

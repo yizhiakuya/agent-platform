@@ -16,70 +16,114 @@ export default function DevicesPage() {
     }
   });
 
+  const onlineCount = devices.data?.filter(d => d.lastSeenAt && Date.now() - new Date(d.lastSeenAt).getTime() < 5 * 60 * 1000).length ?? 0;
+
   return (
-    <div className="space-y-6">
-      <section>
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="page-title">设备</h1>
-            <p className="page-subtitle">管理已绑定的 Android agent 客户端。</p>
+    <div className="workbench grid lg:grid-cols-[minmax(0,1fr)_22rem]">
+      <section className="page-surface min-w-0 overflow-hidden">
+        <div className="panel-header">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="section-title">Devices</div>
+              <h1 className="mt-1 page-title">设备管理</h1>
+              <p className="page-subtitle">管理 Android agent 客户端和绑定入口。</p>
+            </div>
+            <button
+              onClick={() => create.mutate()}
+              disabled={create.isPending}
+              className="btn-accent"
+            >
+              {create.isPending ? '生成中...' : '新增设备'}
+            </button>
           </div>
-          <button
-            onClick={() => create.mutate()}
-            disabled={create.isPending}
-            className="btn-primary"
-          >
-            + 新增设备
-          </button>
         </div>
 
-        {devices.isLoading && <div className="status-muted">加载中...</div>}
-        {devices.error && <div className="status-error">错误:{String(devices.error)}</div>}
-        {devices.data && devices.data.length === 0 && (
-          <div className="status-muted">
-            还没有设备。点击 <strong>新增设备</strong>,然后在安卓 app 扫码或粘贴 token 完成绑定。
-          </div>
-        )}
-        {devices.data && devices.data.length > 0 && (
-          <ul className="page-panel divide-y divide-slate-100 overflow-hidden">
-            {devices.data.map(d => (
-              <li key={d.id} className="flex flex-col gap-2 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <div className="truncate font-medium text-slate-950">{d.name}</div>
-                  <div className="mt-0.5 text-slate-500">
-                    {d.model || '?'} · {d.osVersion ? `Android ${d.osVersion}` : ''}
-                  </div>
-                </div>
-                <div className="shrink-0 text-slate-400">
-                  {d.lastSeenAt ? `最近在线 ${new Date(d.lastSeenAt).toLocaleString()}` : '从未连接'}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+        <div className="grid gap-3 border-b border-slate-200 bg-slate-50/80 p-4 sm:grid-cols-3">
+          <StatCard label="已绑定" value={String(devices.data?.length ?? 0)} />
+          <StatCard label="最近在线" value={String(onlineCount)} accent="text-emerald-600" />
+          <StatCard label="绑定状态" value={enrollment ? '待扫码' : '正常'} />
+        </div>
+
+        <div className="p-4">
+          {devices.isLoading && <div className="status-muted">加载中...</div>}
+          {devices.error && <div className="status-error">错误: {String(devices.error)}</div>}
+          {devices.data && devices.data.length === 0 && (
+            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
+              <div className="text-lg font-semibold text-slate-950">还没有设备</div>
+              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
+                创建绑定码后，在 Android 客户端扫码或粘贴 token 完成连接。
+              </p>
+            </div>
+          )}
+          {devices.data && devices.data.length > 0 && (
+            <ul className="grid gap-3">
+              {devices.data.map(d => {
+                const seenAt = d.lastSeenAt ? new Date(d.lastSeenAt) : null;
+                const online = seenAt ? Date.now() - seenAt.getTime() < 5 * 60 * 1000 : false;
+                return (
+                  <li key={d.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={['h-2 w-2 rounded-full', online ? 'bg-emerald-500' : 'bg-slate-300'].join(' ')} />
+                          <div className="truncate text-base font-semibold text-slate-950">{d.name}</div>
+                        </div>
+                        <div className="mt-1 text-sm text-slate-500">
+                          {d.model || '未知型号'} · {d.osVersion ? `Android ${d.osVersion}` : '未知系统'}
+                        </div>
+                      </div>
+                      <div className="text-sm text-slate-500">
+                        {seenAt ? `最近在线 ${seenAt.toLocaleString()}` : '从未连接'}
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       </section>
 
-      {enrollment && (
-        <section className="page-panel p-4">
-          <h2 className="font-medium text-slate-950">绑定新设备</h2>
-          <div className="grid grid-cols-1 md:grid-cols-[auto,1fr] gap-4 items-start">
-            <div className="rounded-md border border-slate-200 bg-white p-3">
-              <QRCodeSVG value={enrollment.qrPayload} size={180} />
+      <aside className="page-surface overflow-hidden">
+        <div className="panel-header">
+          <div className="section-title">Pairing</div>
+          <div className="mt-1 text-xl font-semibold text-slate-950">绑定新设备</div>
+        </div>
+        <div className="p-4">
+          {enrollment ? (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <QRCodeSVG value={enrollment.qrPayload} size={220} className="mx-auto" />
+              </div>
+              <div className="space-y-2">
+                <div className="text-sm font-semibold text-slate-700">Token</div>
+                <code className="block break-all rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                  {enrollment.token}
+                </code>
+              </div>
+              <div className="rounded-md bg-slate-950 px-3 py-2 text-sm text-white">
+                过期时间 {new Date(enrollment.expiresAt).toLocaleString()}
+              </div>
             </div>
-            <div className="text-sm space-y-2">
-              <p className="text-slate-600">
-                打开安卓 app 扫此二维码 — 或将下方 token 粘贴到 app 的绑定页。
-              </p>
-              <code className="block break-all rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700">
-                {enrollment.token}
-              </code>
-              <p className="text-slate-500">
-                过期时间:<strong>{new Date(enrollment.expiresAt).toLocaleString()}</strong>。
+          ) : (
+            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+              <div className="text-sm font-semibold text-slate-950">尚未生成绑定码</div>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                点击新增设备后，这里会展示二维码和 token。
               </p>
             </div>
-          </div>
-        </section>
-      )}
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function StatCard({ label, value, accent = 'text-slate-950' }: { label: string; value: string; accent?: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="text-xs font-semibold uppercase text-slate-500">{label}</div>
+      <div className={['mt-2 text-2xl font-semibold', accent].join(' ')}>{value}</div>
     </div>
   );
 }
