@@ -3,17 +3,24 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api, MessageDto, SessionDto } from '../api/client';
 import { streamChat } from '../api/sse';
-import { ChatEvent, useChatStore } from '../lib/chatStore';
+import { ChatEvent, ChatRunState, NEW_SESSION_KEY, PendingDraftImage, useChatStore } from '../lib/chatStore';
 import { getToken } from '../lib/auth';
 
 export default function ChatPage() {
   const {
     events, setEvents,
-    busy, setBusy,
     sessionId, setSessionId,
-    input, setInput,
+    activeDraftKey, draftByKey, setDraftForKey,
+    pendingImagesByKey, setPendingImagesForKey,
+    eventsByKey, setEventsForKey,
+    runsByKey, setRunsByKey,
     abortRef, lastSentRef, sentEventsIdxRef, turnStartedAtRef, eventCacheRef,
   } = useChatStore();
+  const input = draftByKey[activeDraftKey] ?? '';
+  const pendingImages = pendingImagesByKey[activeDraftKey] ?? [];
+  const activeRun = runsByKey[activeDraftKey];
+  const busy = Boolean(activeRun);
+  const anyBusy = Object.keys(runsByKey).length > 0;
   const [sessions, setSessions] = useState<SessionDto[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
@@ -24,12 +31,12 @@ export default function ChatPage() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [lightboxScale, setLightboxScale] = useState(1);
-  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [composerError, setComposerError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const selectAllRef = useRef<HTMLInputElement | null>(null);
+  const activeDraftKeyRef = useRef(activeDraftKey);
   const sessionCount = sessions.length;
   const selectedCount = selectedSessionIds.size;
   const allSessionsSelected = sessionCount > 0 && selectedCount === sessionCount;
@@ -48,14 +55,18 @@ export default function ChatPage() {
   }
 
   async function loadSession(id: string, force = false) {
-    if (busy || (!force && id === sessionId)) return;
+    if (!force && id === sessionId) return;
     setMessagesLoading(true);
+    setEvents(eventsByKey[id] ?? eventCacheRef.current[id] ?? []);
     setSessionId(id);
     try {
       const rows = await api.listMessages(id);
       const loaded = rows.map(messageToEvent).filter((ev): ev is ChatEvent => ev !== null);
-      const cached = eventCacheRef.current[id];
-      setEvents(cached && hasRicherToolHistory(cached, loaded) ? cached : loaded);
+      const cached = eventsByKey[id] ?? eventCacheRef.current[id];
+      const nextEvents = cached && hasRicherToolHistory(cached, loaded) ? cached : loaded;
+      eventCacheRef.current[id] = nextEvents;
+      setEventsForKey(id, nextEvents);
+      setEvents(nextEvents);
     } catch (e) {
       setEvents([{ type: 'error', data: { message: e instanceof Error ? e.message : String(e) } }]);
     } finally {
@@ -64,17 +75,15 @@ export default function ChatPage() {
   }
 
   function startNewSession() {
-    if (busy) return;
     setSessionId(null);
-    setEvents([]);
-    setInput('');
+    setEvents(eventsByKey[NEW_SESSION_KEY] ?? []);
     clearPendingImages();
     lastSentRef.current = '';
     sentEventsIdxRef.current = -1;
   }
 
   function toggleSelectionMode() {
-    if (busy || bulkDeleting) return;
+    if (bulkDeleting) return;
     setSelectionMode(prev => {
       const next = !prev;
       if (!next) setSelectedSessionIds(new Set());
@@ -83,7 +92,7 @@ export default function ChatPage() {
   }
 
   function toggleSessionSelected(id: string) {
-    if (busy || bulkDeleting) return;
+    if (bulkDeleting) return;
     setSelectedSessionIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -96,12 +105,12 @@ export default function ChatPage() {
   }
 
   function selectAllSessions() {
-    if (busy || bulkDeleting) return;
+    if (bulkDeleting) return;
     setSelectedSessionIds(new Set(sessions.map(s => s.id)));
   }
 
   function invertSelectedSessions() {
-    if (busy || bulkDeleting) return;
+    if (bulkDeleting) return;
     setSelectedSessionIds(prev => {
       const next = new Set<string>();
       sessions.forEach(s => {
@@ -112,18 +121,18 @@ export default function ChatPage() {
   }
 
   function clearSelectedSessions() {
-    if (busy || bulkDeleting) return;
+    if (bulkDeleting) return;
     setSelectedSessionIds(new Set());
   }
 
   function exitSelectionMode() {
-    if (busy || bulkDeleting) return;
+    if (bulkDeleting) return;
     setSelectedSessionIds(new Set());
     setSelectionMode(false);
   }
 
   async function deleteSession(id: string) {
-    if (busy || deleteBusyId) return;
+    if (runsByKey[id] || deleteBusyId) return;
     const target = sessions.find(s => s.id === id);
     const title = target ? sessionTitle(target) : '这个会话';
     if (!window.confirm(`删除「${title}」？`)) return;
@@ -151,7 +160,7 @@ export default function ChatPage() {
   }
 
   function clearPendingImages() {
-    setPendingImages(prev => {
+    setPendingImagesForKey(activeDraftKey, prev => {
       prev.forEach(img => URL.revokeObjectURL(img.previewUrl));
       return [];
     });
@@ -159,7 +168,7 @@ export default function ChatPage() {
   }
 
   function removePendingImage(id: string) {
-    setPendingImages(prev => {
+    setPendingImagesForKey(activeDraftKey, prev => {
       const target = prev.find(img => img.id === id);
       if (target) URL.revokeObjectURL(target.previewUrl);
       return prev.filter(img => img.id !== id);
@@ -175,7 +184,7 @@ export default function ChatPage() {
       setComposerError(`最多一次添加 ${MAX_ATTACHMENTS} 张图片`);
       return;
     }
-    const accepted: PendingImage[] = [];
+    const accepted: PendingDraftImage[] = [];
     for (const file of incoming.slice(0, slots)) {
       if (!SUPPORTED_IMAGE_TYPES.has(file.type)) {
         setComposerError('仅支持 JPG、PNG、WebP 图片');
@@ -198,7 +207,7 @@ export default function ChatPage() {
       setComposerError(`最多一次添加 ${MAX_ATTACHMENTS} 张图片`);
     }
     if (accepted.length > 0) {
-      setPendingImages(prev => [...prev, ...accepted]);
+      setPendingImagesForKey(activeDraftKey, prev => [...prev, ...accepted]);
     }
   }
 
@@ -229,7 +238,11 @@ export default function ChatPage() {
   }
 
   async function deleteSelectedSessions() {
-    if (busy || bulkDeleting || selectedSessionIds.size === 0) return;
+    if (bulkDeleting || selectedSessionIds.size === 0) return;
+    if (Array.from(selectedSessionIds).some(id => runsByKey[id])) {
+      setSessionsError('有会话仍在处理中，请先停止后再删除。');
+      return;
+    }
     const ids = Array.from(selectedSessionIds);
     if (!window.confirm(`删除选中的 ${ids.length} 个会话？`)) return;
     setBulkDeleting(true);
@@ -248,11 +261,29 @@ export default function ChatPage() {
   }
 
   function handleStop() {
-    if (!busy) return;
-    abortRef.current?.abort();
-    abortRef.current = null;
-    appendCancelEvent(setEvents, sentEventsIdxRef.current);
-    setBusy(false);
+    if (!activeRun) return;
+    activeRun.abortController.abort();
+    appendCancelEventToKey(activeDraftKey, activeRun.sentEventsIndex);
+    setRunsByKey(prev => {
+      const next = { ...prev };
+      delete next[activeDraftKey];
+      return next;
+    });
+    if (abortRef.current === activeRun.abortController) abortRef.current = null;
+  }
+
+  function setEventsForDraftKey(key: string, updater: React.SetStateAction<ChatEvent[]>) {
+    const current = eventCacheRef.current[key] ?? eventsByKey[key] ?? [];
+    const next = typeof updater === 'function'
+      ? (updater as (value: ChatEvent[]) => ChatEvent[])(current)
+      : updater;
+    setEventsForKey(key, next);
+    eventCacheRef.current[key] = next;
+    if (key === activeDraftKeyRef.current) setEvents(next);
+  }
+
+  function appendCancelEventToKey(key: string, sentEventsIndex: number) {
+    setEventsForDraftKey(key, prev => appendCancelEvent(prev, sentEventsIndex));
   }
 
   function openLightbox(src: string) {
@@ -277,11 +308,24 @@ export default function ChatPage() {
   }
 
   useEffect(() => {
+    activeDraftKeyRef.current = activeDraftKey;
+  }, [activeDraftKey]);
+
+  useEffect(() => {
     void refreshSessions();
     if (sessionId) void loadSession(sessionId, true);
     // Load the stored active session once on mount; later switches are explicit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const cached = eventsByKey[activeDraftKey] ?? eventCacheRef.current[activeDraftKey];
+    if (cached && cached !== events) {
+      setEvents(cached);
+    }
+    // Keep visible events aligned when a background stream updates the active session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDraftKey, eventsByKey]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -290,8 +334,9 @@ export default function ChatPage() {
   useEffect(() => {
     if (sessionId && !messagesLoading && events.length > 0) {
       eventCacheRef.current[sessionId] = events;
+      setEventsForKey(sessionId, events);
     }
-  }, [eventCacheRef, events, messagesLoading, sessionId]);
+  }, [eventCacheRef, events, messagesLoading, sessionId, setEventsForKey]);
 
   useEffect(() => {
     if (selectAllRef.current) {
@@ -313,11 +358,11 @@ export default function ChatPage() {
   }, [sessions, selectionMode]);
 
   useEffect(() => {
-    if (!busy) return;
+    if (!anyBusy) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [busy]);
+  }, [anyBusy]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -336,41 +381,69 @@ export default function ChatPage() {
     const attachmentsToSend = pendingImages;
     if ((!message && attachmentsToSend.length === 0) || busy) return;
     const sentAt = new Date().toISOString();
-    setInput('');
-    setPendingImages([]);
+    const originalKey = activeDraftKey;
+    let targetKey = activeDraftKey;
+    let targetSessionId = sessionId;
+    const runId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setDraftForKey(originalKey, '');
+    setPendingImagesForKey(originalKey, []);
     setComposerError(null);
     lastSentRef.current = message;
-    turnStartedAtRef.current = Date.now();
+    const startedAt = Date.now();
+    turnStartedAtRef.current = startedAt;
     sentEventsIdxRef.current = -1;
-    setBusy(true);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
     let assistantBuf = '';
-    let streamSessionId = sessionId;
     let uploadedAttachments: UploadedChatImage[] = [];
     let turnStarted = false;
+    let sentEventsIndex = -1;
     try {
+      if (!targetSessionId) {
+        const created = await api.createSession(message || '图片对话');
+        targetSessionId = created.id;
+        targetKey = created.id;
+        setSessions(prev => sortSessions([created, ...prev.filter(s => s.id !== created.id)]));
+        setSessionId(created.id);
+        setEventsForKey(NEW_SESSION_KEY, []);
+        setEventsForKey(created.id, eventsByKey[NEW_SESSION_KEY] ?? []);
+        setEvents(eventsByKey[NEW_SESSION_KEY] ?? []);
+      }
+      const run: ChatRunState = {
+        runId,
+        sessionId: targetSessionId,
+        startedAt,
+        abortController: ctrl,
+        sentEventsIndex: -1
+      };
+      setRunsByKey(prev => ({ ...prev, [targetKey]: run }));
       uploadedAttachments = await uploadPendingImages(attachmentsToSend);
       attachmentsToSend.forEach(img => URL.revokeObjectURL(img.previewUrl));
-      setEvents(prev => {
-        sentEventsIdxRef.current = prev.length;
+      setEventsForDraftKey(targetKey, prev => {
+        sentEventsIndex = prev.length;
+        sentEventsIdxRef.current = sentEventsIndex;
         return [...prev, {
           type: 'user_message',
           data: { content: message, attachments: uploadedAttachments, createdAt: sentAt }
         }];
       });
+      setRunsByKey(prev => {
+        const current = prev[targetKey];
+        if (current?.runId !== runId) return prev;
+        return { ...prev, [targetKey]: { ...current, sentEventsIndex } };
+      });
       turnStarted = true;
       await streamChat({
         message,
-        sessionId: sessionId ?? undefined,
+        sessionId: targetSessionId ?? undefined,
         attachments: uploadedAttachments.map(toChatAttachment),
         signal: ctrl.signal,
         onEvent(name, data) {
           if (name === 'session') {
             if (data?.sessionId) {
-              streamSessionId = data.sessionId;
-              setSessionId(data.sessionId);
+              targetSessionId = data.sessionId;
+              if (targetKey === NEW_SESSION_KEY) targetKey = data.sessionId;
             }
             return;
           }
@@ -379,7 +452,7 @@ export default function ChatPage() {
           }
           if (name === 'assistant_message') {
             assistantBuf += data?.content ?? '';
-            setEvents(prev => {
+            setEventsForDraftKey(targetKey, prev => {
               const copy = [...prev];
               const last = copy[copy.length - 1];
               const createdAt = last?.type === 'assistant_message'
@@ -397,38 +470,48 @@ export default function ChatPage() {
             });
           } else {
             assistantBuf = '';
-            setEvents(prev => [...prev, { type: name, data: { ...data, createdAt: new Date().toISOString() } }]);
+            setEventsForDraftKey(targetKey, prev => [
+              ...prev,
+              { type: name, data: { ...data, createdAt: new Date().toISOString() } }
+            ]);
           }
         },
         onError() { /* stop fetch-event-source retry; UI state resets below */ },
         onClose() {
-          markLatestAssistantDuration(setEvents, Date.now() - turnStartedAtRef.current);
-          setBusy(false);
+          setEventsForDraftKey(targetKey, prev => markLatestAssistantDuration(prev, Date.now() - startedAt));
+          setRunsByKey(prev => {
+            const next = { ...prev };
+            if (next[targetKey]?.runId === runId) delete next[targetKey];
+            return next;
+          });
         }
       });
       await refreshSessions();
     } catch {
       attachmentsToSend.forEach(img => URL.revokeObjectURL(img.previewUrl));
       if (ctrl.signal.aborted) {
-        appendCancelEvent(setEvents, sentEventsIdxRef.current);
+        appendCancelEventToKey(targetKey, sentEventsIndex);
         if (!turnStarted) {
-          if (lastSentRef.current && !input) setInput(lastSentRef.current);
-          if (attachmentsToSend.length > 0) restorePendingImages(attachmentsToSend);
+          if (message && !draftByKey[originalKey]) setDraftForKey(originalKey, message);
+          if (attachmentsToSend.length > 0) restorePendingImages(originalKey, attachmentsToSend);
         }
-        markLatestAssistantDuration(setEvents, Date.now() - turnStartedAtRef.current);
+        setEventsForDraftKey(targetKey, prev => markLatestAssistantDuration(prev, Date.now() - startedAt));
       } else {
-        if (attachmentsToSend.length > 0) restorePendingImages(attachmentsToSend);
+        if (attachmentsToSend.length > 0) restorePendingImages(originalKey, attachmentsToSend);
         setComposerError('图片上传或发送失败，请重试');
       }
-      setBusy(false);
     } finally {
+      setRunsByKey(prev => {
+        const next = { ...prev };
+        if (next[targetKey]?.runId === runId) delete next[targetKey];
+        return next;
+      });
       abortRef.current = null;
-      if (streamSessionId) setSessionId(streamSessionId);
     }
   }
 
-  function restorePendingImages(items: PendingImage[]) {
-    setPendingImages(items.map(img => ({
+  function restorePendingImages(key: string, items: PendingDraftImage[]) {
+    setPendingImagesForKey(key, items.map(img => ({
       ...img,
       previewUrl: URL.createObjectURL(img.file)
     })));
@@ -455,7 +538,6 @@ export default function ChatPage() {
             <button
               type="button"
               onClick={startNewSession}
-              disabled={busy}
               className="btn-primary min-h-9 px-3 py-1.5"
             >
               新建
@@ -466,7 +548,7 @@ export default function ChatPage() {
               <button
                 type="button"
                 onClick={toggleSelectionMode}
-                disabled={busy || bulkDeleting}
+                disabled={bulkDeleting}
                 className={selectionMode ? 'btn-primary min-h-8 px-3 py-1 text-xs' : 'btn-secondary min-h-8 px-3 py-1 text-xs'}
               >
                 {selectionMode ? '完成' : '多选'}
@@ -484,7 +566,7 @@ export default function ChatPage() {
                   type="checkbox"
                   checked={allSessionsSelected}
                   onChange={e => e.currentTarget.checked ? selectAllSessions() : clearSelectedSessions()}
-                  disabled={busy || bulkDeleting || sessionCount === 0}
+                  disabled={bulkDeleting || sessionCount === 0}
                   className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
                   aria-label="选择全部会话"
                 />
@@ -493,7 +575,7 @@ export default function ChatPage() {
               <button
                 type="button"
                 onClick={exitSelectionMode}
-                disabled={busy || bulkDeleting}
+                disabled={bulkDeleting}
                 className="text-xs font-medium text-slate-500 transition hover:text-slate-900 disabled:opacity-50"
               >
                 退出
@@ -501,17 +583,17 @@ export default function ChatPage() {
             </div>
             <div className="grid grid-cols-3 gap-1.5">
               <button type="button" onClick={selectAllSessions}
-                      disabled={busy || bulkDeleting || sessionCount === 0 || allSessionsSelected}
+                      disabled={bulkDeleting || sessionCount === 0 || allSessionsSelected}
                       className="btn-secondary min-h-8 px-2 py-1 text-xs">
                 全选
               </button>
               <button type="button" onClick={invertSelectedSessions}
-                      disabled={busy || bulkDeleting || sessionCount === 0}
+                      disabled={bulkDeleting || sessionCount === 0}
                       className="btn-secondary min-h-8 px-2 py-1 text-xs">
                 反选
               </button>
               <button type="button" onClick={clearSelectedSessions}
-                      disabled={busy || bulkDeleting || selectedCount === 0}
+                      disabled={bulkDeleting || selectedCount === 0}
                       className="btn-secondary min-h-8 px-2 py-1 text-xs">
                 清空
               </button>
@@ -519,7 +601,7 @@ export default function ChatPage() {
             <button
               type="button"
               onClick={() => void deleteSelectedSessions()}
-              disabled={busy || bulkDeleting || selectedCount === 0}
+              disabled={bulkDeleting || selectedCount === 0}
               className="btn-danger w-full min-h-8 px-3 py-1 text-xs"
             >
               {bulkDeleting ? '删除中...' : `删除已选 ${selectedCount}`}
@@ -531,13 +613,11 @@ export default function ChatPage() {
           <button
             type="button"
             onClick={startNewSession}
-            disabled={busy}
             className={[
               'w-full rounded-md border px-3 py-3 text-left transition',
               sessionId === null
                 ? 'border-blue-200 bg-blue-50 text-blue-950'
-                : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white',
-              busy ? 'opacity-60' : ''
+                : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white'
             ].join(' ')}
           >
             <span className="block text-sm font-semibold">新会话</span>
@@ -574,7 +654,7 @@ export default function ChatPage() {
                     <input
                       type="checkbox"
                       checked={selected}
-                      disabled={busy || bulkDeleting}
+                      disabled={bulkDeleting}
                       onChange={() => toggleSessionSelected(s.id)}
                       className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                       aria-label={`选择 ${sessionTitle(s)}`}
@@ -584,7 +664,7 @@ export default function ChatPage() {
                 <button
                   type="button"
                   onClick={() => selectionMode ? toggleSessionSelected(s.id) : void loadSession(s.id)}
-                  disabled={busy || messagesLoading || bulkDeleting}
+                  disabled={messagesLoading || bulkDeleting}
                   className="min-w-0 flex-1 px-3 py-2.5 text-left disabled:cursor-not-allowed"
                   aria-current={active ? 'page' : undefined}
                 >
@@ -598,7 +678,7 @@ export default function ChatPage() {
                   <button
                     type="button"
                     onClick={() => void exportSession(s.id)}
-                    disabled={busy || selectionMode || bulkDeleting}
+                    disabled={selectionMode || bulkDeleting}
                     className={active ? 'px-2 text-xs text-slate-300 hover:text-white disabled:opacity-40' : 'px-2 text-xs text-slate-400 hover:text-slate-800 disabled:opacity-40'}
                     title="导出 JSONL"
                   >
@@ -607,7 +687,7 @@ export default function ChatPage() {
                   <button
                     type="button"
                     onClick={() => void deleteSession(s.id)}
-                    disabled={busy || selectionMode || bulkDeleting || deleteBusyId === s.id}
+                    disabled={Boolean(runsByKey[s.id]) || selectionMode || bulkDeleting || deleteBusyId === s.id}
                     className={active ? 'px-2 text-xs text-slate-300 hover:text-white disabled:opacity-40' : 'px-2 text-xs text-slate-400 hover:text-red-600 disabled:opacity-40'}
                     title="删除会话"
                   >
@@ -694,7 +774,7 @@ export default function ChatPage() {
               />
             );
           })}
-          {busy && <ThinkingRow startedAt={turnStartedAtRef.current} now={now} />}
+          {activeRun && <ThinkingRow startedAt={activeRun.startedAt} now={now} />}
         </div>
 
         <form
@@ -708,7 +788,7 @@ export default function ChatPage() {
               {pendingImages.length > 0 && (
                 <PendingImageGrid
                   items={pendingImages}
-                  disabled={busy || messagesLoading}
+                  disabled={messagesLoading}
                   onRemove={removePendingImage}
                 />
               )}
@@ -723,12 +803,12 @@ export default function ChatPage() {
               multiple
               className="hidden"
               onChange={handleFileChange}
-              disabled={busy || messagesLoading}
+              disabled={messagesLoading}
             />
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={busy || messagesLoading || pendingImages.length >= MAX_ATTACHMENTS}
+              disabled={messagesLoading || pendingImages.length >= MAX_ATTACHMENTS}
               className="icon-button h-[42px] w-[42px]"
               title="添加图片"
               aria-label="添加图片"
@@ -737,7 +817,7 @@ export default function ChatPage() {
             </button>
             <textarea
               value={input}
-              onChange={e => setInput(e.target.value)}
+              onChange={e => setDraftForKey(activeDraftKey, e.target.value)}
               onPaste={handlePaste}
               onKeyDown={e => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -746,9 +826,9 @@ export default function ChatPage() {
                 }
               }}
               rows={1}
-              placeholder={busy ? '生成中...' : '输入消息或粘贴图片...'}
+              placeholder={busy ? '当前会话生成中，可以继续编辑下一条...' : '输入消息或粘贴图片...'}
               className="field-input mt-0 min-h-[42px] max-h-32 flex-1 resize-none"
-              disabled={busy || messagesLoading}
+              disabled={messagesLoading}
             />
             <button
               type="submit"
@@ -769,8 +849,8 @@ export default function ChatPage() {
         <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50/80 p-3">
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center gap-2 text-xs text-slate-500">
-              <span className={['h-2 w-2 rounded-full', busy ? 'animate-pulse bg-amber-300' : 'bg-emerald-300'].join(' ')} />
-              <span>{busy ? '处理中' : '空闲'}</span>
+              <span className={['h-2 w-2 rounded-full', anyBusy ? 'animate-pulse bg-amber-300' : 'bg-emerald-300'].join(' ')} />
+              <span>{anyBusy ? `处理中 ${Object.keys(runsByKey).length}` : '空闲'}</span>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-3">
               <Metric label="消息" value={String(events.filter(ev => ev.type === 'user_message' || ev.type === 'assistant_message').length)} />
@@ -808,8 +888,8 @@ export default function ChatPage() {
               </div>
               <div className="flex items-center justify-between">
                 <span>Device tools</span>
-                <span className={busy ? 'font-semibold text-amber-600' : 'font-semibold text-slate-500'}>
-                  {busy ? 'active' : 'idle'}
+                <span className={anyBusy ? 'font-semibold text-amber-600' : 'font-semibold text-slate-500'}>
+                  {anyBusy ? 'active' : 'idle'}
                 </span>
               </div>
             </div>
@@ -852,13 +932,7 @@ const MAX_ATTACHMENTS = 4;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
-interface PendingImage {
-  id: string;
-  file: File;
-  previewUrl: string;
-  width?: number;
-  height?: number;
-}
+type PendingImage = PendingDraftImage;
 
 interface UploadedChatImage {
   type: 'image';
@@ -1099,46 +1173,42 @@ function numberOrNull(value: unknown): number | null {
 }
 
 function markLatestAssistantDuration(
-  setEvents: React.Dispatch<React.SetStateAction<ChatEvent[]>>,
+  events: ChatEvent[],
   durationMs: number
 ) {
-  if (!Number.isFinite(durationMs) || durationMs < 0) return;
-  setEvents(prev => {
-    const copy = [...prev];
-    for (let i = copy.length - 1; i >= 0; i -= 1) {
-      const ev = copy[i];
-      if (ev.type === 'assistant_message') {
-        copy[i] = {
-          ...ev,
-          data: { ...ev.data, durationMs }
-        };
-        return copy;
-      }
+  if (!Number.isFinite(durationMs) || durationMs < 0) return events;
+  const copy = [...events];
+  for (let i = copy.length - 1; i >= 0; i -= 1) {
+    const ev = copy[i];
+    if (ev.type === 'assistant_message') {
+      copy[i] = {
+        ...ev,
+        data: { ...ev.data, durationMs }
+      };
+      return copy;
     }
-    return prev;
-  });
+  }
+  return events;
 }
 
 function appendCancelEvent(
-  setEvents: React.Dispatch<React.SetStateAction<ChatEvent[]>>,
+  events: ChatEvent[],
   sentEventsIndex: number
 ) {
-  setEvents(prev => {
-    if (sentEventsIndex < 0 || prev.length <= sentEventsIndex) return prev;
-    const last = prev[prev.length - 1];
-    if (last?.type === 'error' && last.data?.code === 'client_cancelled') return prev;
-    return [
-      ...prev,
-      {
-        type: 'error',
-        data: {
-          code: 'client_cancelled',
-          message: '已取消本次执行',
-          createdAt: new Date().toISOString()
-        }
+  if (sentEventsIndex < 0 || events.length <= sentEventsIndex) return events;
+  const last = events[events.length - 1];
+  if (last?.type === 'error' && last.data?.code === 'client_cancelled') return events;
+  return [
+    ...events,
+    {
+      type: 'error',
+      data: {
+        code: 'client_cancelled',
+        message: '已取消本次执行',
+        createdAt: new Date().toISOString()
       }
-    ];
-  });
+    }
+  ];
 }
 
 function hasRicherToolHistory(cached: ChatEvent[], loaded: ChatEvent[]) {

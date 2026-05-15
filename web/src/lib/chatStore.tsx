@@ -1,19 +1,40 @@
-import { createContext, MutableRefObject, ReactNode, useContext, useRef, useState } from 'react';
+import { createContext, MutableRefObject, ReactNode, useCallback, useContext, useRef, useState } from 'react';
 
 export interface ChatEvent {
   type: string;
   data: any;
 }
 
+export interface ChatRunState {
+  runId: string;
+  sessionId: string | null;
+  startedAt: number;
+  abortController: AbortController;
+  sentEventsIndex: number;
+}
+
+export interface PendingDraftImage {
+  id: string;
+  file: File;
+  previewUrl: string;
+  width?: number;
+  height?: number;
+}
+
 interface ChatStore {
   events: ChatEvent[];
   setEvents: React.Dispatch<React.SetStateAction<ChatEvent[]>>;
-  busy: boolean;
-  setBusy: (b: boolean) => void;
   sessionId: string | null;
   setSessionId: (id: string | null) => void;
-  input: string;
-  setInput: (s: string) => void;
+  activeDraftKey: string;
+  draftByKey: Record<string, string>;
+  setDraftForKey: (key: string, value: string) => void;
+  pendingImagesByKey: Record<string, PendingDraftImage[]>;
+  setPendingImagesForKey: (key: string, updater: React.SetStateAction<PendingDraftImage[]>) => void;
+  eventsByKey: Record<string, ChatEvent[]>;
+  setEventsForKey: (key: string, updater: React.SetStateAction<ChatEvent[]>) => void;
+  runsByKey: Record<string, ChatRunState>;
+  setRunsByKey: React.Dispatch<React.SetStateAction<Record<string, ChatRunState>>>;
   // Refs survive ChatPage remount because they live on the Provider, which
   // sits above the Routes Outlet and so doesn't unmount on tab switch.
   abortRef: MutableRefObject<AbortController | null>;
@@ -25,6 +46,7 @@ interface ChatStore {
 
 const ChatStoreContext = createContext<ChatStore | null>(null);
 const ACTIVE_SESSION_KEY = 'agent-platform.activeSessionId';
+export const NEW_SESSION_KEY = '__new__';
 
 function readStoredSessionId(): string | null {
   try {
@@ -36,14 +58,17 @@ function readStoredSessionId(): string | null {
 
 export function ChatStoreProvider({ children }: { children: ReactNode }) {
   const [events, setEvents] = useState<ChatEvent[]>([]);
-  const [busy, setBusy] = useState(false);
   const [sessionIdState, setSessionIdState] = useState<string | null>(() => readStoredSessionId());
-  const [input, setInput] = useState('');
+  const [draftByKey, setDraftByKey] = useState<Record<string, string>>({});
+  const [pendingImagesByKey, setPendingImagesByKey] = useState<Record<string, PendingDraftImage[]>>({});
+  const [eventsByKey, setEventsByKey] = useState<Record<string, ChatEvent[]>>({});
+  const [runsByKey, setRunsByKey] = useState<Record<string, ChatRunState>>({});
   const abortRef = useRef<AbortController | null>(null);
   const lastSentRef = useRef('');
   const sentEventsIdxRef = useRef(-1);
   const turnStartedAtRef = useRef(0);
   const eventCacheRef = useRef<Record<string, ChatEvent[]>>({});
+  const activeDraftKey = sessionIdState ?? NEW_SESSION_KEY;
 
   function setSessionId(id: string | null) {
     setSessionIdState(id);
@@ -58,12 +83,38 @@ export function ChatStoreProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const setDraftForKey = useCallback((key: string, value: string) => {
+    setDraftByKey(prev => ({ ...prev, [key]: value }));
+  }, []);
+
+  const setPendingImagesForKey = useCallback((key: string, updater: React.SetStateAction<PendingDraftImage[]>) => {
+    setPendingImagesByKey(prev => {
+      const current = prev[key] ?? [];
+      const next = typeof updater === 'function'
+        ? (updater as (value: PendingDraftImage[]) => PendingDraftImage[])(current)
+        : updater;
+      return { ...prev, [key]: next };
+    });
+  }, []);
+
+  const setEventsForKey = useCallback((key: string, updater: React.SetStateAction<ChatEvent[]>) => {
+    setEventsByKey(prev => {
+      const current = prev[key] ?? [];
+      const next = typeof updater === 'function'
+        ? (updater as (value: ChatEvent[]) => ChatEvent[])(current)
+        : updater;
+      return { ...prev, [key]: next };
+    });
+  }, []);
+
   return (
     <ChatStoreContext.Provider value={{
       events, setEvents,
-      busy, setBusy,
       sessionId: sessionIdState, setSessionId,
-      input, setInput,
+      activeDraftKey, draftByKey, setDraftForKey,
+      pendingImagesByKey, setPendingImagesForKey,
+      eventsByKey, setEventsForKey,
+      runsByKey, setRunsByKey,
       abortRef, lastSentRef, sentEventsIdxRef, turnStartedAtRef, eventCacheRef,
     }}>
       {children}

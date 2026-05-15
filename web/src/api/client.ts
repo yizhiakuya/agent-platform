@@ -59,8 +59,11 @@ export const api = {
   listMessages: (sessionId: string) =>
     request<MessageDto[]>(`/api/sessions/${sessionId}/messages`),
 
-  createSession: () =>
-    request<SessionDto>('/api/sessions', { method: 'POST' }),
+  createSession: (title?: string) =>
+    request<SessionDto>('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify(title ? { title } : {})
+    }),
 
   deleteSession: (sessionId: string) =>
     request<void>(`/api/sessions/${sessionId}`, { method: 'DELETE' }),
