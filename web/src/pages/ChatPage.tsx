@@ -416,12 +416,12 @@ export default function ChatPage() {
   const timelineItems = useMemo(() => buildTimelineItems(events), [events]);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)] gap-4 h-[calc(100vh-100px)] min-h-[560px]">
-      <aside className="bg-white border rounded flex flex-col min-h-0">
-        <div className="p-3 border-b flex items-center justify-between gap-2">
+    <div className="grid min-h-[calc(100vh-7rem)] gap-4 lg:h-[calc(100vh-7rem)] lg:grid-cols-[20rem_minmax(0,1fr)]">
+      <aside className="page-panel flex min-h-[20rem] flex-col overflow-hidden lg:min-h-0">
+        <div className="flex items-center justify-between gap-2 border-b border-slate-200 p-3">
           <div>
-            <h1 className="font-semibold leading-tight">会话</h1>
-            <div className="text-xs text-slate-500 mt-0.5">
+            <h1 className="font-semibold leading-tight text-slate-950">会话</h1>
+            <div className="mt-0.5 text-xs text-slate-500">
               {selectionMode ? `已选 ${selectedCount} / 共 ${sessionCount}` : `${sessionCount} 条历史`}
             </div>
           </div>
@@ -432,7 +432,7 @@ export default function ChatPage() {
                 onClick={toggleSelectionMode}
                 disabled={busy || bulkDeleting}
                 className={[
-                  'px-2.5 py-1.5 rounded border text-sm disabled:opacity-50',
+                  'inline-flex min-h-9 items-center rounded-md border px-2.5 py-1.5 text-sm transition disabled:opacity-50',
                   selectionMode
                     ? 'bg-slate-900 border-slate-900 text-white'
                     : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
@@ -445,7 +445,7 @@ export default function ChatPage() {
               type="button"
               onClick={startNewSession}
               disabled={busy}
-              className="px-2.5 py-1.5 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm"
+              className="btn-primary min-h-9 px-2.5 py-1.5"
             >
               + 新建
             </button>
@@ -453,7 +453,7 @@ export default function ChatPage() {
         </div>
 
         {selectionMode && (
-          <div className="px-3 py-2 border-b bg-slate-50 space-y-2">
+          <div className="space-y-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
             <div className="flex items-center justify-between gap-2">
               <label className="inline-flex min-w-0 items-center gap-2 text-xs font-medium text-slate-700">
                 <input
@@ -471,7 +471,7 @@ export default function ChatPage() {
                 type="button"
                 onClick={exitSelectionMode}
                 disabled={busy || bulkDeleting}
-                className="text-xs text-slate-500 hover:text-slate-900 disabled:opacity-50"
+                className="text-xs text-slate-500 transition hover:text-slate-900 disabled:opacity-50"
               >
                 退出
               </button>
@@ -481,7 +481,7 @@ export default function ChatPage() {
                 type="button"
                 onClick={selectAllSessions}
                 disabled={busy || bulkDeleting || sessionCount === 0 || allSessionsSelected}
-                className="px-2 py-1 rounded border border-slate-200 bg-white text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
               >
                 全选
               </button>
@@ -489,7 +489,7 @@ export default function ChatPage() {
                 type="button"
                 onClick={invertSelectedSessions}
                 disabled={busy || bulkDeleting || sessionCount === 0}
-                className="px-2 py-1 rounded border border-slate-200 bg-white text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
               >
                 反选
               </button>
@@ -497,7 +497,7 @@ export default function ChatPage() {
                 type="button"
                 onClick={clearSelectedSessions}
                 disabled={busy || bulkDeleting || selectedCount === 0}
-                className="px-2 py-1 rounded border border-slate-200 bg-white text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
               >
                 清空
               </button>
@@ -506,20 +506,20 @@ export default function ChatPage() {
               type="button"
               onClick={() => void deleteSelectedSessions()}
               disabled={busy || bulkDeleting || selectedCount === 0}
-              className="w-full px-2.5 py-1.5 rounded bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs"
+              className="w-full rounded-md bg-red-600 px-2.5 py-1.5 text-xs text-white transition hover:bg-red-700 disabled:opacity-50"
             >
               {bulkDeleting ? '删除中...' : `删除已选 ${selectedCount}`}
             </button>
           </div>
         )}
 
-        <div className="p-2 border-b">
+        <div className="border-b border-slate-200 p-2">
           <button
             type="button"
             onClick={startNewSession}
             disabled={busy}
             className={[
-              'w-full text-left px-3 py-2 rounded text-sm border transition',
+              'w-full rounded-md border px-3 py-2 text-left text-sm transition',
               sessionId === null
                 ? 'bg-blue-50 border-blue-200 text-blue-900'
                 : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700',
@@ -531,7 +531,7 @@ export default function ChatPage() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        <div className="flex-1 space-y-1 overflow-y-auto p-2">
           {sessionsLoading && <div className="text-sm text-slate-500 px-2 py-3">加载中...</div>}
           {sessionsError && <div className="text-sm text-red-600 px-2 py-3">{sessionsError}</div>}
           {!sessionsLoading && !sessionsError && sessions.length === 0 && (
@@ -544,7 +544,7 @@ export default function ChatPage() {
               <div
                 key={s.id}
                 className={[
-                  'group flex items-stretch gap-1 rounded border transition',
+                  'group flex items-stretch gap-1 rounded-md border transition',
                   active ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white border-transparent hover:border-slate-200 hover:bg-slate-50',
                   selected && !active ? 'border-blue-300 bg-blue-50' : ''
                 ].join(' ')}
@@ -603,11 +603,11 @@ export default function ChatPage() {
         </div>
       </aside>
 
-      <section className="min-w-0 flex flex-col bg-white border rounded min-h-0">
-        <div className="px-4 py-3 border-b flex items-center justify-between gap-3">
+      <section className="page-panel flex min-w-0 flex-col overflow-hidden lg:min-h-0">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <div className="min-w-0">
-            <div className="font-semibold truncate">{activeSession ? sessionTitle(activeSession) : '新会话'}</div>
-            <div className="text-xs text-slate-500 mt-0.5">
+            <div className="truncate font-semibold text-slate-950">{activeSession ? sessionTitle(activeSession) : '新会话'}</div>
+            <div className="mt-0.5 text-xs text-slate-500">
               {sessionId ? `会话 ${sessionId.slice(0, 8)}` : '发送第一条消息后保存到历史'}
               {messagesLoading ? ' · 正在加载消息' : ''}
             </div>
@@ -616,7 +616,7 @@ export default function ChatPage() {
             <button
               type="button"
               onClick={handleStop}
-              className="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded text-sm"
+              className="inline-flex min-h-9 items-center rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-red-700"
               title="按 Esc 也可中断"
             >
               停止
@@ -624,9 +624,9 @@ export default function ChatPage() {
           )}
         </div>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto bg-slate-50/60 p-3 sm:p-4">
           {events.length === 0 && (
-            <div className="text-slate-500 text-sm">
+            <div className="status-muted">
               试试:<em>"列出我最近的照片"</em>。助手会在你绑定的设备上调用
               <code className="mx-1 px-1.5 py-0.5 bg-slate-100 rounded">photos.list_recent</code>
               工具。
@@ -669,7 +669,7 @@ export default function ChatPage() {
           onSubmit={ev => { ev.preventDefault(); void send(); }}
           onDrop={handleDrop}
           onDragOver={handleDragOver}
-          className="border-t p-3 space-y-2"
+          className="space-y-2 border-t border-slate-200 bg-white p-3"
         >
           {(pendingImages.length > 0 || composerError) && (
             <div className="space-y-2">
@@ -680,10 +680,10 @@ export default function ChatPage() {
                   onRemove={removePendingImage}
                 />
               )}
-              {composerError && <div className="text-xs text-red-600">{composerError}</div>}
+              {composerError && <div className="status-error py-1.5 text-xs">{composerError}</div>}
             </div>
           )}
-          <div className="flex gap-2 items-end">
+          <div className="flex items-end gap-2">
             <input
               ref={fileInputRef}
               type="file"
@@ -697,7 +697,7 @@ export default function ChatPage() {
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={busy || messagesLoading || pendingImages.length >= MAX_ATTACHMENTS}
-              className="h-[42px] w-[42px] shrink-0 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              className="icon-button h-[42px] w-[42px]"
               title="添加图片"
               aria-label="添加图片"
             >
@@ -715,13 +715,13 @@ export default function ChatPage() {
               }}
               rows={1}
               placeholder={busy ? '生成中... 按 Esc 或点"停止"中断' : '输入消息或粘贴图片...'}
-              className="flex-1 min-h-[42px] max-h-32 resize-none border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="field-input mt-0 min-h-[42px] max-h-32 flex-1 resize-none"
               disabled={busy || messagesLoading}
             />
           <button
             type="submit"
             disabled={(!input.trim() && pendingImages.length === 0) || busy || messagesLoading}
-            className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded h-[42px]"
+            className="btn-primary h-[42px]"
           >
             发送
           </button>
@@ -1358,10 +1358,11 @@ function ToolCallRow({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: ChatEve
       : '调用完成';
 
   return (
-    <div className="text-xs text-slate-500 italic flex items-center gap-2">
-      <span className={`inline-block w-2 h-2 rounded-full ${dotClass}`} />
-      {label} <code className="bg-slate-100 px-1 rounded">{ev.data?.tool}</code>
-      {ev.data?.args && <span className="truncate">({JSON.stringify(ev.data.args)})</span>}
+    <div className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-500">
+      <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
+      <span className="shrink-0">{label}</span>
+      <code className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700">{ev.data?.tool}</code>
+      {ev.data?.args && <span className="min-w-0 truncate text-slate-400">({JSON.stringify(ev.data.args)})</span>}
     </div>
   );
 }
@@ -1378,13 +1379,13 @@ function PendingImageGrid({
   return (
     <div className="flex flex-wrap gap-2">
       {items.map(item => (
-        <div key={item.id} className="relative h-20 w-20 overflow-hidden rounded border border-slate-200 bg-slate-100">
+        <div key={item.id} className="relative h-20 w-20 overflow-hidden rounded-md border border-slate-200 bg-slate-100">
           <img src={item.previewUrl} alt={item.file.name || '待发送图片'} className="h-full w-full object-cover" />
           <button
             type="button"
             onClick={() => onRemove(item.id)}
             disabled={disabled}
-            className="absolute right-1 top-1 h-6 w-6 rounded-full bg-black/65 text-sm leading-6 text-white disabled:opacity-50"
+            className="absolute right-1 top-1 h-6 w-6 rounded-full bg-black/65 text-sm leading-6 text-white transition hover:bg-black/80 disabled:opacity-50"
             title="移除图片"
             aria-label="移除图片"
           >
@@ -1404,7 +1405,7 @@ function MessageAttachmentGrid({
   onOpenImage: OpenImage;
 }) {
   return (
-    <div className="grid max-w-xs grid-cols-2 gap-2 justify-end">
+    <div className="grid max-w-xs grid-cols-2 justify-end gap-2">
       {items.map(item => {
         const src = imageUrl(item.imageUrl);
         if (!src) return null;
@@ -1415,7 +1416,7 @@ function MessageAttachmentGrid({
             alt={item.name ?? '图片附件'}
             title={item.name}
             onOpen={() => onOpenImage(src)}
-            className="h-32 w-32 rounded border object-cover cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition"
+            className="h-32 w-32 cursor-zoom-in rounded-md border border-slate-200 object-cover transition hover:ring-2 hover:ring-blue-400"
           />
         );
       })}
@@ -1456,7 +1457,7 @@ function ProcessPanel({
       : 'bg-emerald-500';
 
   return (
-    <details className="group/process rounded-md border border-slate-200 bg-white open:bg-slate-50/60">
+    <details className="group/process rounded-lg border border-slate-200 bg-white shadow-sm open:bg-slate-50/70">
       <summary className="flex cursor-pointer list-none items-start gap-2 px-3 py-2 text-xs text-slate-500 marker:hidden">
         <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
         <span className="grid min-w-0 flex-1 gap-1">
@@ -1488,7 +1489,7 @@ function ProcessPanel({
             <div key={`result-${item.startIndex}-${index}`} className="rounded-md border border-slate-200 bg-white p-2">
               <div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-600">
                 <span className="text-slate-400">工具</span>
-                <code className="rounded bg-slate-100 px-1.5 py-0.5">{ev.data?.tool}</code>
+                <code className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700">{ev.data?.tool}</code>
                 <span>返回结果</span>
               </div>
               <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} />
@@ -1578,7 +1579,7 @@ function Bubble({
       const attachments = normalizeMessageAttachments(ev.data?.attachments);
       return (
         <div className="flex justify-end">
-          <div className="max-w-prose">
+          <div className="max-w-[min(42rem,85%)]">
             <div className="space-y-2">
               {attachments.length > 0 && (
                 <MessageAttachmentGrid
@@ -1587,7 +1588,7 @@ function Bubble({
                 />
               )}
               {ev.data?.content && (
-                <div className="bg-blue-600 text-white px-3 py-2 rounded-lg whitespace-pre-wrap">
+                <div className="rounded-lg bg-blue-600 px-3 py-2 text-sm leading-relaxed text-white shadow-sm whitespace-pre-wrap">
                   {ev.data.content}
                 </div>
               )}
@@ -1602,8 +1603,8 @@ function Bubble({
       const duration = formatDuration(ev.data?.durationMs);
       return (
         <div className="flex justify-start">
-          <div className="max-w-prose">
-            <div className="bg-slate-100 px-3 py-2 rounded-lg">
+          <div className="max-w-[min(46rem,92%)]">
+            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
               <MarkdownMessage content={ev.data?.content ?? ''} />
             </div>
             {(time || duration) && (
@@ -1621,7 +1622,7 @@ function Bubble({
       return <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} />;
     case 'error':
       return (
-        <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+        <div className="status-error">
           {ev.data?.message ?? '未知错误'}
         </div>
       );
@@ -1650,7 +1651,7 @@ function MarkdownMessage({ content }: { content: string }) {
 function ThinkingRow({ startedAt, now }: { startedAt: number; now: number }) {
   return (
     <div className="flex justify-start">
-      <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-2 text-xs text-slate-500">
+      <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 shadow-sm">
         <span className="flex items-center gap-1" aria-label="回复中">
           <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:-0.2s]" />
           <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:-0.1s]" />
@@ -1690,8 +1691,8 @@ function ToolResult({ tool, result, onOpenImage }: {
         <AuthImage src={small} alt={result.name}
                    title={result.name}
                    onOpen={() => big && onOpenImage(big)}
-                   className="w-full max-h-96 object-contain rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
-        <div className="text-xs text-slate-500 mt-1">
+                   className="max-h-96 w-full cursor-zoom-in rounded-md border border-slate-200 object-contain transition hover:ring-2 hover:ring-blue-400" />
+        <div className="mt-1 text-xs text-slate-500">
           {result.name}{w && h ? ` · ${w}×${h}` : ''}
         </div>
       </div>
@@ -1700,15 +1701,15 @@ function ToolResult({ tool, result, onOpenImage }: {
 
   if (tool === 'photos.list_albums' && Array.isArray(result?.albums)) {
     return (
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {result.albums.map((a: any) => {
           const { big, small: src } = photoImageSources(a);
           return (
-            <div key={a.bucket_id} className="border rounded overflow-hidden">
+            <div key={a.bucket_id} className="overflow-hidden rounded-md border border-slate-200 bg-white">
               {src ? (
                 <AuthImage src={src} alt={a.name}
                            onOpen={() => onOpenImage(big ?? src)}
-                           className="w-full h-32 object-cover cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+                           className="h-32 w-full cursor-zoom-in object-cover transition hover:ring-2 hover:ring-blue-400" />
               ) : (
                 <div className="w-full h-32 bg-slate-200" />
               )}
@@ -1732,7 +1733,7 @@ function ToolResult({ tool, result, onOpenImage }: {
       );
     }
     return (
-      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
         {result.videos.map((v: any) => {
           const src = firstImageUrl(
             v.thumb_url,
@@ -1754,9 +1755,9 @@ function ToolResult({ tool, result, onOpenImage }: {
                 <AuthImage src={src} alt={v.name}
                            title={v.name}
                            onOpen={() => onOpenImage(src)}
-                           className="w-full h-32 object-cover rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+                           className="h-32 w-full cursor-zoom-in rounded-md border border-slate-200 object-cover transition hover:ring-2 hover:ring-blue-400" />
               ) : (
-                <div className="w-full h-32 bg-slate-200 rounded" />
+                <div className="h-32 w-full rounded-md bg-slate-200" />
               )}
               <span className="absolute bottom-1 right-1 bg-black/70 text-white text-[10px] px-1 rounded">▶ {dur}</span>
             </div>
@@ -1768,8 +1769,8 @@ function ToolResult({ tool, result, onOpenImage }: {
 
   return (
     <details className="text-xs text-slate-600">
-      <summary>工具 {tool} 返回结果</summary>
-      <pre className="mt-1 bg-slate-100 p-2 rounded overflow-x-auto">{JSON.stringify(result, null, 2)}</pre>
+      <summary className="cursor-pointer">工具 {tool} 返回结果</summary>
+      <pre className="mt-1 overflow-x-auto rounded-md bg-slate-100 p-2">{JSON.stringify(result, null, 2)}</pre>
     </details>
   );
 }
@@ -1785,7 +1786,7 @@ function StandardToolMediaResult({
     return (
       <details className="text-xs text-slate-600">
         <summary className="cursor-pointer">{media.summary}</summary>
-        <pre className="mt-1 bg-slate-100 p-2 rounded overflow-x-auto">{JSON.stringify(media.result, null, 2)}</pre>
+        <pre className="mt-1 overflow-x-auto rounded-md bg-slate-100 p-2">{JSON.stringify(media.result, null, 2)}</pre>
       </details>
     );
   }
@@ -1822,8 +1823,8 @@ function PrimaryPhotoCard({ photo, onOpenImage }: { photo: any; onOpenImage: Ope
       <AuthImage src={small} alt={photo?.name}
                  title={photo?.name}
                  onOpen={() => preview && onOpenImage(preview)}
-                 className="w-full max-h-96 object-contain rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
-      <div className="text-xs text-slate-500 mt-1">
+                 className="max-h-96 w-full cursor-zoom-in rounded-md border border-slate-200 object-contain transition hover:ring-2 hover:ring-blue-400" />
+      <div className="mt-1 text-xs text-slate-500">
         {photo?.name ?? '图片结果'}{w && h ? ` · ${w}×${h}` : ''}
       </div>
     </div>
@@ -1841,9 +1842,9 @@ function SemanticPhotoResult({ result, onOpenImage }: { result: any; onOpenImage
         <AuthImage src={small} alt={primary.name}
                    title={primary.name}
                    onOpen={() => big && onOpenImage(big)}
-                   className="w-full max-h-96 object-contain rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
-        <div className="text-xs text-slate-500 mt-1">
-          {primary.name}{w && h ? ` 路 ${w}脳${h}` : ''}
+                   className="max-h-96 w-full cursor-zoom-in rounded-md border border-slate-200 object-contain transition hover:ring-2 hover:ring-blue-400" />
+        <div className="mt-1 text-xs text-slate-500">
+          {primary.name}{w && h ? ` · ${w}×${h}` : ''}
         </div>
       </div>
     );
@@ -1917,7 +1918,7 @@ function SemanticPhotoResult({ result, onOpenImage }: { result: any; onOpenImage
 
 function ThumbGrid({ items, onOpenImage }: { items: any[]; onOpenImage: OpenImage }) {
   return (
-    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+    <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
       {items.map((p: any) => {
         const { big, small: src } = photoImageSources(p);
         if (!src) {
@@ -1927,7 +1928,7 @@ function ThumbGrid({ items, onOpenImage }: { items: any[]; onOpenImage: OpenImag
           <AuthImage key={p.id} src={src} alt={p.name}
                      title={p.name}
                      onOpen={() => onOpenImage(big ?? src)}
-                     className="w-full h-32 object-cover rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+                     className="h-32 w-full cursor-zoom-in rounded-md border border-slate-200 object-cover transition hover:ring-2 hover:ring-blue-400" />
         );
       })}
     </div>
@@ -1939,7 +1940,7 @@ function SelectedPhotoSummary({ photos }: { photos: any[] }) {
     <div className="space-y-1">
       {photos.map(photo => (
         <div key={photo.id ?? photo.asset_id ?? photo.name}
-             className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+             className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
           <div className="font-medium text-slate-700">
             已命中图片{photo.name ? `：${photo.name}` : ''}
           </div>
@@ -1955,7 +1956,7 @@ function SelectedPhotoSummary({ photos }: { photos: any[] }) {
 
 function PhotoPlaceholder({ photo }: { photo: any }) {
   return (
-    <div className="w-full h-32 bg-slate-100 border border-slate-200 rounded text-xs text-slate-500 flex items-center justify-center px-2 text-center">
+    <div className="flex h-32 w-full items-center justify-center rounded-md border border-slate-200 bg-slate-100 px-2 text-center text-xs text-slate-500">
       {photo?.name ?? photo?.id ?? '图片已命中'}
     </div>
   );
@@ -2020,7 +2021,7 @@ function AuthImage({
 
   const displaySrc = objectUrl ?? (src && !needsAuthenticatedFetch(src) ? src : null);
   if (!displaySrc || failed) {
-    return <div className="w-full h-32 rounded border border-slate-200 bg-slate-100" />;
+    return <div className="h-32 w-full rounded-md border border-slate-200 bg-slate-100" />;
   }
 
   return (

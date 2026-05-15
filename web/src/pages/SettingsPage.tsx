@@ -44,9 +44,12 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">设置</h1>
-        <div className="flex items-center gap-3 text-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="page-title">设置</h1>
+          <p className="page-subtitle">维护每次对话都会注入的个人规则。</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-sm sm:justify-end">
           {updatedAt && (
             <span className="text-slate-400">
               最近保存 {new Date(updatedAt).toLocaleString()}
@@ -59,14 +62,14 @@ export default function SettingsPage() {
           <button
             onClick={save}
             disabled={loading || saveState === 'saving'}
-            className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 rounded"
+            className="btn-primary min-h-9"
           >
-            {saveState === 'saving' ? '保存中…' : '保存'}
+            {saveState === 'saving' ? '保存中...' : '保存'}
           </button>
         </div>
       </div>
 
-      <div className="bg-blue-50 border border-blue-200 text-blue-900 text-sm rounded px-4 py-3">
+      <div className="status-info">
         在这里写下你的偏好和规则,每次对话都会自动注入到助手的系统 prompt 里 —
         可以把它当作你的个人 <code>CLAUDE.md</code>。
         例如:希望助手如何称呼你、默认语气、项目背景、需要始终记住的事、要避免的内容。
@@ -76,8 +79,8 @@ export default function SettingsPage() {
         支持 markdown,格式自由。
       </div>
 
-      {loading && <div className="text-slate-500">加载中…</div>}
-      {loadError && <div className="text-red-600">加载失败:{loadError}</div>}
+      {loading && <div className="status-muted">加载中...</div>}
+      {loadError && <div className="status-error">加载失败:{loadError}</div>}
 
       {!loading && !loadError && (
         <textarea
@@ -86,9 +89,7 @@ export default function SettingsPage() {
           rows={20}
           spellCheck={false}
           placeholder={'# 关于我\n\n# 偏好\n\n- 用中文回答。\n- 答案尽量简短。\n'}
-          className="w-full bg-white border rounded px-3 py-2 font-mono text-sm
-                     focus:outline-none focus:ring-2 focus:ring-blue-500
-                     resize-y leading-relaxed"
+          className="field-input min-h-[28rem] resize-y font-mono leading-relaxed"
         />
       )}
     </div>

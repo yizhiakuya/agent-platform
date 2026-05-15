@@ -12,22 +12,26 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 function Shell() {
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="border-b bg-white">
-        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
-          <Link to="/chat" className="font-semibold">Agent Platform</Link>
-          <nav className="flex items-center gap-4 text-sm">
-            <Link to="/devices" className="text-slate-600 hover:text-slate-900">设备</Link>
-            <Link to="/chat" className="text-slate-600 hover:text-slate-900">聊天</Link>
-            <Link to="/settings" className="text-slate-600 hover:text-slate-900">设置</Link>
+    <div className="app-shell flex flex-col">
+      <header className="app-header">
+        <div className="app-container flex min-h-14 flex-wrap items-center justify-between gap-3 py-2">
+          <Link to="/chat" className="text-sm font-semibold tracking-normal text-slate-950">
+            Agent Platform
+          </Link>
+          <nav className="flex min-w-0 flex-wrap items-center gap-1 text-sm">
+            <Link to="/devices" className="btn-ghost min-h-9 px-2.5">设备</Link>
+            <Link to="/chat" className="btn-ghost min-h-9 px-2.5">聊天</Link>
+            <Link to="/settings" className="btn-ghost min-h-9 px-2.5">设置</Link>
             <button
-              className="text-slate-500 hover:text-red-600"
+              className="btn-ghost min-h-9 px-2.5 text-slate-500 hover:text-red-600"
               onClick={() => { setToken(null); window.location.assign('/login'); }}
-            >退出登录</button>
+            >
+              退出登录
+            </button>
           </nav>
         </div>
       </header>
-      <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-6">
+      <main className="app-container flex-1 py-4 sm:py-6">
         <Outlet />
       </main>
     </div>

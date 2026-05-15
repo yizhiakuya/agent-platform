@@ -30,37 +30,47 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50">
-      <form onSubmit={submit} className="w-full max-w-sm bg-white border rounded-lg shadow-sm p-6 space-y-4">
-        <h1 className="text-xl font-semibold">{mode === 'login' ? '登录' : '注册账号'}</h1>
+    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-8">
+      <form onSubmit={submit} className="page-panel w-full max-w-sm p-5 sm:p-6">
+        <div className="mb-5">
+          <div className="text-sm font-semibold text-slate-950">Agent Platform</div>
+          <h1 className="mt-3 page-title">{mode === 'login' ? '登录' : '注册账号'}</h1>
+          <p className="page-subtitle">进入你的移动 agent 控制台。</p>
+        </div>
+        <div className="space-y-4">
         <label className="block">
-          <span className="text-sm text-slate-600">用户名</span>
+          <span className="field-label">用户名</span>
           <input
             type="text" autoComplete="username"
             value={username} onChange={e => setUsername(e.target.value)}
-            className="mt-1 w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="field-input"
             required
           />
         </label>
         <label className="block">
-          <span className="text-sm text-slate-600">密码</span>
+          <span className="field-label">密码</span>
           <input
             type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
             value={password} onChange={e => setPassword(e.target.value)}
-            className="mt-1 w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="field-input"
             required minLength={8}
           />
         </label>
-        {error && <div className="text-sm text-red-600">{error}</div>}
+        {error && <div className="status-error">{error}</div>}
         <button
           type="submit" disabled={busy}
-          className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white py-2 rounded"
-        >{busy ? '…' : (mode === 'login' ? '登录' : '注册账号')}</button>
+          className="btn-primary w-full"
+        >
+          {busy ? '处理中...' : (mode === 'login' ? '登录' : '注册账号')}
+        </button>
         <button
           type="button"
-          className="w-full text-sm text-slate-500 hover:text-slate-800"
+          className="btn-ghost w-full"
           onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
-        >{mode === 'login' ? '还没有账号?去注册' : '已有账号?去登录'}</button>
+        >
+          {mode === 'login' ? '还没有账号?去注册' : '已有账号?去登录'}
+        </button>
+        </div>
       </form>
     </div>
   );

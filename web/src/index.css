@@ -2,7 +2,83 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body, #root { height: 100%; }
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-slate-100 text-slate-950 antialiased;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .app-shell {
+    @apply min-h-screen bg-slate-100 text-slate-950;
+  }
+
+  .app-header {
+    @apply sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur;
+  }
+
+  .app-container {
+    @apply mx-auto w-full max-w-7xl px-4 sm:px-5 lg:px-6;
+  }
+
+  .page-panel {
+    @apply rounded-lg border border-slate-200 bg-white shadow-sm;
+  }
+
+  .page-title {
+    @apply text-xl font-semibold tracking-normal text-slate-950;
+  }
+
+  .page-subtitle {
+    @apply mt-1 text-sm text-slate-500;
+  }
+
+  .btn-primary {
+    @apply inline-flex min-h-10 items-center justify-center rounded-md bg-blue-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply inline-flex min-h-10 items-center justify-center rounded-md border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-ghost {
+    @apply inline-flex min-h-10 items-center justify-center rounded-md px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .icon-button {
+    @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .field-label {
+    @apply block text-sm font-medium text-slate-700;
+  }
+
+  .field-input {
+    @apply mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-50 disabled:text-slate-500;
+  }
+
+  .status-muted {
+    @apply rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500;
+  }
+
+  .status-error {
+    @apply rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700;
+  }
+
+  .status-info {
+    @apply rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900;
+  }
+}
 
 .markdown-body {
   font-size: 0.95rem;
