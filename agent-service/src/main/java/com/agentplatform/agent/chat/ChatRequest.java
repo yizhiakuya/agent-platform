@@ -1,18 +1,37 @@
 package com.agentplatform.agent.chat;
 
-import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.Size;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
- * @param message   user's free-form text. Required.
+ * @param message   user's free-form text. Optional when at least one image is attached.
  * @param sessionId existing session to append to. When null, agent-service asks
  *                  chat-service to create a fresh session for this user.
  * @param deviceId  target device. Optional — when null, server picks the user's
  *                  first online device.
+ * @param attachments images uploaded through /api/uploads/photos for this turn.
  */
 public record ChatRequest(
-        @NotBlank String message,
+        String message,
         UUID sessionId,
-        UUID deviceId
-) {}
+        UUID deviceId,
+        @Valid @Size(max = 4) List<ChatImageAttachment> attachments
+) {
+    public ChatRequest(String message, UUID sessionId, UUID deviceId) {
+        this(message, sessionId, deviceId, List.of());
+    }
+
+    public ChatRequest {
+        message = message == null ? "" : message;
+        attachments = attachments == null ? List.of() : List.copyOf(attachments);
+    }
+
+    @AssertTrue(message = "message or image attachment required")
+    public boolean hasMessageOrAttachment() {
+        return !message.isBlank() || !attachments.isEmpty();
+    }
+}

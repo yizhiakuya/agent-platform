@@ -167,6 +167,16 @@ services:
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
+      # Keep agent-service off host/Docker HTTP proxy settings.
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      NO_PROXY: "*"
+      http_proxy: ""
+      https_proxy: ""
+      all_proxy: ""
+      no_proxy: "*"
+      JAVA_TOOL_OPTIONS: "-Djava.net.useSystemProxies=false"
       # Codex provider through an OpenAI-compatible Responses API relay.
       # Leave CODEX_API_KEY blank to skip this provider and use Anthropic below.
       CODEX_API_KEY: ${CODEX_API_KEY:-${OPENAI_API_KEY:-}}

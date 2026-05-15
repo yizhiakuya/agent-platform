@@ -30,11 +30,12 @@ agent-platform:
     # Where to find device-hub (load-balanced via Nacos by service name)
     hub-base-uri: lb://device-hub-service
     maxTokens: ${AGENT_MAX_TOKENS:4096}
-    # Hard cap for one agentic request. UI automation can legitimately need
-    # several observe -> act -> observe cycles; when the cap is hit we surface
-    # an explicit incomplete-task message instead of silently persisting a
-    # mid-task status update as the final answer.
+    # Loop guard for one agentic request.
     maxAgentIterations: ${AGENT_MAX_ITERATIONS:24}
+    # Hard caps for actual tool attempts in one user turn. Hitting either cap
+    # yields a normal assistant message asking the user to send "继续".
+    maxToolCallsPerTurn: ${AGENT_MAX_TOOL_CALLS_PER_TURN:24}
+    maxConsecutiveUiToolCalls: ${AGENT_MAX_CONSECUTIVE_UI_TOOL_CALLS:10}
     # LLM provider pool. ChatService tries each in order, fails over to next on RuntimeException
     # at the synchronous setup stage. Reuses ANTHROPIC_API_KEY/BASE_URL/LLM_CHAT_MODEL env vars
     # so existing deployments stay drop-in compatible. Set CODEX_API_KEY to enable Codex via

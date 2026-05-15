@@ -15,11 +15,26 @@ import com.fasterxml.jackson.databind.JsonNode;
  * @param schema           JSON Schema describing the {@code args} object accepted by this tool.
  * @param confirmRequired  If {@code true}, server must obtain user approval (handheld
  *                         notification + ConfirmActivity) before the call is executed.
+ * @param schemaVersion    Contract version for this tool's metadata/result shape.
+ * @param toolClass        Primary class: search, inspect, act, verify, or meta.
+ * @param safetyLevel      Safety tier: read_only, local_state, sensitive_action, dangerous.
+ * @param defaultDisplayPolicy  Frontend display hint when the result does not override it.
+ * @param resultType       Expected top-level result kind.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ToolSpec(
         String name,
         String description,
         JsonNode schema,
-        boolean confirmRequired
-) {}
+        boolean confirmRequired,
+        String schemaVersion,
+        String toolClass,
+        String safetyLevel,
+        String defaultDisplayPolicy,
+        String resultType
+) {
+    public ToolSpec(String name, String description, JsonNode schema, boolean confirmRequired) {
+        this(name, description, schema, confirmRequired,
+                null, null, null, null, null);
+    }
+}

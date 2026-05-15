@@ -58,6 +58,38 @@ class CodexResponsesLoopRunnerTest {
     }
 
     @Test
+    void buildToolsOmitsResponsesUnsupportedRootSchemaKeywords() throws Exception {
+        ObjectNode schema = mapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode props = mapper.createObjectNode();
+        ObjectNode id = mapper.createObjectNode();
+        id.put("type", "string");
+        props.set("id", id);
+        schema.set("properties", props);
+        schema.set("anyOf", mapper.createArrayNode().add(mapper.createObjectNode().set(
+                "required", mapper.createArrayNode().add("id"))));
+        schema.set("oneOf", mapper.createArrayNode().add(mapper.createObjectNode()));
+        schema.set("allOf", mapper.createArrayNode().add(mapper.createObjectNode()));
+        schema.set("enum", mapper.createArrayNode().add("x"));
+        schema.set("not", mapper.createObjectNode());
+        CodexResponsesLoopRunner runner = runner(
+                memory(false),
+                new ServerToolRegistry(List.of(new SchemaTool(schema)), mapper),
+                WebClient.builder());
+
+        ArrayNode tools = invokeBuildTools(runner);
+
+        JsonNode parameters = firstTool(tools, "schema_tool").path("parameters");
+        assertThat(parameters.path("type").asText()).isEqualTo("object");
+        assertThat(parameters.path("properties").has("id")).isTrue();
+        assertThat(parameters.has("anyOf")).isFalse();
+        assertThat(parameters.has("oneOf")).isFalse();
+        assertThat(parameters.has("allOf")).isFalse();
+        assertThat(parameters.has("enum")).isFalse();
+        assertThat(parameters.has("not")).isFalse();
+    }
+
+    @Test
     void runConvertsToolThrowablesToFunctionOutput() throws Exception {
         ObjectNode first = mapper.createObjectNode();
         ArrayNode firstOutput = mapper.createArrayNode();
@@ -224,6 +256,8 @@ class CodexResponsesLoopRunnerTest {
                 "http://device-hub-service:8080",
                 4096,
                 24,
+                24,
+                10,
                 List.of(),
                 memory,
                 null);
@@ -271,6 +305,43 @@ class CodexResponsesLoopRunnerTest {
             assertThat(tool.path("type").asText()).isNotBlank();
         }
         return tools;
+    }
+
+    private JsonNode firstTool(ArrayNode tools, String name) {
+        for (JsonNode tool : tools) {
+            if (name.equals(tool.path("name").asText())) {
+                return tool;
+            }
+        }
+        throw new AssertionError("tool not found: " + name);
+    }
+
+    private static class SchemaTool implements ServerToolCallback {
+        private final JsonNode schema;
+
+        private SchemaTool(JsonNode schema) {
+            this.schema = schema;
+        }
+
+        @Override
+        public String name() {
+            return "schema_tool";
+        }
+
+        @Override
+        public String description() {
+            return "Schema test tool";
+        }
+
+        @Override
+        public JsonNode schema() {
+            return schema;
+        }
+
+        @Override
+        public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
+            return ExecutionResult.text("{}");
+        }
     }
 
     private static class ThrowingTool implements ServerToolCallback {

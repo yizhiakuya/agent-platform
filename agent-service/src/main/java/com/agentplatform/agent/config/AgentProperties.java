@@ -28,6 +28,8 @@ public record AgentProperties(
             String hubBaseUri,
             int maxTokens,
             int maxAgentIterations,
+            int maxToolCallsPerTurn,
+            int maxConsecutiveUiToolCalls,
             List<Provider> providers,
             Memory memory,
             Photos photos
@@ -38,6 +40,12 @@ public record AgentProperties(
             }
             if (maxAgentIterations <= 0) {
                 maxAgentIterations = 24;
+            }
+            if (maxToolCallsPerTurn <= 0) {
+                maxToolCallsPerTurn = 24;
+            }
+            if (maxConsecutiveUiToolCalls <= 0) {
+                maxConsecutiveUiToolCalls = 10;
             }
             if (memory == null) {
                 memory = new Memory(null, 0, 0, null, null, 0, null, 0, null, 0, null, null, null,

@@ -14,7 +14,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Small best-effort LLM client for background jobs that need one text reply
@@ -33,26 +36,33 @@ public class BackgroundLlmClient {
 
     @Nullable
     public CompletionPlan choosePlan(List<ConfiguredProvider> providers, @Nullable String requestedModel) {
+        List<CompletionPlan> plans = candidatePlans(providers, requestedModel);
+        return plans.isEmpty() ? null : plans.getFirst();
+    }
+
+    public List<CompletionPlan> candidatePlans(List<ConfiguredProvider> providers, @Nullable String requestedModel) {
         if (providers == null || providers.isEmpty()) {
-            return null;
+            return List.of();
         }
+        List<CompletionPlan> plans = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
         String model = trimToNull(requestedModel);
         for (ConfiguredProvider provider : providers) {
             if (isCompatible(provider, model)) {
-                return new CompletionPlan(provider, model);
+                addPlan(plans, seen, provider, model);
             }
         }
         for (ConfiguredProvider provider : providers) {
             if (provider != null && provider.isAnthropicMessages()) {
-                return new CompletionPlan(provider, defaultModel(model, provider.model()));
+                addPlan(plans, seen, provider, defaultModel(model, provider.model()));
             }
         }
         for (ConfiguredProvider provider : providers) {
             if (provider != null && provider.isCodexResponses()) {
-                return new CompletionPlan(provider, codexModel(model, provider.model()));
+                addPlan(plans, seen, provider, codexModel(model, provider.model()));
             }
         }
-        return null;
+        return List.copyOf(plans);
     }
 
     public String complete(CompletionPlan plan, String prompt, long maxTokens) {
@@ -138,6 +148,17 @@ public class BackgroundLlmClient {
             return looksCodex(model);
         }
         return false;
+    }
+
+    private static void addPlan(List<CompletionPlan> plans,
+                                Set<String> seen,
+                                ConfiguredProvider provider,
+                                String model) {
+        if (provider == null || model == null || model.isBlank()) return;
+        String key = provider.name() + "\n" + provider.kind() + "\n" + model;
+        if (seen.add(key)) {
+            plans.add(new CompletionPlan(provider, model));
+        }
     }
 
     private String codexModel(@Nullable String requestedModel, @Nullable String providerModel) {

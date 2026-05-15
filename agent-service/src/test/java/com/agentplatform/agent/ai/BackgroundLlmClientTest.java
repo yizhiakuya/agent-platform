@@ -68,6 +68,34 @@ class BackgroundLlmClientTest {
     }
 
     @Test
+    void candidatePlansIncludeFallbackProvidersInOrderWithoutDuplicates() {
+        ConfiguredProvider anthropic = new ConfiguredProvider(
+                "anthropic",
+                "anthropic-messages",
+                null,
+                "http://127.0.0.1",
+                "token",
+                "claude-sonnet-4-6");
+        ConfiguredProvider codex = new ConfiguredProvider(
+                "codex",
+                "codex-responses",
+                null,
+                "http://127.0.0.1",
+                "token",
+                "gpt-5.5");
+
+        List<BackgroundLlmClient.CompletionPlan> plans = client.candidatePlans(
+                List.of(anthropic, codex),
+                "claude-haiku-4-5");
+
+        assertThat(plans).hasSize(2);
+        assertThat(plans.get(0).provider()).isSameAs(anthropic);
+        assertThat(plans.get(0).model()).isEqualTo("claude-haiku-4-5");
+        assertThat(plans.get(1).provider()).isSameAs(codex);
+        assertThat(plans.get(1).model()).isEqualTo("gpt-5.5");
+    }
+
+    @Test
     void completeCallsResponsesEndpointForCodexProvider() throws Exception {
         ObjectNode response = mapper.createObjectNode();
         response.put("output_text", "[]");

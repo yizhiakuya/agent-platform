@@ -83,6 +83,8 @@ class AgentLoopRunnerTest {
                         "http://device-hub-service:8080",
                         4096,
                         24,
+                        24,
+                        10,
                         List.of(),
                         memory(),
                         null));

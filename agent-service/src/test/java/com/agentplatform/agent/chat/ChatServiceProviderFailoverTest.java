@@ -11,6 +11,7 @@ import com.agentplatform.agent.ai.ServerToolRegistry;
 import com.agentplatform.agent.ai.SessionSummaryRefresher;
 import com.agentplatform.agent.ai.SkillLoadCallback;
 import com.agentplatform.agent.ai.SkillRegistry;
+import com.agentplatform.agent.client.DeviceToolDispatcher;
 import com.agentplatform.agent.client.InternalChatFeignClient;
 import com.agentplatform.agent.config.AgentProperties;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -109,7 +110,8 @@ class ChatServiceProviderFailoverTest {
                     mock(CodexResponsesLoopRunner.class),
                     mock(ContextAssembler.class),
                     new ToolArtifactExtractor(mapper),
-                    mock(SessionSummaryRefresher.class));
+                    mock(SessionSummaryRefresher.class),
+                    mock(DeviceToolDispatcher.class));
             CapturingEmitter emitter = new CapturingEmitter();
 
             service.handle(UUID.randomUUID(), new ChatRequest("hello", null, null), emitter);
@@ -175,7 +177,8 @@ class ChatServiceProviderFailoverTest {
                 new CountingCodexRunner(mapper, props, codexCalls),
                 contextAssembler,
                 new ToolArtifactExtractor(mapper),
-                mock(SessionSummaryRefresher.class));
+                mock(SessionSummaryRefresher.class),
+                mock(DeviceToolDispatcher.class));
     }
 
     private AgentProperties props() {
@@ -186,6 +189,8 @@ class ChatServiceProviderFailoverTest {
                         "http://device-hub-service:8080",
                         4096,
                         24,
+                        24,
+                        10,
                         List.of(),
                         new AgentProperties.Memory(
                                 null, 0, 0, null, null, 0, null, 0, false, 5,

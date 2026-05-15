@@ -36,6 +36,15 @@ public record SseEvent(String type, JsonNode data) {
         return new SseEvent("user_message", mapper.createObjectNode().put("content", content));
     }
 
+    public static SseEvent userMessage(ObjectMapper mapper, String content, JsonNode attachments) {
+        ObjectNode data = mapper.createObjectNode();
+        data.put("content", content == null ? "" : content);
+        if (attachments != null && attachments.isArray() && !attachments.isEmpty()) {
+            data.set("attachments", attachments);
+        }
+        return new SseEvent("user_message", data);
+    }
+
     public static SseEvent assistantMessage(ObjectMapper mapper, String content) {
         return new SseEvent("assistant_message", mapper.createObjectNode().put("content", content));
     }

@@ -22,6 +22,7 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -45,6 +46,7 @@ public class RemoteToolCallback {
 
     private static final Logger log = LoggerFactory.getLogger(RemoteToolCallback.class);
     private static final int MAX_UPLOADED_VISION_ATTACHMENTS = 6;
+    private static final Set<String> ANTHROPIC_UNSUPPORTED_ROOT_SCHEMA_KEYS = Set.of("oneOf", "anyOf", "allOf");
 
     private final UUID deviceId;
     private final UUID userId;
@@ -268,8 +270,8 @@ public class RemoteToolCallback {
      * Convert this tool's JSON Schema (a {@link JsonNode}) into the SDK's
      * {@link Tool.InputSchema}. The schema is always an object schema in our
      * protocol; we forward {@code properties} as-is (verbatim object map) and
-     * {@code required} as a list. Anything else on the schema (e.g. {@code $defs},
-     * {@code additionalProperties: false}) is preserved via
+     * {@code required} as a list. Most other schema fields (e.g. {@code $defs},
+     * {@code additionalProperties: false}) are preserved via
      * {@link Tool.InputSchema.Builder#putAdditionalProperty}.
      */
     private Tool.InputSchema buildInputSchema() {
@@ -304,6 +306,7 @@ public class RemoteToolCallback {
         schema.fields().forEachRemaining(e -> {
             String k = e.getKey();
             if (k.equals("type") || k.equals("properties") || k.equals("required")) return;
+            if (ANTHROPIC_UNSUPPORTED_ROOT_SCHEMA_KEYS.contains(k)) return;
             Object val = mapper.convertValue(e.getValue(), Object.class);
             b.putAdditionalProperty(k, JsonValue.from(val));
         });

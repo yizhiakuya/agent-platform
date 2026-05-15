@@ -91,21 +91,19 @@ public class SessionSummaryRefresher {
             }
             if (delta.isEmpty()) return;
 
-            BackgroundLlmClient.CompletionPlan plan = backgroundLlmClient.choosePlan(chatClients, mem.factExtractorModel());
-            if (plan == null) {
+            List<BackgroundLlmClient.CompletionPlan> plans =
+                    backgroundLlmClient.candidatePlans(chatClients, mem.factExtractorModel());
+            if (plans.isEmpty()) {
                 log.debug("[session-summary] no background LLM provider configured, skip");
                 return;
             }
 
             String prompt = buildPrompt(existing, delta, older.size(), recent.size(), mem.summaryMaxTokens());
-            String summary;
-            try {
-                summary = backgroundLlmClient.complete(plan, prompt, (long) mem.summaryMaxTokens()).trim();
-            } catch (Exception e) {
-                log.warn("[session-summary] LLM call failed for user {} session {} provider={} model={}: {}",
-                        userId, sessionId, plan.provider().name(), plan.model(), e.getMessage());
+            CompletionResult completion = completeWithFallback(plans, prompt, mem.summaryMaxTokens(), userId, sessionId);
+            if (completion == null) {
                 return;
             }
+            String summary = completion.text().trim();
             if (summary.isBlank()) return;
 
             int estimate = ContextBudget.estimateTextTokens(summary);
@@ -116,12 +114,31 @@ public class SessionSummaryRefresher {
                     older.size(),
                     summary,
                     estimate));
-            log.info("[session-summary] upserted user={} session={} covered={} recentTail={} tokens~{}",
-                    userId, sessionId, older.size(), recent.size(), estimate);
+            log.info("[session-summary] upserted user={} session={} covered={} recentTail={} tokens~{} provider={} model={}",
+                    userId, sessionId, older.size(), recent.size(), estimate,
+                    completion.plan().provider().name(), completion.plan().model());
         } catch (Exception e) {
             log.warn("[session-summary] refresh failed for user {} session {}: {}",
                     userId, sessionId, e.getMessage());
         }
+    }
+
+    private CompletionResult completeWithFallback(List<BackgroundLlmClient.CompletionPlan> plans,
+                                                  String prompt,
+                                                  int maxTokens,
+                                                  UUID userId,
+                                                  UUID sessionId) {
+        for (int i = 0; i < plans.size(); i++) {
+            BackgroundLlmClient.CompletionPlan plan = plans.get(i);
+            try {
+                String text = backgroundLlmClient.complete(plan, prompt, (long) maxTokens);
+                return new CompletionResult(plan, text == null ? "" : text);
+            } catch (Exception e) {
+                log.warn("[session-summary] LLM call failed for user {} session {} provider={} model={} attempt={}/{}: {}",
+                        userId, sessionId, plan.provider().name(), plan.model(), i + 1, plans.size(), e.getMessage());
+            }
+        }
+        return null;
     }
 
     private SessionContextSummaryDto loadExisting(UUID sessionId, UUID userId) {
@@ -181,4 +198,6 @@ public class SessionSummaryRefresher {
         if (value == null) return "";
         return value.replace('\r', ' ').replace('\n', ' ').trim();
     }
+
+    private record CompletionResult(BackgroundLlmClient.CompletionPlan plan, String text) {}
 }

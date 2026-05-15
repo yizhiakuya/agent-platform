@@ -70,13 +70,14 @@ public class ContextAssembler {
         AgentProperties.Memory memory = props.agent().memory();
         List<SessionArtifactDto> artifacts = loadArtifacts(sessionId, userId);
         SessionContextSummaryDto summary = loadSummary(sessionId, userId);
+        boolean hasSummary = hasUsableSummary(summary);
         String memoryBlock = PromptAssembler.formatMemoryBlock(memories);
         String artifactBlock = PromptAssembler.formatArtifactBlock(artifacts);
         boolean summaryEnabled = Boolean.TRUE.equals(memory.enableSessionSummary());
-        String summaryBlock = summaryEnabled
+        String summaryBlock = summaryEnabled && hasSummary
                 ? PromptAssembler.formatSessionSummaryBlock(
-                        summary == null ? "" : summary.summary(),
-                        summary == null ? 0 : summary.coveredMessageCount())
+                        summary.summary(),
+                        summary.coveredMessageCount())
                 : "";
         String userText = PromptAssembler.composeUserText(
                 memoryBlock,
@@ -85,16 +86,18 @@ public class ContextAssembler {
                 currentMessage);
 
         List<MessageDto> allRows = historyReplayer.loadRows(sessionId, userId, currentMessage);
-        List<MessageDto> historyRows = summaryEnabled ? ContextBudget.selectRecent(allRows, memory) : allRows;
+        List<MessageDto> historyRows = summaryEnabled && hasSummary
+                ? ContextBudget.selectRecent(allRows, memory)
+                : allRows;
         List<MessageParam> anthropicMessages = historyReplayer.toParams(historyRows);
         ContextStats stats = buildStats(stableSystemText, memoryBlock, artifactBlock, summaryBlock,
                 historyRows, allRows.size(), currentMessage, memory);
         log.debug("context user={} session={} totalTokens~{} system~{} memory~{} artifacts~{} summary~{} history~{} "
-                        + "historyRows={}/{} summarizedRows={} maxInput={}",
+                        + "historyRows={}/{} summarizedRows={} summaryPresent={} maxInput={}",
                 userId, sessionId, stats.totalTokens(), stats.systemTokens(), stats.memoryTokens(),
                 stats.artifactTokens(), stats.summaryTokens(), stats.historyTokens(),
                 stats.recentHistoryMessages(), stats.totalHistoryMessages(), stats.summarizedMessages(),
-                stats.maxInputTokens());
+                hasSummary, stats.maxInputTokens());
         return new ContextBundle(
                 stableSystemText,
                 systemBlocks,
@@ -138,6 +141,13 @@ public class ContextAssembler {
             log.debug("loadSummary failed for user {} session {}: {}", userId, sessionId, e.getMessage());
             return null;
         }
+    }
+
+    private static boolean hasUsableSummary(SessionContextSummaryDto summary) {
+        return summary != null
+                && summary.coveredMessageCount() > 0
+                && summary.summary() != null
+                && !summary.summary().isBlank();
     }
 
     private ContextStats buildStats(String stableSystemText,

@@ -31,6 +31,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -51,6 +52,8 @@ public class CodexResponsesLoopRunner {
     private static final Logger log = LoggerFactory.getLogger(CodexResponsesLoopRunner.class);
     private static final ParameterizedTypeReference<ServerSentEvent<String>> SSE_EVENT_TYPE =
             new ParameterizedTypeReference<>() {};
+    private static final Set<String> RESPONSES_UNSUPPORTED_ROOT_SCHEMA_KEYS =
+            Set.of("oneOf", "anyOf", "allOf", "enum", "not");
 
     private final ObjectMapper mapper;
     private final AgentProperties props;
@@ -79,6 +82,21 @@ public class CodexResponsesLoopRunner {
                          String userText,
                          ChatEventSink sink,
                          SseEmitter emitter) {
+        return run(provider, sessionId, userId, resolved, systemText, history, userText,
+                new ChatAttachmentContext(List.of(), List.of(), mapper.createArrayNode(), ""),
+                sink, emitter);
+    }
+
+    public RunResult run(ConfiguredProvider provider,
+                         UUID sessionId,
+                         UUID userId,
+                         ResolvedTools resolved,
+                         String systemText,
+                         List<MessageDto> history,
+                         String userText,
+                         ChatAttachmentContext attachments,
+                         ChatEventSink sink,
+                         SseEmitter emitter) {
         if (!provider.isCodexResponses()) {
             throw new IllegalArgumentException("CodexResponsesLoopRunner requires codex-responses provider");
         }
@@ -94,10 +112,13 @@ public class CodexResponsesLoopRunner {
                 .build();
         StringBuilder textBuf = new StringBuilder();
         JsonNode lastUsage = null;
-        List<JsonNode> transcript = buildInitialInput(history, userText);
+        List<JsonNode> transcript = buildInitialInput(history, userText, attachments);
         ArrayNode tools = buildTools(resolved);
 
         int maxIterations = props.agent().maxAgentIterations();
+        ToolCallBudget toolBudget = new ToolCallBudget(
+                props.agent().maxToolCallsPerTurn(),
+                props.agent().maxConsecutiveUiToolCalls());
         for (int iter = 0; iter < maxIterations; iter++) {
             if (cancelled.get()) {
                 return new RunResult(textBuf.toString(), lastUsage, true);
@@ -150,9 +171,16 @@ public class CodexResponsesLoopRunner {
                 }
             }
             for (FunctionCall call : calls) {
+                ToolCallBudget.Decision budgetDecision = toolBudget.before(call.name());
+                if (!budgetDecision.allowed()) {
+                    log.info("Codex Responses loop paused by tool budget user={} used={}/{} consecutiveUi={}/{} tool={}",
+                            userId, toolBudget.used(), toolBudget.maxToolCalls(),
+                            toolBudget.consecutiveUi(), toolBudget.maxConsecutiveUiToolCalls(), call.name());
+                    return RunResult.exhausted(textBuf.toString(), lastUsage, budgetDecision.exhaustionReason());
+                }
                 ExecutionResult er;
                 try {
-                    er = executeFunctionCall(call, resolved, userId, sessionId, sink);
+                    er = executeFunctionCall(call, resolved, userId, sessionId, budgetDecision.decorate(sink));
                 } catch (Throwable t) {
                     log.error("codex function_call threw name={} err={}", call.name(), t.toString(), t);
                     er = ExecutionResult.error("tool execution failed: " + t.getMessage());
@@ -168,7 +196,9 @@ public class CodexResponsesLoopRunner {
         return RunResult.exhausted(
                 textBuf.toString(),
                 lastUsage,
-                "任务还没完成，但本轮工具调用次数已达到上限（" + maxIterations + " 轮）。请继续发送“继续”，我会接着当前页面状态往下做。"
+                "任务还没完成，但本轮思考/工具循环已达到上限（" + maxIterations + " 轮，已调用 "
+                        + toolBudget.used() + "/" + toolBudget.maxToolCalls()
+                        + " 个工具）。请发送“继续”，我会接着当前页面状态往下做。"
         );
     }
 
@@ -300,6 +330,12 @@ public class CodexResponsesLoopRunner {
     }
 
     private List<JsonNode> buildInitialInput(List<MessageDto> history, String userText) {
+        return buildInitialInput(history, userText,
+                new ChatAttachmentContext(List.of(), List.of(), mapper.createArrayNode(), ""));
+    }
+
+    private List<JsonNode> buildInitialInput(List<MessageDto> history, String userText,
+                                             ChatAttachmentContext attachments) {
         List<JsonNode> input = new ArrayList<>();
         if (history != null) {
             for (MessageDto row : history) {
@@ -312,7 +348,7 @@ public class CodexResponsesLoopRunner {
                 }
             }
         }
-        input.add(message("user", userText == null ? "" : userText));
+        input.add(userMessage(userText, attachments));
         return input;
     }
 
@@ -321,6 +357,39 @@ public class CodexResponsesLoopRunner {
         node.put("role", role);
         node.put("content", text);
         return node;
+    }
+
+    private ObjectNode userMessage(String text, ChatAttachmentContext attachments) {
+        if (attachments == null || attachments.images().isEmpty()) {
+            return message("user", userTextWithAttachments(text, attachments));
+        }
+        ObjectNode msg = mapper.createObjectNode();
+        msg.put("role", "user");
+        ArrayNode content = mapper.createArrayNode();
+        ObjectNode note = mapper.createObjectNode();
+        note.put("type", "input_text");
+        note.put("text", userTextWithAttachments(text, attachments));
+        content.add(note);
+        for (PendingImage img : attachments.images()) {
+            ObjectNode image = mapper.createObjectNode();
+            image.put("type", "input_image");
+            image.put("image_url", "data:" + img.mimeType() + ";base64," + img.b64());
+            image.put("detail", "high");
+            content.add(image);
+        }
+        msg.set("content", content);
+        return msg;
+    }
+
+    private String userTextWithAttachments(String text, ChatAttachmentContext attachments) {
+        String base = text == null ? "" : text;
+        if (attachments == null || attachments.promptText() == null || attachments.promptText().isBlank()) {
+            return base;
+        }
+        if (base.isBlank()) {
+            return attachments.promptText();
+        }
+        return base + "\n\n" + attachments.promptText();
     }
 
     private ArrayNode buildTools(ResolvedTools resolved) {
@@ -385,6 +454,9 @@ public class CodexResponsesLoopRunner {
         }
         if (!copy.has("properties")) {
             copy.set("properties", mapper.createObjectNode());
+        }
+        for (String key : RESPONSES_UNSUPPORTED_ROOT_SCHEMA_KEYS) {
+            copy.remove(key);
         }
         return copy;
     }

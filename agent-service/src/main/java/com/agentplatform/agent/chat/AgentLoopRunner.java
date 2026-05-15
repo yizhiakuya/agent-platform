@@ -122,6 +122,9 @@ public class AgentLoopRunner {
         StringBuilder textBuf = new StringBuilder();
         Usage lastUsage = null;
         int maxIterations = props.agent().maxAgentIterations();
+        ToolCallBudget toolBudget = new ToolCallBudget(
+                props.agent().maxToolCallsPerTurn(),
+                props.agent().maxConsecutiveUiToolCalls());
         for (int iter = 0; iter < maxIterations; iter++) {
             // If a previous iteration drained without erroring but cancel
             // already fired, bail before opening another (billed) stream.
@@ -202,9 +205,16 @@ public class AgentLoopRunner {
                 Optional<ToolUseBlock> tuOpt = cb.toolUse();
                 if (tuOpt.isEmpty()) continue;
                 ToolUseBlock tu = tuOpt.get();
+                ToolCallBudget.Decision budgetDecision = toolBudget.before(tu.name());
+                if (!budgetDecision.allowed()) {
+                    log.info("agentic loop paused by tool budget user={} used={}/{} consecutiveUi={}/{} tool={}",
+                            userId, toolBudget.used(), toolBudget.maxToolCalls(),
+                            toolBudget.consecutiveUi(), toolBudget.maxConsecutiveUiToolCalls(), tu.name());
+                    return RunResult.exhausted(textBuf.toString(), lastUsage, budgetDecision.exhaustionReason());
+                }
                 ExecutionResult er;
                 try {
-                    er = executeOneToolUse(tu, resolved, userId, sessionId, sink);
+                    er = executeOneToolUse(tu, resolved, userId, sessionId, budgetDecision.decorate(sink));
                 } catch (Throwable t) {
                     log.error("tool_use threw name={} err={}", tu.name(), t.toString(), t);
                     er = ExecutionResult.error("tool execution failed: " + t.getMessage());
@@ -226,7 +236,9 @@ public class AgentLoopRunner {
         return RunResult.exhausted(
                 textBuf.toString(),
                 lastUsage,
-                "任务还没完成，但本轮工具调用次数已达到上限（" + maxIterations + " 轮）。请继续发送“继续”，我会接着当前页面状态往下做。"
+                "任务还没完成，但本轮思考/工具循环已达到上限（" + maxIterations + " 轮，已调用 "
+                        + toolBudget.used() + "/" + toolBudget.maxToolCalls()
+                        + " 个工具）。请发送“继续”，我会接着当前页面状态往下做。"
         );
     }
 

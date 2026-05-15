@@ -382,6 +382,8 @@ class SemanticPhotoSearchFormattingTest {
                 null,
                 4096,
                 24,
+                24,
+                10,
                 List.of(),
                 null,
                 photos);

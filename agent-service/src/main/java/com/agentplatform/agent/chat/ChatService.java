@@ -4,11 +4,13 @@ import com.agentplatform.agent.ai.ChatEventSink;
 import com.agentplatform.agent.ai.ConfiguredProvider;
 import com.agentplatform.agent.ai.EmbeddingService;
 import com.agentplatform.agent.ai.MemoryExtractor;
+import com.agentplatform.agent.ai.PendingImage;
 import com.agentplatform.agent.ai.RemoteDeviceToolCallbackProvider;
 import com.agentplatform.agent.ai.ResolvedTools;
 import com.agentplatform.agent.ai.ServerToolRegistry;
 import com.agentplatform.agent.ai.SessionSummaryRefresher;
 import com.agentplatform.agent.ai.SkillLoadCallback;
+import com.agentplatform.agent.client.DeviceToolDispatcher;
 import com.agentplatform.agent.client.InternalChatFeignClient;
 import com.agentplatform.agent.config.AgentProperties;
 import com.agentplatform.api.chat.CreateSessionRequest;
@@ -20,12 +22,16 @@ import com.agentplatform.api.chat.SessionDto;
 import com.agentplatform.api.chat.UpsertSessionArtifactRequest;
 import com.agentplatform.api.chat.WriteMessageRequest;
 import com.anthropic.models.messages.MessageParam;
+import com.anthropic.models.messages.Base64ImageSource;
+import com.anthropic.models.messages.ContentBlockParam;
+import com.anthropic.models.messages.ImageBlockParam;
 import com.anthropic.models.messages.TextBlockParam;
 import com.anthropic.models.messages.ThinkingConfigEnabled;
 import com.anthropic.models.messages.ToolUnion;
 import com.anthropic.models.messages.Usage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,8 +40,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.ArrayDeque;
+import java.util.Base64;
 import java.util.Deque;
+import java.util.Locale;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -82,6 +91,7 @@ public class ChatService {
     private final ContextAssembler contextAssembler;
     private final ToolArtifactExtractor artifactExtractor;
     private final SessionSummaryRefresher sessionSummaryRefresher;
+    private final DeviceToolDispatcher deviceToolDispatcher;
 
     public ChatService(RemoteDeviceToolCallbackProvider toolProvider,
                        InternalChatFeignClient chatClientFeign,
@@ -97,7 +107,8 @@ public class ChatService {
                        CodexResponsesLoopRunner codexResponsesLoopRunner,
                        ContextAssembler contextAssembler,
                        ToolArtifactExtractor artifactExtractor,
-                       SessionSummaryRefresher sessionSummaryRefresher) {
+                       SessionSummaryRefresher sessionSummaryRefresher,
+                       DeviceToolDispatcher deviceToolDispatcher) {
         this.toolProvider = toolProvider;
         this.chatClientFeign = chatClientFeign;
         this.chatExecutor = chatExecutor;
@@ -113,6 +124,7 @@ public class ChatService {
         this.contextAssembler = contextAssembler;
         this.artifactExtractor = artifactExtractor;
         this.sessionSummaryRefresher = sessionSummaryRefresher;
+        this.deviceToolDispatcher = deviceToolDispatcher;
     }
 
     public void handle(UUID userId, ChatRequest req, SseEmitter emitter) {
@@ -122,12 +134,13 @@ public class ChatService {
     private void handleInternal(UUID userId, ChatRequest req, SseEmitter emitter) {
         try {
             UUID sessionId = ensureSession(userId, req.sessionId(), req.message());
+            ChatAttachmentContext attachments = resolveAttachments(userId, req.attachments());
             // Tell the web client what session we're using BEFORE any other event,
             // so it can echo sessionId back on subsequent /api/chat/stream calls
             // and the LLM actually sees prior turns.
             send(emitter, SseEvent.session(mapper, sessionId));
-            send(emitter, SseEvent.userMessage(mapper, req.message()));
-            persist(sessionId, userId, MessageRole.USER, req.message(), null);
+            send(emitter, SseEvent.userMessage(mapper, req.message(), attachments.metadata()));
+            persist(sessionId, userId, MessageRole.USER, req.message(), userMetadata(attachments));
 
             if (chatClients.isEmpty()) {
                 safeSend(emitter, SseEvent.error(mapper, "模型服务未配置，请配置可用的 LLM provider 后再试。"));
@@ -135,7 +148,7 @@ public class ChatService {
                 return;
             }
 
-            handleWithLlm(userId, sessionId, req, emitter);
+            handleWithLlm(userId, sessionId, req, attachments, emitter);
         } catch (Exception e) {
             log.warn("Chat handling failed for user {}", userId, e);
             safeSend(emitter, SseEvent.error(mapper, userFacingGeneralFailureMessage(e)));
@@ -146,6 +159,13 @@ public class ChatService {
     /* -------------------- real LLM path -------------------- */
 
     private void handleWithLlm(UUID userId, UUID sessionId, ChatRequest req, SseEmitter emitter) {
+        handleWithLlm(userId, sessionId, req,
+                new ChatAttachmentContext(List.of(), List.of(), mapper.createArrayNode(), ""),
+                emitter);
+    }
+
+    private void handleWithLlm(UUID userId, UUID sessionId, ChatRequest req,
+                               ChatAttachmentContext attachments, SseEmitter emitter) {
         ResolvedTools resolved = toolProvider.getForUser(userId, req.deviceId());
         if (req.deviceId() != null && resolved.definitions().isEmpty()) {
             log.info("Requested device {} has no online tools for user {}", req.deviceId(), userId);
@@ -174,10 +194,7 @@ public class ChatService {
         }
 
         List<MessageParam> messages = context.anthropicMessages();
-        messages.add(MessageParam.builder()
-                .role(MessageParam.Role.USER)
-                .content(context.userText())
-                .build());
+        messages.add(buildAnthropicUserMessage(context.userText(), attachments));
 
         AtomicBoolean responseStarted = new AtomicBoolean(false);
         ChatEventSink sink = new PersistingChatEventSink(emitter, sessionId, userId, responseStarted);
@@ -193,7 +210,7 @@ public class ChatService {
             try {
                 result = runProvider(provider, sessionId, userId, resolved,
                         context.stableSystemText(), context.systemBlocks(), tools, thinking,
-                        messages, context.historyRows(), context.userText(), sink, emitter);
+                        messages, context.historyRows(), context.userText(), attachments, sink, emitter);
                 break;
             } catch (RuntimeException e) {
                 lastErr = e;
@@ -230,7 +247,7 @@ public class ChatService {
                     ? "任务还没完成，但本轮工具调用次数已达到上限。请发送“继续”，我会接着做。"
                     : result.exhaustionReason();
             log.info("Chat exhausted tool iterations for user {} session {}: {}", userId, sessionId, message);
-            safeSend(emitter, SseEvent.error(mapper, message));
+            safeSend(emitter, SseEvent.assistantMessage(mapper, message));
             long durMs = System.currentTimeMillis() - t0;
             persist(sessionId, userId, MessageRole.ASSISTANT, message, assistantMetadata(durMs));
             logUsage(userId, result.usage(), durMs);
@@ -266,6 +283,7 @@ public class ChatService {
                                   List<MessageParam> messages,
                                   List<MessageDto> historyRows,
                                   String userText,
+                                  ChatAttachmentContext attachments,
                                   ChatEventSink sink,
                                   SseEmitter emitter) {
         if (provider.isAnthropicMessages()) {
@@ -276,7 +294,7 @@ public class ChatService {
             return codexResponsesLoopRunner.run(provider, sessionId, userId, resolved,
                     stableSystemText,
                     historyRows,
-                    userText, sink, emitter);
+                    userText, attachments, sink, emitter);
         }
         throw new IllegalArgumentException("unsupported provider kind: " + provider.kind());
     }
@@ -400,6 +418,160 @@ public class ChatService {
                     role, sessionId, e.getMessage());
             return null;
         }
+    }
+
+    private ChatAttachmentContext resolveAttachments(UUID userId, List<ChatImageAttachment> attachments) {
+        List<ChatImageAttachment> clean = normalizeAttachments(attachments);
+        ArrayNode metadata = mapper.createArrayNode();
+        List<PendingImage> images = new ArrayList<>();
+        for (int i = 0; i < clean.size(); i++) {
+            ChatImageAttachment att = clean.get(i);
+            ObjectNode item = mapper.createObjectNode();
+            item.put("type", "image");
+            item.put("imageUrl", att.imageUrl());
+            item.put("assetId", textOrNull(att.assetId()));
+            item.put("contentType", textOrNull(att.contentType()));
+            if (att.bytes() != null) item.put("bytes", att.bytes());
+            item.put("name", textOrNull(att.name()));
+            if (att.width() != null) item.put("width", att.width());
+            if (att.height() != null) item.put("height", att.height());
+            item.put("index", i + 1);
+            metadata.add(item);
+
+            deviceToolDispatcher.fetchUploadAsset(userId, att.imageUrl())
+                    .filter(asset -> asset.bytes().length < 5_250_000)
+                    .ifPresent(asset -> {
+                        String contentType = isSupportedImageType(asset.contentType())
+                                ? asset.contentType()
+                                : defaultContentType(att.contentType());
+                        images.add(new PendingImage(
+                                contentType,
+                                Base64.getEncoder().encodeToString(asset.bytes())));
+                    });
+        }
+        return new ChatAttachmentContext(clean, images, metadata, attachmentPromptText(clean, images.size()));
+    }
+
+    private List<ChatImageAttachment> normalizeAttachments(List<ChatImageAttachment> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return List.of();
+        }
+        List<ChatImageAttachment> out = new ArrayList<>();
+        for (ChatImageAttachment att : attachments) {
+            if (att == null || att.imageUrl() == null || !att.imageUrl().startsWith("/api/uploads/photos/")) {
+                continue;
+            }
+            out.add(new ChatImageAttachment(
+                    att.imageUrl().trim(),
+                    trimToNull(att.assetId()),
+                    defaultContentType(att.contentType()),
+                    att.bytes(),
+                    trimToNull(att.name()),
+                    att.width(),
+                    att.height()));
+            if (out.size() >= 4) break;
+        }
+        return List.copyOf(out);
+    }
+
+    private MessageParam buildAnthropicUserMessage(String userText, ChatAttachmentContext attachments) {
+        String text = userTextWithAttachments(userText, attachments);
+        if (attachments == null || attachments.images().isEmpty()) {
+            return MessageParam.builder()
+                    .role(MessageParam.Role.USER)
+                    .content(text)
+                    .build();
+        }
+        List<ContentBlockParam> blocks = new ArrayList<>();
+        blocks.add(ContentBlockParam.ofText(TextBlockParam.builder().text(text).build()));
+        for (PendingImage img : attachments.images()) {
+            blocks.add(ContentBlockParam.ofImage(
+                    ImageBlockParam.builder()
+                            .source(Base64ImageSource.builder()
+                                    .mediaType(Base64ImageSource.MediaType.of(img.mimeType()))
+                                    .data(img.b64())
+                                    .build())
+                            .build()));
+        }
+        return MessageParam.builder()
+                .role(MessageParam.Role.USER)
+                .contentOfBlockParams(blocks)
+                .build();
+    }
+
+    private String userTextWithAttachments(String userText, ChatAttachmentContext attachments) {
+        if (attachments == null || attachments.promptText().isBlank()) {
+            return userText == null ? "" : userText;
+        }
+        String base = userText == null ? "" : userText;
+        if (base.isBlank()) {
+            return attachments.promptText();
+        }
+        return base + "\n\n" + attachments.promptText();
+    }
+
+    private String attachmentPromptText(List<ChatImageAttachment> attachments, int visibleCount) {
+        if (attachments == null || attachments.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("# USER ATTACHED IMAGES\n");
+        sb.append("The current user turn includes ").append(attachments.size()).append(" image attachment(s). ");
+        sb.append("Inspect the attached image pixels directly when answering. ");
+        sb.append("Each image also has an authenticated platform URL that can be passed to device tools such as photos.save_to_gallery.\n");
+        if (visibleCount < attachments.size()) {
+            sb.append("Only ").append(visibleCount).append(" image(s) were attached to the vision model because of size/fetch limits; use the URLs as references if needed.\n");
+        }
+        for (int i = 0; i < attachments.size(); i++) {
+            ChatImageAttachment att = attachments.get(i);
+            sb.append(i + 1).append(". image_url=").append(att.imageUrl());
+            if (att.assetId() != null && !att.assetId().isBlank()) {
+                sb.append(", asset_id=").append(att.assetId());
+            }
+            if (att.contentType() != null && !att.contentType().isBlank()) {
+                sb.append(", content_type=").append(att.contentType());
+            }
+            if (att.name() != null && !att.name().isBlank()) {
+                sb.append(", name=").append(att.name());
+            }
+            sb.append('\n');
+        }
+        return sb.toString().trim();
+    }
+
+    private JsonNode userMetadata(ChatAttachmentContext attachments) {
+        if (attachments == null || !attachments.hasAttachments()) {
+            return null;
+        }
+        ObjectNode m = mapper.createObjectNode();
+        m.set("attachments", attachments.metadata());
+        m.put("visionAttachedCount", attachments.images().size());
+        return m;
+    }
+
+    private static String textOrNull(String value) {
+        String clean = trimToNull(value);
+        return clean == null ? null : clean;
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) return null;
+        String clean = value.trim();
+        return clean.isEmpty() ? null : clean;
+    }
+
+    private static String defaultContentType(String value) {
+        String clean = trimToNull(value);
+        if (!isSupportedImageType(clean)) {
+            return "image/jpeg";
+        }
+        return clean.toLowerCase(Locale.ROOT);
+    }
+
+    private static boolean isSupportedImageType(String value) {
+        if (value == null) return false;
+        String clean = value.trim().toLowerCase(Locale.ROOT);
+        return clean.equals("image/jpeg") || clean.equals("image/png") || clean.equals("image/webp");
     }
 
     private JsonNode toolCallMetadata(UUID deviceId, String toolName, JsonNode args) {
