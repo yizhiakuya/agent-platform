@@ -823,54 +823,8 @@ export default function ChatPage() {
           onClick={closeLightbox}
           onWheel={handleLightboxWheel}
         >
-          <div className="absolute right-3 top-3 flex items-center gap-2" onClick={e => e.stopPropagation()}>
-            <div className="rounded-md bg-white/95 px-3 py-2 text-sm font-semibold text-slate-700 shadow">
-              {Math.round(lightboxScale * 100)}%
-            </div>
-            <button
-              type="button"
-              onClick={() => zoomLightbox(-0.25)}
-              className="icon-button border-white/20 bg-white text-slate-900"
-              aria-label="缩小图片"
-              title="缩小"
-            >
-              -
-            </button>
-            <button
-              type="button"
-              onClick={() => zoomLightbox(0.25)}
-              className="icon-button border-white/20 bg-white text-slate-900"
-              aria-label="放大图片"
-              title="放大"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              onClick={() => setLightboxScale(1)}
-              className="btn-secondary bg-white"
-            >
-              适应
-            </button>
-            <button
-              type="button"
-              onClick={() => void downloadImage(lightboxSrc)}
-              className="btn-primary"
-            >
-              保存图片
-            </button>
-            <button
-              type="button"
-              onClick={closeLightbox}
-              className="icon-button border-white/20 bg-white text-slate-900"
-              aria-label="关闭预览"
-              title="关闭"
-            >
-              x
-            </button>
-          </div>
           <div
-            className="flex h-full w-full cursor-zoom-out items-center justify-center overflow-auto p-4 pt-16"
+            className="flex h-full w-full cursor-zoom-out items-center justify-center overflow-auto p-4"
             onContextMenu={e => e.stopPropagation()}
           >
             <div
@@ -1142,42 +1096,6 @@ function normalizeMessageAttachments(value: unknown): UploadedChatImage[] {
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-async function downloadImage(src: string) {
-  const filename = imageDownloadName(src);
-  try {
-    const token = getToken();
-    const resp = await fetch(src, {
-      headers: needsAuthenticatedFetch(src) && token ? { Authorization: `Bearer ${token}` } : {}
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    triggerDownload(url, filename);
-    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
-  } catch {
-    triggerDownload(src, filename);
-  }
-}
-
-function triggerDownload(href: string, filename: string) {
-  const link = document.createElement('a');
-  link.href = href;
-  link.download = filename;
-  link.rel = 'noopener';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-}
-
-function imageDownloadName(src: string) {
-  if (src.startsWith('data:image/png')) return `agent-image-${Date.now()}.png`;
-  if (src.startsWith('data:image/webp')) return `agent-image-${Date.now()}.webp`;
-  const clean = src.split('?')[0].split('#')[0];
-  const last = clean.split('/').filter(Boolean).pop();
-  if (last && /\.[a-z0-9]{2,5}$/i.test(last)) return last;
-  return `agent-image-${Date.now()}.jpg`;
 }
 
 function markLatestAssistantDuration(
