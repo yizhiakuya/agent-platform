@@ -59,7 +59,7 @@ export default function SettingsPage() {
               <button
                 onClick={save}
                 disabled={loading || saveState === 'saving'}
-                className="btn-accent"
+                className="btn-primary"
               >
                 {saveState === 'saving' ? '保存中...' : '保存'}
               </button>
@@ -99,9 +99,9 @@ export default function SettingsPage() {
           <InfoBlock title="作用范围" body="只影响你的会话，不会修改项目级 prompt 或 packaged skills。" />
           <InfoBlock title="建议内容" body="称呼、默认语气、项目偏好、永远要记住或避免的规则。" />
           <InfoBlock title="格式" body="支持 Markdown。分标题写更容易被模型正确引用。" />
-          <div className="rounded-lg bg-slate-950 p-4 text-sm leading-6 text-white">
-            <div className="text-xs font-semibold uppercase text-slate-400">Example</div>
-            <code className="mt-2 block whitespace-pre-wrap text-xs text-cyan-100">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700">
+            <div className="text-xs font-semibold uppercase text-slate-500">Example</div>
+            <code className="mt-2 block whitespace-pre-wrap rounded-md bg-slate-50 p-3 text-xs text-slate-700">
               {`# 偏好\n- 用中文回答\n- 先修 GitNexus 问题`}
             </code>
           </div>

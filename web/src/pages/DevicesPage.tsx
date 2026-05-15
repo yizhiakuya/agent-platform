@@ -31,7 +31,7 @@ export default function DevicesPage() {
             <button
               onClick={() => create.mutate()}
               disabled={create.isPending}
-              className="btn-accent"
+              className="btn-primary"
             >
               {create.isPending ? '生成中...' : '新增设备'}
             </button>
@@ -101,7 +101,7 @@ export default function DevicesPage() {
                   {enrollment.token}
                 </code>
               </div>
-              <div className="rounded-md bg-slate-950 px-3 py-2 text-sm text-white">
+              <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
                 过期时间 {new Date(enrollment.expiresAt).toLocaleString()}
               </div>
             </div>

@@ -5,16 +5,13 @@
 @layer base {
   :root {
     color-scheme: light;
-    --ink: #111827;
-    --muted: #667085;
-    --line: #d8dee8;
-    --paper: #fbfcff;
+    --ink: #0f172a;
+    --muted: #64748b;
+    --line: #d9e2ef;
+    --paper: #f6f8fb;
     --panel: #ffffff;
-    --panel-soft: #f3f6fb;
-    --navy: #111827;
-    --cyan: #08a8b5;
-    --mint: #18b684;
-    --amber: #e39a28;
+    --panel-soft: #f8fafc;
+    --primary: #2563eb;
     --danger: #dc2626;
   }
 
@@ -26,10 +23,7 @@
 
   body {
     margin: 0;
-    background:
-      linear-gradient(135deg, rgba(8, 168, 181, 0.08), transparent 30%),
-      linear-gradient(315deg, rgba(227, 154, 40, 0.07), transparent 28%),
-      #eef3f8;
+    background: var(--paper);
     color: var(--ink);
     font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
       "Microsoft YaHei", sans-serif;
@@ -54,37 +48,37 @@
   }
 
   ::selection {
-    background: rgba(8, 168, 181, 0.22);
+    background: rgba(37, 99, 235, 0.18);
   }
 }
 
 @layer components {
   .app-shell {
-    @apply grid min-h-screen grid-cols-1 text-slate-950 lg:grid-cols-[17.5rem_minmax(0,1fr)];
+    @apply grid min-h-screen grid-cols-1 text-slate-950 lg:grid-cols-[14rem_minmax(0,1fr)];
   }
 
   .app-rail {
-    @apply flex min-h-0 flex-col border-b border-slate-900/10 bg-slate-950 px-4 py-4 text-white lg:fixed lg:inset-y-0 lg:left-0 lg:w-72 lg:border-b-0 lg:border-r lg:border-white/10;
+    @apply flex min-h-0 flex-col border-b border-slate-200 bg-white px-3 py-4 text-slate-900 lg:fixed lg:inset-y-0 lg:left-0 lg:w-56 lg:border-b-0 lg:border-r;
   }
 
   .app-main {
-    @apply min-w-0 px-3 py-3 sm:px-4 sm:py-4 lg:col-start-2 lg:h-screen lg:overflow-hidden;
+    @apply min-w-0 px-3 py-3 lg:col-start-2 lg:h-screen lg:overflow-hidden;
   }
 
   .brand-lockup {
-    @apply flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-3;
+    @apply flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-2.5 py-2.5;
   }
 
   .brand-mark {
-    @apply grid h-10 w-10 shrink-0 place-items-center rounded-md bg-cyan-300 text-xs font-black text-slate-950;
+    @apply grid h-9 w-9 shrink-0 place-items-center rounded-md bg-blue-600 text-xs font-black text-white;
   }
 
   .brand-name {
-    @apply truncate text-sm font-semibold text-white;
+    @apply truncate text-sm font-semibold text-slate-950;
   }
 
   .brand-subtitle {
-    @apply mt-0.5 truncate text-[11px] uppercase text-slate-400;
+    @apply mt-0.5 truncate text-[11px] uppercase text-slate-500;
   }
 
   .rail-nav {
@@ -92,19 +86,19 @@
   }
 
   .rail-link {
-    @apply flex min-h-11 items-center gap-3 rounded-md px-3 text-sm font-medium text-slate-300 transition hover:bg-white/10 hover:text-white;
+    @apply flex min-h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-950;
   }
 
   .rail-link-active {
-    @apply bg-white text-slate-950 shadow-sm hover:bg-white hover:text-slate-950;
+    @apply bg-blue-50 text-blue-700 hover:bg-blue-50 hover:text-blue-700;
   }
 
   .rail-link-mark {
-    @apply grid h-6 w-6 shrink-0 place-items-center rounded bg-white/10 text-[11px] font-bold text-cyan-200;
+    @apply grid h-6 w-6 shrink-0 place-items-center rounded bg-slate-100 text-[11px] font-bold text-slate-600;
   }
 
   .rail-link-active .rail-link-mark {
-    @apply bg-slate-950 text-cyan-200;
+    @apply bg-blue-600 text-white;
   }
 
   .rail-footer {
@@ -112,11 +106,11 @@
   }
 
   .rail-status {
-    @apply inline-flex min-h-9 items-center gap-2 rounded-md border border-white/10 bg-white/[0.06] px-3 text-xs text-slate-300;
+    @apply inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs text-slate-600;
   }
 
   .rail-logout {
-    @apply inline-flex min-h-9 items-center justify-center rounded-md px-3 text-xs font-medium text-slate-400 transition hover:bg-white/10 hover:text-white;
+    @apply inline-flex min-h-9 items-center justify-center rounded-md px-3 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-950;
   }
 
   .status-dot {
@@ -124,11 +118,11 @@
   }
 
   .workbench {
-    @apply mx-auto grid h-auto min-h-[calc(100vh-1.5rem)] w-full max-w-[1680px] gap-3 lg:h-full lg:min-h-0;
+    @apply mx-auto grid h-auto min-h-[calc(100vh-1.5rem)] w-full max-w-[1720px] gap-3 lg:h-full lg:min-h-0;
   }
 
   .page-surface {
-    @apply rounded-lg border border-slate-300/80 bg-white/95 shadow-[0_18px_55px_rgba(15,23,42,0.09)];
+    @apply rounded-lg border border-slate-200 bg-white shadow-sm;
   }
 
   .page-title {
@@ -144,15 +138,15 @@
   }
 
   .btn-primary {
-    @apply inline-flex min-h-10 items-center justify-center rounded-md bg-slate-950 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex min-h-10 items-center justify-center rounded-md bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
   }
 
   .btn-accent {
-    @apply inline-flex min-h-10 items-center justify-center rounded-md bg-cyan-500 px-3.5 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex min-h-10 items-center justify-center rounded-md bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
   }
 
   .btn-secondary {
-    @apply inline-flex min-h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex min-h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
   }
 
   .btn-danger {
@@ -160,11 +154,11 @@
   }
 
   .btn-ghost {
-    @apply inline-flex min-h-10 items-center justify-center rounded-md px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex min-h-10 items-center justify-center rounded-md px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
   }
 
   .icon-button {
-    @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
   }
 
   .field-label {
@@ -172,7 +166,7 @@
   }
 
   .field-input {
-    @apply mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 disabled:bg-slate-100 disabled:text-slate-500;
+    @apply mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-slate-100 disabled:text-slate-500;
   }
 
   .status-muted,
@@ -190,7 +184,7 @@
   }
 
   .status-info {
-    @apply border-cyan-200 bg-cyan-50 text-slate-700;
+    @apply border-blue-200 bg-blue-50 text-slate-700;
   }
 
   .chat-shell {
@@ -216,7 +210,7 @@
   }
 
   .panel-header {
-    @apply border-b border-slate-200/90 px-4 py-3;
+    @apply border-b border-slate-200 px-4 py-3;
   }
 
   .session-row {
@@ -228,15 +222,15 @@
   }
 
   .session-row-active {
-    @apply border-slate-950 bg-slate-950 text-white shadow-sm;
+    @apply border-blue-200 bg-blue-50 text-blue-950;
   }
 
   .session-row-selected {
-    @apply border-cyan-300 bg-cyan-50;
+    @apply border-blue-300 bg-blue-50;
   }
 
   .message-stream {
-    @apply flex-1 space-y-4 overflow-y-auto bg-[linear-gradient(180deg,#f8fafc,#eef4f8)] px-3 py-4 sm:px-5;
+    @apply flex-1 space-y-4 overflow-y-auto bg-slate-50 px-3 py-4 sm:px-5;
   }
 
   .composer {
@@ -248,7 +242,7 @@
   }
 
   .user-bubble {
-    @apply rounded-lg bg-slate-950 px-4 py-3 text-sm leading-relaxed text-white shadow-sm;
+    @apply rounded-lg bg-blue-600 px-4 py-3 text-sm leading-relaxed text-white shadow-sm;
   }
 
   .tool-card {
@@ -260,7 +254,7 @@
   }
 
   .media-thumb {
-    @apply cursor-zoom-in rounded-md border border-slate-200 object-cover transition hover:border-cyan-400 hover:ring-2 hover:ring-cyan-300/50;
+    @apply cursor-zoom-in rounded-md border border-slate-200 object-cover transition hover:border-blue-400 hover:ring-2 hover:ring-blue-300/50;
   }
 }
 
@@ -322,13 +316,13 @@
 }
 
 .markdown-body blockquote {
-  border-left: 3px solid #08a8b5;
+  border-left: 3px solid #2563eb;
   padding-left: 0.85rem;
   color: #475467;
 }
 
 .markdown-body a {
-  color: #047c89;
+  color: #2563eb;
   text-decoration: underline;
   text-underline-offset: 2px;
 }

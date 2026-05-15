@@ -434,7 +434,7 @@ export default function ChatPage() {
               type="button"
               onClick={startNewSession}
               disabled={busy}
-              className="btn-accent min-h-9 px-3 py-1.5"
+              className="btn-primary min-h-9 px-3 py-1.5"
             >
               新建
             </button>
@@ -463,7 +463,7 @@ export default function ChatPage() {
                   checked={allSessionsSelected}
                   onChange={e => e.currentTarget.checked ? selectAllSessions() : clearSelectedSessions()}
                   disabled={busy || bulkDeleting || sessionCount === 0}
-                  className="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500 disabled:opacity-50"
+                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
                   aria-label="选择全部会话"
                 />
                 <span className="truncate">已选 {selectedCount} / {sessionCount}</span>
@@ -513,7 +513,7 @@ export default function ChatPage() {
             className={[
               'w-full rounded-md border px-3 py-3 text-left transition',
               sessionId === null
-                ? 'border-cyan-300 bg-cyan-50 text-slate-950'
+                ? 'border-blue-200 bg-blue-50 text-blue-950'
                 : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white',
               busy ? 'opacity-60' : ''
             ].join(' ')}
@@ -554,7 +554,7 @@ export default function ChatPage() {
                       checked={selected}
                       disabled={busy || bulkDeleting}
                       onChange={() => toggleSessionSelected(s.id)}
-                      className="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                       aria-label={`选择 ${sessionTitle(s)}`}
                     />
                   </label>
@@ -628,7 +628,7 @@ export default function ChatPage() {
         <div ref={scrollRef} className="message-stream">
           {events.length === 0 && (
             <div className="mx-auto flex min-h-[48vh] max-w-2xl flex-col items-center justify-center text-center">
-              <div className="grid h-14 w-14 place-items-center rounded-lg bg-slate-950 text-sm font-black text-cyan-200">
+              <div className="grid h-14 w-14 place-items-center rounded-lg bg-blue-600 text-sm font-black text-white">
                 AP
               </div>
               <h2 className="mt-4 text-2xl font-semibold text-slate-950">新会话已准备</h2>
@@ -731,7 +731,7 @@ export default function ChatPage() {
             <button
               type="submit"
               disabled={(!input.trim() && pendingImages.length === 0) || busy || messagesLoading}
-              className="btn-accent h-[42px] px-4"
+              className="btn-primary h-[42px] px-4"
             >
               发送
             </button>
@@ -745,8 +745,8 @@ export default function ChatPage() {
           <div className="mt-1 text-xl font-semibold text-slate-950">运行状态</div>
         </div>
         <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50/80 p-3">
-          <div className="rounded-lg bg-slate-950 p-4 text-white">
-            <div className="flex items-center gap-2 text-xs text-slate-300">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex items-center gap-2 text-xs text-slate-500">
               <span className={['h-2 w-2 rounded-full', busy ? 'animate-pulse bg-amber-300' : 'bg-emerald-300'].join(' ')} />
               <span>{busy ? '处理中' : '空闲'}</span>
             </div>
@@ -804,7 +804,7 @@ export default function ChatPage() {
             <button
               type="button"
               onClick={() => void downloadImage(lightboxSrc)}
-              className="btn-accent"
+              className="btn-primary"
             >
               保存图片
             </button>
@@ -1411,8 +1411,8 @@ function hasToolError(result: unknown) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-[11px] uppercase text-slate-400">{label}</div>
-      <div className="mt-1 text-xl font-semibold text-white">{value}</div>
+      <div className="text-[11px] uppercase text-slate-500">{label}</div>
+      <div className="mt-1 text-xl font-semibold text-slate-950">{value}</div>
     </div>
   );
 }
@@ -1632,7 +1632,7 @@ function VisibleToolResult({ ev, onOpenImage }: { ev: ChatEvent; onOpenImage: Op
     <div className="flex justify-start">
       <div className="tool-card w-full max-w-3xl">
         <div className="mb-2 flex items-center gap-2 text-xs text-slate-500">
-          <span className="h-2 w-2 rounded-full bg-cyan-500" />
+          <span className="h-2 w-2 rounded-full bg-blue-500" />
           <span className="font-medium text-slate-600">{toolResultTitle(tool)}</span>
           <code className="tool-chip">{tool}</code>
         </div>
@@ -1737,9 +1737,9 @@ function ThinkingRow({ startedAt, now }: { startedAt: number; now: number }) {
     <div className="flex justify-start">
       <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 shadow-sm">
         <span className="flex items-center gap-1" aria-label="回复中">
-          <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-bounce [animation-delay:-0.2s]" />
-          <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-bounce [animation-delay:-0.1s]" />
-          <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-bounce" />
+          <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-bounce [animation-delay:-0.2s]" />
+          <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-bounce [animation-delay:-0.1s]" />
+          <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-bounce" />
         </span>
         <span>回复中 · {elapsedSince(startedAt, now)}</span>
       </div>

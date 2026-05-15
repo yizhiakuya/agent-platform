@@ -30,19 +30,18 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="grid min-h-screen bg-slate-950 text-white lg:grid-cols-[minmax(0,1fr)_28rem]">
-      <section className="relative flex min-h-[42vh] items-end overflow-hidden p-6 sm:p-10 lg:min-h-screen">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_20%,rgba(8,168,181,0.32),transparent_34%),radial-gradient(circle_at_80%_70%,rgba(227,154,40,0.20),transparent_30%)]" />
-        <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-slate-950 to-transparent" />
+    <div className="grid min-h-screen bg-slate-50 text-slate-950 lg:grid-cols-[minmax(0,1fr)_28rem]">
+      <section className="relative flex min-h-[42vh] items-end overflow-hidden border-b border-slate-200 bg-white p-6 sm:p-10 lg:min-h-screen lg:border-b-0 lg:border-r">
+        <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(37,99,235,0.08),transparent_36%),linear-gradient(315deg,rgba(15,23,42,0.04),transparent_30%)]" />
         <div className="relative max-w-3xl">
-          <div className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-white/10 px-3 py-2 text-xs text-cyan-100">
-            <span className="h-2 w-2 rounded-full bg-emerald-300" />
+          <div className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 shadow-sm">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
             Private mobile agent console
           </div>
           <h1 className="mt-6 max-w-2xl text-4xl font-semibold leading-tight sm:text-6xl">
             Agent Platform
           </h1>
-          <p className="mt-5 max-w-xl text-base leading-7 text-slate-300">
+          <p className="mt-5 max-w-xl text-base leading-7 text-slate-600">
             连接手机、管理会话、让 agent 通过设备工具完成真实操作。
           </p>
           <div className="mt-8 grid max-w-xl gap-3 sm:grid-cols-3">
@@ -53,7 +52,7 @@ export default function LoginPage() {
         </div>
       </section>
 
-      <section className="flex items-center justify-center bg-white px-4 py-8 text-slate-950 lg:min-h-screen">
+      <section className="flex items-center justify-center bg-slate-50 px-4 py-8 text-slate-950 lg:min-h-screen">
         <form onSubmit={submit} className="w-full max-w-sm">
           <div className="mb-8">
             <div className="text-xs font-semibold uppercase text-slate-500">Access</div>
@@ -85,7 +84,7 @@ export default function LoginPage() {
               />
             </label>
             {error && <div className="status-error">{error}</div>}
-            <button type="submit" disabled={busy} className="btn-accent w-full">
+            <button type="submit" disabled={busy} className="btn-primary w-full">
               {busy ? '处理中...' : (mode === 'login' ? '登录' : '注册并登录')}
             </button>
             <button
@@ -104,9 +103,9 @@ export default function LoginPage() {
 
 function LoginMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-white/10 p-3">
-      <div className="text-[11px] uppercase text-slate-400">{label}</div>
-      <div className="mt-2 text-sm font-semibold text-white">{value}</div>
+    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="text-[11px] uppercase text-slate-500">{label}</div>
+      <div className="mt-2 text-sm font-semibold text-slate-950">{value}</div>
     </div>
   );
 }
