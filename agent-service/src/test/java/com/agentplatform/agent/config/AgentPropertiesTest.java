@@ -22,6 +22,7 @@ class AgentPropertiesTest {
                 null,
                 null,
                 null,
+                null,
                 0,
                 0,
                 0,
@@ -30,5 +31,6 @@ class AgentPropertiesTest {
 
         assertThat(memory.embeddingModel()).isEqualTo("jina-embeddings-v3");
         assertThat(memory.embeddingDim()).isEqualTo(1024);
+        assertThat(memory.preferLangChain4jEmbeddings()).isTrue();
     }
 }

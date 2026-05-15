@@ -49,7 +49,7 @@ public record AgentProperties(
             }
             if (memory == null) {
                 memory = new Memory(null, 0, 0, null, null, 0, null, 0, null, 0, null, null, null,
-                        0, 0, 0, 0, null);
+                        null, 0, 0, 0, 0, null);
             }
             if (photos == null) {
                 photos = new Photos(null, null, null, 0, null, null, null, true, true, 50, 0.20d, 8, 180);
@@ -93,6 +93,7 @@ public record AgentProperties(
             String embeddingBaseUrl,
             String embeddingApiKey,
             String embeddingTask,
+            Boolean preferLangChain4jEmbeddings,
             int recentHistoryMessages,
             int summaryTriggerMessages,
             int maxInputTokens,
@@ -144,6 +145,12 @@ public record AgentProperties(
             }
             if (webSearchMaxUses <= 0) {
                 webSearchMaxUses = 5;
+            }
+            if (embeddingTask != null && embeddingTask.isBlank()) {
+                embeddingTask = null;
+            }
+            if (preferLangChain4jEmbeddings == null) {
+                preferLangChain4jEmbeddings = Boolean.TRUE;
             }
             if (recentHistoryMessages <= 0) {
                 recentHistoryMessages = 12;

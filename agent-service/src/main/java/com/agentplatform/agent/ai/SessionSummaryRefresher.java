@@ -29,31 +29,28 @@ public class SessionSummaryRefresher {
 
     private static final Logger log = LoggerFactory.getLogger(SessionSummaryRefresher.class);
 
-    private final List<ConfiguredProvider> chatClients;
     private final InternalChatFeignClient chatFeign;
     private final HistoryReplayer historyReplayer;
     private final ExecutorService chatExecutor;
     private final AgentProperties props;
-    private final BackgroundLlmClient backgroundLlmClient;
+    private final SessionSummarizer sessionSummarizer;
 
-    public SessionSummaryRefresher(List<ConfiguredProvider> chatClients,
-                                   InternalChatFeignClient chatFeign,
+    public SessionSummaryRefresher(InternalChatFeignClient chatFeign,
                                    HistoryReplayer historyReplayer,
                                    ExecutorService chatExecutor,
                                    AgentProperties props,
-                                   BackgroundLlmClient backgroundLlmClient) {
-        this.chatClients = chatClients == null ? List.of() : chatClients;
+                                   SessionSummarizer sessionSummarizer) {
         this.chatFeign = chatFeign;
         this.historyReplayer = historyReplayer;
         this.chatExecutor = chatExecutor;
         this.props = props;
-        this.backgroundLlmClient = backgroundLlmClient;
+        this.sessionSummarizer = sessionSummarizer;
     }
 
     public void refreshAsync(UUID userId, UUID sessionId) {
         AgentProperties.Memory mem = props.agent().memory();
         if (!Boolean.TRUE.equals(mem.enableSessionSummary())) return;
-        if (chatClients.isEmpty() || userId == null || sessionId == null) return;
+        if (userId == null || sessionId == null) return;
         chatExecutor.execute(() -> refresh(userId, sessionId));
     }
 
@@ -91,19 +88,15 @@ public class SessionSummaryRefresher {
             }
             if (delta.isEmpty()) return;
 
-            List<BackgroundLlmClient.CompletionPlan> plans =
-                    backgroundLlmClient.candidatePlans(chatClients, mem.factExtractorModel());
-            if (plans.isEmpty()) {
-                log.debug("[session-summary] no background LLM provider configured, skip");
-                return;
-            }
-
-            String prompt = buildPrompt(existing, delta, older.size(), recent.size(), mem.summaryMaxTokens());
-            CompletionResult completion = completeWithFallback(plans, prompt, mem.summaryMaxTokens(), userId, sessionId);
-            if (completion == null) {
-                return;
-            }
-            String summary = completion.text().trim();
+            String summary = sessionSummarizer.summarize(
+                    existingSummary(existing),
+                    delta.size(),
+                    older.size(),
+                    recent.size(),
+                    Math.max(200, mem.summaryMaxTokens()),
+                    transcript(delta));
+            if (summary == null) return;
+            summary = summary.trim();
             if (summary.isBlank()) return;
 
             int estimate = ContextBudget.estimateTextTokens(summary);
@@ -114,31 +107,12 @@ public class SessionSummaryRefresher {
                     older.size(),
                     summary,
                     estimate));
-            log.info("[session-summary] upserted user={} session={} covered={} recentTail={} tokens~{} provider={} model={}",
-                    userId, sessionId, older.size(), recent.size(), estimate,
-                    completion.plan().provider().name(), completion.plan().model());
+            log.info("[session-summary] upserted user={} session={} covered={} recentTail={} tokens~{}",
+                    userId, sessionId, older.size(), recent.size(), estimate);
         } catch (Exception e) {
             log.warn("[session-summary] refresh failed for user {} session {}: {}",
                     userId, sessionId, e.getMessage());
         }
-    }
-
-    private CompletionResult completeWithFallback(List<BackgroundLlmClient.CompletionPlan> plans,
-                                                  String prompt,
-                                                  int maxTokens,
-                                                  UUID userId,
-                                                  UUID sessionId) {
-        for (int i = 0; i < plans.size(); i++) {
-            BackgroundLlmClient.CompletionPlan plan = plans.get(i);
-            try {
-                String text = backgroundLlmClient.complete(plan, prompt, (long) maxTokens);
-                return new CompletionResult(plan, text == null ? "" : text);
-            } catch (Exception e) {
-                log.warn("[session-summary] LLM call failed for user {} session {} provider={} model={} attempt={}/{}: {}",
-                        userId, sessionId, plan.provider().name(), plan.model(), i + 1, plans.size(), e.getMessage());
-            }
-        }
-        return null;
     }
 
     private SessionContextSummaryDto loadExisting(UUID sessionId, UUID userId) {
@@ -149,11 +123,7 @@ public class SessionSummaryRefresher {
         }
     }
 
-    private static String buildPrompt(SessionContextSummaryDto existing,
-                                      List<MessageDto> delta,
-                                      int coveredAfterThisRun,
-                                      int recentTailCount,
-                                      int maxTokens) {
+    private static String transcript(List<MessageDto> delta) {
         StringBuilder transcript = new StringBuilder();
         for (int i = 0; i < delta.size(); i++) {
             MessageDto row = delta.get(i);
@@ -164,30 +134,14 @@ public class SessionSummaryRefresher {
                     .append(oneLine(row.content()))
                     .append("\n");
         }
+        return transcript.toString();
+    }
 
+    private static String existingSummary(SessionContextSummaryDto existing) {
         String existingSummary = existing == null || existing.summary() == null
                 ? ""
                 : existing.summary().trim();
-        return """
-                You maintain a compact rolling summary for a chat session.
-                Rewrite the summary so it covers the transcript below. Keep durable decisions,
-                user goals, constraints, unresolved tasks, references to important artifacts,
-                and corrections. Drop filler, duplicate phrasing, and low-value chatter.
-                Do not invent facts. Do not include XML/JSON/code fences.
-                Target at most %d tokens.
-
-                Existing summary, if any:
-                %s
-
-                New transcript segment to merge (%d messages; summary will cover %d older messages total; the newest %d messages remain verbatim outside the summary):
-                %s
-                """.formatted(
-                Math.max(200, maxTokens),
-                existingSummary.isBlank() ? "(none)" : existingSummary,
-                delta.size(),
-                coveredAfterThisRun,
-                recentTailCount,
-                transcript);
+        return existingSummary.isBlank() ? "(none)" : existingSummary;
     }
 
     private static String roleName(MessageRole role) {
@@ -198,6 +152,4 @@ public class SessionSummaryRefresher {
         if (value == null) return "";
         return value.replace('\r', ' ').replace('\n', ' ').trim();
     }
-
-    private record CompletionResult(BackgroundLlmClient.CompletionPlan plan, String text) {}
 }

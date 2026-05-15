@@ -194,7 +194,7 @@ class ChatServiceProviderFailoverTest {
                         List.of(),
                         new AgentProperties.Memory(
                                 null, 0, 0, null, null, 0, null, 0, false, 5,
-                                null, null, null, 12, 18, 48_000, 1_200, true),
+                                null, null, null, null, 12, 18, 48_000, 1_200, true),
                         null));
     }
 

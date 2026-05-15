@@ -54,7 +54,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * SSE-streaming chat orchestrator. Per-request flow:
  * <ol>
  *   <li>Create / resolve {@code sessionId}; persist the user turn.</li>
- *   <li>Drive {@link AgentLoopRunner#run} or {@link CodexResponsesLoopRunner#run}
+ *   <li>Drive the provider runner through the configured agentic loop.</li>
  *       through the configured provider's agentic loop.</li>
  *   <li>Persist the final assistant text + trigger async memory extraction.</li>
  * </ol>
@@ -63,10 +63,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <ul>
  *   <li>{@link PromptAssembler} — pure-function prompt + tool-list builders</li>
  *   <li>{@link HistoryReplayer} — chat-service history → SDK MessageParam list</li>
- *   <li>{@link AgentLoopRunner} — SDK streaming + tool_use loop + cancel binding</li>
+ *   <li>{@link AgentLoopRunner} — Anthropic SDK streaming + tool_use loop + cancel binding</li>
+ *   <li>{@link CodexResponsesLoopRunner} — custom OpenAI Responses SSE loop for mobile tools</li>
  * </ul>
  * This class is the boundary that wires SSE / persistence / memory / SDK
- * together; it doesn't itself touch the SDK message API.
+ * together; background LLM tasks use LangChain4j via {@link com.agentplatform.agent.ai.BackgroundLlmClient},
+ * while the live mobile agent loop keeps its provider-specific controls here.
  */
 @Service
 public class ChatService {

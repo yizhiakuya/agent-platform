@@ -2,6 +2,9 @@ package com.agentplatform.agent.ai;
 
 import com.agentplatform.agent.config.AgentProperties;
 import com.fasterxml.jackson.databind.JsonNode;
+import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
+import dev.langchain4j.model.output.Response;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -35,6 +38,10 @@ import java.util.concurrent.atomic.AtomicLong;
  *       apiKey. Convenient for dev when the chat relay also speaks OpenAI
  *       embeddings.</li>
  * </ol>
+ *
+ * <p>Standard OpenAI-compatible embeddings use LangChain4j's
+ * {@link OpenAiEmbeddingModel}. Jina v3's extra {@code task} parameter is a
+ * provider extension, so that path intentionally keeps the custom HTTP request.
  */
 @Service
 public class EmbeddingService {
@@ -42,11 +49,12 @@ public class EmbeddingService {
     private static final Logger log = LoggerFactory.getLogger(EmbeddingService.class);
 
     private final WebClient webClient;
-    private final AgentProperties props;
     private final String apiKey;
     private final String embeddingModel;
     private final int embeddingDim;
     private final String embeddingTask;  // null/blank = omit (OpenAI doesn't take it; Jina v3 requires it)
+    private final EmbeddingModel langChain4jEmbeddingModel;
+    private final boolean useLangChain4j;
 
     // LRU cache by raw input text. Most embeddings come from (a) the current
     // user message during memory recall and (b) extracted fact contents during
@@ -64,7 +72,6 @@ public class EmbeddingService {
     private final AtomicLong misses = new AtomicLong();
 
     public EmbeddingService(WebClient.Builder defaultWebClientBuilder, AgentProperties props) {
-        this.props = props;
         AgentProperties.Memory mem = props.agent().memory();
         String configuredBase = mem.embeddingBaseUrl();
         String configuredKey = mem.embeddingApiKey();
@@ -92,10 +99,23 @@ public class EmbeddingService {
         this.webClient = defaultWebClientBuilder
                 .baseUrl(baseUrl)
                 .build();
-        log.info("[embed] EmbeddingService configured: baseUrl={} model={} dim={} task={} source={}",
+        this.useLangChain4j = Boolean.TRUE.equals(mem.preferLangChain4jEmbeddings())
+                && (embeddingTask == null || embeddingTask.isBlank());
+        this.langChain4jEmbeddingModel = useLangChain4j
+                ? OpenAiEmbeddingModel.builder()
+                        .baseUrl(LangChain4jModelFactory.ensureOpenAiV1BaseUrl(baseUrl))
+                        .apiKey(this.apiKey)
+                        .modelName(this.embeddingModel)
+                        .dimensions(this.embeddingDim)
+                        .timeout(Duration.ofSeconds(20))
+                        .maxRetries(0)
+                        .build()
+                : null;
+        log.info("[embed] EmbeddingService configured: baseUrl={} model={} dim={} task={} source={} client={}",
                 baseUrl, embeddingModel, embeddingDim,
                 embeddingTask == null || embeddingTask.isBlank() ? "(none)" : embeddingTask,
-                source);
+                source,
+                useLangChain4j ? "langchain4j-open-ai" : "custom-openai-compatible");
     }
 
     private static AgentProperties.Provider primaryProvider(AgentProperties props) {
@@ -124,38 +144,7 @@ public class EmbeddingService {
             return cached;
         }
         try {
-            // Jina v3 requires `task` (retrieval.passage / retrieval.query /
-            // text-matching / classification / separation); OpenAI rejects it.
-            // Build the body conditionally based on whether one is configured.
-            Map<String, Object> body;
-            if (embeddingTask == null || embeddingTask.isBlank()) {
-                body = Map.of("input", text, "model", embeddingModel);
-            } else {
-                body = Map.of("input", text, "model", embeddingModel, "task", embeddingTask);
-            }
-            JsonNode resp = webClient.post()
-                    .uri("/v1/embeddings")
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(body)
-                    .retrieve()
-                    .bodyToMono(JsonNode.class)
-                    .block(Duration.ofSeconds(20));
-            if (resp == null) {
-                throw new IllegalStateException("Empty embedding response");
-            }
-            JsonNode data = resp.path("data");
-            if (!data.isArray() || data.isEmpty()) {
-                throw new IllegalStateException("Bad embedding response: " + resp);
-            }
-            JsonNode arr = data.get(0).path("embedding");
-            if (!arr.isArray()) {
-                throw new IllegalStateException("Bad embedding response (no embedding array): " + resp);
-            }
-            float[] out = new float[arr.size()];
-            for (int i = 0; i < arr.size(); i++) {
-                out[i] = (float) arr.get(i).asDouble();
-            }
+            float[] out = useLangChain4j ? embedWithLangChain4j(text) : embedWithCustomRequest(text);
             if (embeddingDim > 0 && out.length != embeddingDim) {
                 log.warn("[embed] embedding dim {} != configured {} — chat-service insert may fail", out.length, embeddingDim);
             }
@@ -165,6 +154,44 @@ public class EmbeddingService {
         } catch (RuntimeException e) {
             throw new IllegalStateException("embed(" + embeddingModel + ") failed: " + e.getMessage(), e);
         }
+    }
+
+    private float[] embedWithLangChain4j(String text) {
+        Response<dev.langchain4j.data.embedding.Embedding> response = langChain4jEmbeddingModel.embed(text);
+        if (response == null || response.content() == null) {
+            throw new IllegalStateException("empty LangChain4j embedding response");
+        }
+        return response.content().vector();
+    }
+
+    private float[] embedWithCustomRequest(String text) {
+        Map<String, Object> body = embeddingTask == null || embeddingTask.isBlank()
+                ? Map.of("input", text, "model", embeddingModel)
+                : Map.of("input", text, "model", embeddingModel, "task", embeddingTask);
+        JsonNode resp = webClient.post()
+                .uri("/v1/embeddings")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .block(Duration.ofSeconds(20));
+        if (resp == null) {
+            throw new IllegalStateException("Empty embedding response");
+        }
+        JsonNode data = resp.path("data");
+        if (!data.isArray() || data.isEmpty()) {
+            throw new IllegalStateException("Bad embedding response: " + resp);
+        }
+        JsonNode arr = data.get(0).path("embedding");
+        if (!arr.isArray()) {
+            throw new IllegalStateException("Bad embedding response (no embedding array): " + resp);
+        }
+        float[] out = new float[arr.size()];
+        for (int i = 0; i < arr.size(); i++) {
+            out[i] = (float) arr.get(i).asDouble();
+        }
+        return out;
     }
 
     public int dim() {

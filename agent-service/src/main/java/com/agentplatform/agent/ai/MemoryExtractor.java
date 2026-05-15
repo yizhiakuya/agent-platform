@@ -25,9 +25,10 @@ import java.util.concurrent.ExecutorService;
  * pool — the user never waits for it, and any failure is logged at WARN and
  * dropped (memory is a best-effort enrichment, not a contract).
  *
- * <p>Provider routing is delegated to {@link BackgroundLlmClient}: Anthropic
- * deployments can keep the cheap extractor model, and Codex-only deployments
- * use their configured Responses provider instead of disabling memory.
+ * <p>Provider routing is delegated through the LangChain4j
+ * {@link BackgroundFactExtractor} service, backed by the configured provider
+ * pool. Anthropic deployments can keep the cheap extractor model, and Codex-only
+ * deployments use their configured Responses provider instead of disabling memory.
  *
  */
 @Service
@@ -35,13 +36,12 @@ public class MemoryExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryExtractor.class);
 
-    private final List<ConfiguredProvider> chatClients;
     private final EmbeddingService embeddingService;
     private final InternalChatFeignClient chatFeign;
     private final ExecutorService chatExecutor;
     private final ObjectMapper mapper;
     private final AgentProperties props;
-    private final BackgroundLlmClient backgroundLlmClient;
+    private final BackgroundFactExtractor factExtractor;
 
     // Per-session ring of (USER, ASSISTANT) turns waiting for the LLM extractor
     // to chew on. We flush in batches to cut the per-turn sub2api request count
@@ -49,20 +49,18 @@ public class MemoryExtractor {
     // (1 stream + 1 embed) most turns and (+1 extract) only every Nth turn.
     private final Map<UUID, List<String>> pending = new ConcurrentHashMap<>();
 
-    public MemoryExtractor(List<ConfiguredProvider> chatClients,
-                           EmbeddingService embeddingService,
+    public MemoryExtractor(EmbeddingService embeddingService,
                            InternalChatFeignClient chatFeign,
                            ExecutorService chatExecutor,
                            ObjectMapper mapper,
                            AgentProperties props,
-                           BackgroundLlmClient backgroundLlmClient) {
-        this.chatClients = chatClients;
+                           BackgroundFactExtractor factExtractor) {
         this.embeddingService = embeddingService;
         this.chatFeign = chatFeign;
         this.chatExecutor = chatExecutor;
         this.mapper = mapper;
         this.props = props;
-        this.backgroundLlmClient = backgroundLlmClient;
+        this.factExtractor = factExtractor;
     }
 
     /**
@@ -75,7 +73,6 @@ public class MemoryExtractor {
      * idle-flush could close the gap later.
      */
     public void extractAsync(UUID userId, UUID sessionId, String userMsg, String assistantMsg) {
-        if (chatClients == null || chatClients.isEmpty()) return;
         if (userId == null || sessionId == null) return;
         if ((userMsg == null || userMsg.isBlank()) && (assistantMsg == null || assistantMsg.isBlank())) return;
 
@@ -103,42 +100,16 @@ public class MemoryExtractor {
             for (int i = 0; i < turns.size(); i++) {
                 body.append("Exchange ").append(i + 1).append(":\n").append(turns.get(i)).append("\n\n");
             }
-            String prompt = """
-                    Below are %d recent (USER, ASSISTANT) exchanges from the same conversation.
-                    Across all of them, extract durable user-specific facts, preferences, or
-                    rules worth remembering for future conversations. Combine related observations
-                    where it makes sense; skip transient one-off details. Output a JSON array, e.g.
-                    [
-                      {"kind":"preference","content":"用户喜欢简短中文回答"},
-                      {"kind":"fact","content":"用户的小狗叫旺财"}
-                    ]
-                    Allowed kind values: fact | preference | rule.
-                    If nothing worth remembering, output [] exactly.
-                    Output ONLY the JSON array, no prose, no code fence.
-
-                    %s
-                    """.formatted(turns.size(), body.toString());
-
-            // Run extraction on the cheap fact-extractor model (Haiku by
-            // default), not the main conversation model (Opus). The cost
-            // delta on a busy chat dwarfs the chat itself if you ever skip
-            // this — Opus is ~30x the per-token price.
-            String factModel = props.agent().memory().factExtractorModel();
-            BackgroundLlmClient.CompletionPlan plan = backgroundLlmClient.choosePlan(chatClients, factModel);
-            if (plan == null) {
-                log.warn("[memory-extract] no background LLM provider configured, skip fact extraction");
-                return;
-            }
-
             String reply;
             try {
-                reply = backgroundLlmClient.complete(plan, prompt, 1024L);
+                reply = factExtractor.extractFacts(body.toString());
             } catch (Exception e) {
-                log.warn("[memory-extract] fact extraction LLM call failed for user {} provider={} model={}: {}",
-                        userId, plan.provider().name(), plan.model(), e.getMessage());
+                log.warn("[memory-extract] fact extraction LLM call failed for user {}: {}",
+                        userId, e.getMessage());
                 return;
             }
 
+            if (reply == null) return;
             if (reply.isBlank()) return;
             String arr = sliceFirstArray(reply);
             if (arr == null) {
@@ -165,8 +136,8 @@ public class MemoryExtractor {
                 }
             }
             if (saved > 0) {
-                log.info("[memory-extract] saved {} fact(s) for user {} session {} (batch of {} turns, provider={} model={})",
-                        saved, userId, sessionId, turns.size(), plan.provider().name(), plan.model());
+                log.info("[memory-extract] saved {} fact(s) for user {} session {} (batch of {} turns)",
+                        saved, userId, sessionId, turns.size());
             }
         } catch (Exception ex) {
             log.warn("[memory-extract] batch extraction failed for user {}: {}", userId, ex.getMessage());

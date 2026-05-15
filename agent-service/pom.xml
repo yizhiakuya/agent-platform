@@ -60,6 +60,20 @@
             <version>2.27.0</version>
         </dependency>
 
+        <!-- LangChain4j — Spring Boot AI service pattern plus provider SDKs for background LLM work. -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-anthropic</artifactId>
+        </dependency>
+
         <!-- in-house common -->
         <dependency>
             <groupId>com.agentplatform</groupId>

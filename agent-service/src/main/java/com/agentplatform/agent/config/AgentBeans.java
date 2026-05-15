@@ -1,10 +1,14 @@
 package com.agentplatform.agent.config;
 
 import com.agentplatform.agent.ai.ConfiguredProvider;
+import com.agentplatform.agent.ai.LangChain4jModelFactory;
+import com.agentplatform.agent.ai.BackgroundLlmClient;
+import com.agentplatform.agent.ai.RoutingBackgroundChatModel;
 import com.agentplatform.security.InternalToken;
 import com.agentplatform.security.JwtUtil;
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import dev.langchain4j.model.chat.ChatModel;
 import feign.RequestInterceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,7 +41,8 @@ public class AgentBeans {
      * placeholder apiKey are skipped with a warning.
      */
     @Bean
-    public List<ConfiguredProvider> chatClients(AgentProperties props) {
+    public List<ConfiguredProvider> chatClients(AgentProperties props,
+                                                LangChain4jModelFactory langChain4jModelFactory) {
         List<AgentProperties.Provider> defs = props.agent().providers();
         if (defs == null || defs.isEmpty()) {
             throw new IllegalStateException("agent-platform.agent.providers must not be empty");
@@ -69,7 +74,8 @@ public class AgentBeans {
                         .maxRetries(0)
                         .build();
             }
-            out.add(new ConfiguredProvider(p.name(), kind, client, baseUrl, p.apiKey(), p.model()));
+            ChatModel backgroundChatModel = langChain4jModelFactory.backgroundChatModel(p, kind, baseUrl, p.model());
+            out.add(new ConfiguredProvider(p.name(), kind, client, backgroundChatModel, baseUrl, p.apiKey(), p.model()));
             log.info("[agent] provider '{}' ready: kind={} model={} baseUrl={}",
                     p.name(), kind, p.model(), baseUrl);
         }
@@ -78,6 +84,28 @@ public class AgentBeans {
                     "no usable LLM provider in agent-platform.agent.providers (all blank/placeholder)");
         }
         return out;
+    }
+
+    @Bean("backgroundFactExtractorChatModel")
+    public ChatModel backgroundFactExtractorChatModel(List<ConfiguredProvider> providers,
+                                                      AgentProperties props,
+                                                      BackgroundLlmClient backgroundLlmClient) {
+        return new RoutingBackgroundChatModel(
+                providers,
+                backgroundLlmClient,
+                () -> props.agent().memory().factExtractorModel(),
+                1024);
+    }
+
+    @Bean("sessionSummarizerChatModel")
+    public ChatModel sessionSummarizerChatModel(List<ConfiguredProvider> providers,
+                                                AgentProperties props,
+                                                BackgroundLlmClient backgroundLlmClient) {
+        return new RoutingBackgroundChatModel(
+                providers,
+                backgroundLlmClient,
+                () -> props.agent().memory().factExtractorModel(),
+                Math.max(200, props.agent().memory().summaryMaxTokens()));
     }
 
     private static String defaultBaseUrl(String kind) {

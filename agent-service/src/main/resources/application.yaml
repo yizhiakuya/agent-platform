@@ -89,6 +89,11 @@ agent-platform:
       # `retrieval.passage` is a safe one-size-fits-all for both store + recall;
       # asymmetric retrieval would split into query/passage but adds complexity.
       embeddingTask: ${MEMORY_EMBEDDING_TASK:retrieval.passage}
+      # Prefer LangChain4j OpenAiEmbeddingModel when the endpoint follows the
+      # standard OpenAI embeddings schema. If embeddingTask is set (Jina v3),
+      # the service keeps the custom request path because LangChain4j does not
+      # expose provider-specific `task`.
+      preferLangChain4jEmbeddings: ${MEMORY_PREFER_LANGCHAIN4J_EMBEDDINGS:true}
       # Context v2: keep a small verbatim tail and summarize older turns.
       enableSessionSummary: ${CONTEXT_ENABLE_SESSION_SUMMARY:true}
       recentHistoryMessages: ${CONTEXT_RECENT_HISTORY_MESSAGES:12}

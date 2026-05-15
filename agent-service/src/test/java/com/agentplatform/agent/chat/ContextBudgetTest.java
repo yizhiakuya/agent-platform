@@ -54,6 +54,7 @@ class ContextBudgetTest {
                 null,
                 null,
                 null,
+                null,
                 recentHistoryMessages,
                 18,
                 48_000,

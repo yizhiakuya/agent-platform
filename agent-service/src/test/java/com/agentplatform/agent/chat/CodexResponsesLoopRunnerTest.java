@@ -286,6 +286,7 @@ class CodexResponsesLoopRunnerTest {
                 null,
                 null,
                 null,
+                null,
                 12,
                 18,
                 48_000,

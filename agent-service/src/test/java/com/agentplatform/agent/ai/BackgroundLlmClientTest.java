@@ -1,17 +1,11 @@
 package com.agentplatform.agent.ai;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.reactive.function.client.WebClient;
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -19,25 +13,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class BackgroundLlmClientTest {
 
-    private final ObjectMapper mapper = new ObjectMapper();
-    private final BackgroundLlmClient client = new BackgroundLlmClient(mapper, WebClient.builder());
+    private final BackgroundLlmClient client = new BackgroundLlmClient();
 
     @Test
     void choosePlanKeepsClaudeExtractorOnAnthropicWhenAvailable() {
-        ConfiguredProvider codex = new ConfiguredProvider(
-                "codex",
-                "codex-responses",
-                null,
-                "http://127.0.0.1",
-                "token",
-                "gpt-5.5");
-        ConfiguredProvider anthropic = new ConfiguredProvider(
-                "anthropic",
-                "anthropic-messages",
-                null,
-                "http://127.0.0.1",
-                "token",
-                "claude-sonnet-4-6");
+        ConfiguredProvider codex = provider("codex", "codex-responses", "gpt-5.5");
+        ConfiguredProvider anthropic = provider("anthropic", "anthropic-messages", "claude-sonnet-4-6");
 
         BackgroundLlmClient.CompletionPlan plan = client.choosePlan(
                 List.of(codex, anthropic),
@@ -50,13 +31,7 @@ class BackgroundLlmClientTest {
 
     @Test
     void choosePlanFallsBackToCodexProviderModelForClaudeExtractorWhenCodexOnly() {
-        ConfiguredProvider codex = new ConfiguredProvider(
-                "codex",
-                "codex-responses",
-                null,
-                "http://127.0.0.1",
-                "token",
-                "gpt-5.5");
+        ConfiguredProvider codex = provider("codex", "codex-responses", "gpt-5.5");
 
         BackgroundLlmClient.CompletionPlan plan = client.choosePlan(
                 List.of(codex),
@@ -69,20 +44,8 @@ class BackgroundLlmClientTest {
 
     @Test
     void candidatePlansIncludeFallbackProvidersInOrderWithoutDuplicates() {
-        ConfiguredProvider anthropic = new ConfiguredProvider(
-                "anthropic",
-                "anthropic-messages",
-                null,
-                "http://127.0.0.1",
-                "token",
-                "claude-sonnet-4-6");
-        ConfiguredProvider codex = new ConfiguredProvider(
-                "codex",
-                "codex-responses",
-                null,
-                "http://127.0.0.1",
-                "token",
-                "gpt-5.5");
+        ConfiguredProvider anthropic = provider("anthropic", "anthropic-messages", "claude-sonnet-4-6");
+        ConfiguredProvider codex = provider("codex", "codex-responses", "gpt-5.5");
 
         List<BackgroundLlmClient.CompletionPlan> plans = client.candidatePlans(
                 List.of(anthropic, codex),
@@ -96,102 +59,90 @@ class BackgroundLlmClientTest {
     }
 
     @Test
-    void completeCallsResponsesEndpointForCodexProvider() throws Exception {
-        ObjectNode response = mapper.createObjectNode();
-        response.put("output_text", "[]");
+    void completeDelegatesToLangChain4jChatModel() {
+        RecordingChatModel model = new RecordingChatModel("[]");
+        ConfiguredProvider codex = new ConfiguredProvider(
+                "codex",
+                "codex-responses",
+                null,
+                model,
+                "http://127.0.0.1",
+                "token",
+                "gpt-5.5");
 
-        try (ResponsesStubServer server = new ResponsesStubServer(mapper, response)) {
-            ConfiguredProvider codex = new ConfiguredProvider(
-                    "codex",
-                    "codex-responses",
-                    null,
-                    server.baseUrl(),
-                    "token",
-                    "gpt-5.5");
+        String text = client.complete(new BackgroundLlmClient.CompletionPlan(codex, "gpt-5.5"),
+                "extract facts", 128L);
 
-            String text = client.complete(new BackgroundLlmClient.CompletionPlan(codex, "gpt-5.5"),
-                    "extract facts", 128L);
-
-            assertThat(text).isEqualTo("[]");
-            assertThat(server.requests()).hasSize(1);
-            JsonNode request = server.requests().getFirst();
-            assertThat(request.path("model").asText()).isEqualTo("gpt-5.5");
-            assertThat(request.path("max_output_tokens").asLong()).isEqualTo(128L);
-            JsonNode input = request.path("input");
-            assertThat(input.isArray()).isTrue();
-            assertThat(input.size()).isEqualTo(1);
-            JsonNode item = input.get(0);
-            assertThat(item.path("role").asText()).isEqualTo("user");
-            assertThat(item.path("content").asText()).isEqualTo("extract facts");
-        }
+        assertThat(text).isEqualTo("[]");
+        assertThat(model.requests()).hasSize(1);
+        ChatRequest request = model.requests().getFirst();
+        assertThat(request.modelName()).isEqualTo("gpt-5.5");
+        assertThat(request.maxOutputTokens()).isEqualTo(128);
+        assertThat(request.messages()).hasSize(1);
+        assertThat(request.messages().getFirst().toString()).contains("extract facts");
     }
 
     @Test
-    void completeExtractsTextFromResponsesOutputContent() throws Exception {
-        ObjectNode response = mapper.createObjectNode();
-        ArrayNode output = mapper.createArrayNode();
-        ObjectNode message = mapper.createObjectNode();
-        ArrayNode content = mapper.createArrayNode();
-        ObjectNode block = mapper.createObjectNode();
-        block.put("type", "output_text");
-        block.put("text", "summary");
-        content.add(block);
-        message.set("content", content);
-        output.add(message);
-        response.set("output", output);
+    void completeHandlesNullResponseAsBlank() {
+        RecordingChatModel model = RecordingChatModel.nullResponse();
+        ConfiguredProvider codex = new ConfiguredProvider(
+                "codex",
+                "codex-responses",
+                null,
+                model,
+                "http://127.0.0.1",
+                "token",
+                "gpt-5.5");
 
-        try (ResponsesStubServer server = new ResponsesStubServer(mapper, response)) {
-            ConfiguredProvider codex = new ConfiguredProvider(
-                    "codex",
-                    "codex-responses",
-                    null,
-                    server.baseUrl(),
-                    "token",
-                    "gpt-5.5");
+        String text = client.complete(new BackgroundLlmClient.CompletionPlan(codex, "gpt-5.5"),
+                "summarize", 64L);
 
-            String text = client.complete(new BackgroundLlmClient.CompletionPlan(codex, "gpt-5.5"),
-                    "summarize", 64L);
-
-            assertThat(text).isEqualTo("summary");
-        }
+        assertThat(text).isEqualTo("");
     }
 
-    private static class ResponsesStubServer implements AutoCloseable {
+    private static ConfiguredProvider provider(String name, String kind, String model) {
+        return new ConfiguredProvider(
+                name,
+                kind,
+                null,
+                new RecordingChatModel("ok"),
+                "http://127.0.0.1",
+                "token",
+                model);
+    }
 
-        private final ObjectMapper mapper;
-        private final JsonNode response;
-        private final List<JsonNode> requests = new ArrayList<>();
-        private final HttpServer server;
+    private static final class RecordingChatModel implements ChatModel {
+        private final String reply;
+        private final boolean nullResponse;
+        private final List<ChatRequest> requests = new ArrayList<>();
 
-        ResponsesStubServer(ObjectMapper mapper, JsonNode response) throws IOException {
-            this.mapper = mapper;
-            this.response = response;
-            this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-            this.server.createContext("/v1/responses", this::handle);
-            this.server.start();
+        private RecordingChatModel(String reply) {
+            this.reply = reply;
+            this.nullResponse = false;
         }
 
-        String baseUrl() {
-            return "http://127.0.0.1:" + server.getAddress().getPort();
+        private RecordingChatModel() {
+            this.reply = "";
+            this.nullResponse = true;
         }
 
-        List<JsonNode> requests() {
-            return requests;
-        }
-
-        private void handle(HttpExchange exchange) throws IOException {
-            byte[] body = exchange.getRequestBody().readAllBytes();
-            requests.add(mapper.readTree(body));
-            byte[] responseBytes = response.toString().getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, responseBytes.length);
-            exchange.getResponseBody().write(responseBytes);
-            exchange.close();
+        private static RecordingChatModel nullResponse() {
+            return new RecordingChatModel();
         }
 
         @Override
-        public void close() {
-            server.stop(0);
+        public ChatResponse doChat(ChatRequest request) {
+            requests.add(request);
+            if (nullResponse) {
+                return null;
+            }
+            return ChatResponse.builder()
+                    .aiMessage(AiMessage.from(reply))
+                    .build();
+        }
+
+        private List<ChatRequest> requests() {
+            return requests;
         }
     }
 }

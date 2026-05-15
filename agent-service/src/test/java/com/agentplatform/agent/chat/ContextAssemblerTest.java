@@ -122,6 +122,7 @@ class ContextAssemblerTest {
                                 null,
                                 null,
                                 null,
+                                null,
                                 6,
                                 18,
                                 48_000,

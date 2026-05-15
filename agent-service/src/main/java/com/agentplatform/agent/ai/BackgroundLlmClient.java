@@ -1,19 +1,12 @@
 package com.agentplatform.agent.ai;
 
-import com.anthropic.models.messages.ContentBlock;
-import com.anthropic.models.messages.Message;
-import com.anthropic.models.messages.MessageCreateParams;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -22,17 +15,16 @@ import java.util.Set;
 /**
  * Small best-effort LLM client for background jobs that need one text reply
  * without streaming, tools, or SSE state.
+ *
+ * <p>Implemented on LangChain4j's {@link ChatModel} abstraction so memory
+ * extraction and session summarization stay framework-level instead of
+ * hand-rolling provider HTTP. The main mobile agent loop remains custom where
+ * provider-specific streaming/tool control is required.
  */
 @Service
 public class BackgroundLlmClient {
 
-    private final ObjectMapper mapper;
-    private final WebClient.Builder webClientBuilder;
-
-    public BackgroundLlmClient(ObjectMapper mapper, WebClient.Builder defaultWebClientBuilder) {
-        this.mapper = mapper;
-        this.webClientBuilder = defaultWebClientBuilder;
-    }
+    public BackgroundLlmClient() {}
 
     @Nullable
     public CompletionPlan choosePlan(List<ConfiguredProvider> providers, @Nullable String requestedModel) {
@@ -67,74 +59,22 @@ public class BackgroundLlmClient {
 
     public String complete(CompletionPlan plan, String prompt, long maxTokens) {
         ConfiguredProvider provider = plan.provider();
-        if (provider.isAnthropicMessages()) {
-            MessageCreateParams params = MessageCreateParams.builder()
-                    .model(plan.model())
-                    .maxTokens(maxTokens)
-                    .addUserMessage(prompt)
-                    .build();
-            Message msg = provider.client().messages().create(params);
-            StringBuilder sb = new StringBuilder();
-            for (ContentBlock cb : msg.content()) {
-                cb.text().ifPresent(t -> sb.append(t.text()));
-            }
-            return sb.toString();
+        ChatModel model = provider.backgroundChatModel();
+        if (model == null) {
+            throw new IllegalStateException("provider '" + provider.name()
+                    + "' has no LangChain4j background ChatModel");
         }
-        if (provider.isCodexResponses()) {
-            return completeResponses(provider, plan.model(), prompt, maxTokens);
-        }
-        throw new IllegalArgumentException("unsupported background LLM provider kind: " + provider.kind());
-    }
-
-    private String completeResponses(ConfiguredProvider provider, String model, String prompt, long maxTokens) {
-        WebClient client = webClientBuilder.clone()
-                .baseUrl(stripTrailingSlash(provider.baseUrl()))
+        ChatRequest request = ChatRequest.builder()
+                .modelName(plan.model())
+                .maxOutputTokens(safeMaxTokens(maxTokens))
+                .messages(UserMessage.from(prompt == null ? "" : prompt))
                 .build();
-
-        ObjectNode request = mapper.createObjectNode();
-        request.put("model", model);
-        request.put("max_output_tokens", maxTokens);
-        ArrayNode input = mapper.createArrayNode();
-        ObjectNode msg = mapper.createObjectNode();
-        msg.put("role", "user");
-        msg.put("content", prompt == null ? "" : prompt);
-        input.add(msg);
-        request.set("input", input);
-
-        JsonNode resp = client.post()
-                .uri("/v1/responses")
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + provider.apiKey())
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(request)
-                .retrieve()
-                .bodyToMono(JsonNode.class)
-                .block(Duration.ofMinutes(5));
-        if (resp == null) {
-            throw new IllegalStateException("empty Codex Responses API response");
+        ChatResponse response = model.chat(request);
+        if (response == null || response.aiMessage() == null) {
+            return "";
         }
-        return extractOutputText(resp);
-    }
-
-    private String extractOutputText(JsonNode resp) {
-        String direct = resp.path("output_text").asText("");
-        if (!direct.isBlank()) {
-            return direct;
-        }
-        StringBuilder out = new StringBuilder();
-        JsonNode output = resp.path("output");
-        if (output.isArray()) {
-            for (JsonNode item : output) {
-                JsonNode content = item.path("content");
-                if (!content.isArray()) continue;
-                for (JsonNode block : content) {
-                    String type = block.path("type").asText("");
-                    if ("output_text".equals(type) || "text".equals(type)) {
-                        out.append(block.path("text").asText(""));
-                    }
-                }
-            }
-        }
-        return out.toString();
+        String text = response.aiMessage().text();
+        return text == null ? "" : text;
     }
 
     private boolean isCompatible(ConfiguredProvider provider, @Nullable String model) {
@@ -197,13 +137,11 @@ public class BackgroundLlmClient {
         return value.trim();
     }
 
-    private static String stripTrailingSlash(String url) {
-        if (url == null || url.isBlank()) return "https://api.openai.com";
-        String out = url.trim();
-        while (out.endsWith("/")) {
-            out = out.substring(0, out.length() - 1);
+    private static Integer safeMaxTokens(long value) {
+        if (value <= 0) {
+            return null;
         }
-        return out;
+        return value > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) value;
     }
 
     public record CompletionPlan(ConfiguredProvider provider, String model) {}
