@@ -31,6 +31,11 @@ class ToolRegistry {
             obj.put("description", t.description)
             obj.set<JsonNode>("schema", t.schema)
             obj.put("confirmRequired", t.confirmRequired)
+            obj.put("schemaVersion", t.schemaVersion)
+            obj.put("toolClass", t.toolClass)
+            obj.put("safetyLevel", t.safetyLevel)
+            obj.put("defaultDisplayPolicy", t.defaultDisplayPolicy)
+            obj.put("resultType", t.resultType)
             arr.add(obj)
         }
         params.set<JsonNode>("tools", arr)

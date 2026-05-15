@@ -3,6 +3,7 @@ package com.agentplatform.android.tools.ui
 import android.graphics.Bitmap
 import android.util.Base64
 import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.agentplatform.android.ui.capture.UiCaptureManager
 import com.fasterxml.jackson.databind.JsonNode
@@ -77,9 +78,15 @@ class UiScreenCaptureTool(private val mapper: ObjectMapper) : Tool {
         }
         val bitmap = accessibilityBitmap
             ?: withContext(Dispatchers.IO) { UiCaptureManager.captureNow() }
-            ?: return mapper.createObjectNode().apply {
-                put("error", "screen capture unavailable — enable Agent Platform accessibility service or open the app and tap '允许屏幕识别'")
-            }
+            ?: return ToolResultEnvelope.error(
+                mapper = mapper,
+                tool = this,
+                code = "screen_capture_unavailable",
+                message = "screen capture unavailable - enable Agent Platform accessibility service or open the app and tap '允许屏幕识别'",
+                retryable = true,
+                hint = "Enable accessibility screenshots or grant MediaProjection screen capture permission.",
+                request = args
+            )
 
         val b64 = withContext(Dispatchers.IO) { encodeJpegBase64(bitmap, quality) }
         val capW: Int
@@ -101,7 +108,7 @@ class UiScreenCaptureTool(private val mapper: ObjectMapper) : Tool {
         }
         bitmap.recycle()
 
-        return mapper.createObjectNode().apply {
+        val result = mapper.createObjectNode().apply {
             put("vision_b64", b64)
             put("source", if (accessibilityBitmap != null) "accessibility" else "media_projection")
             set<JsonNode>("capture", mapper.createObjectNode().apply {
@@ -111,6 +118,14 @@ class UiScreenCaptureTool(private val mapper: ObjectMapper) : Tool {
                 put("w", devW); put("h", devH)
             })
         }
+        return ToolResultEnvelope.applyStandardFields(
+            mapper = mapper,
+            tool = this,
+            result = result,
+            ok = true,
+            displayPolicy = "debug_only",
+            request = args
+        )
     }
 
     private fun encodeJpegBase64(bitmap: Bitmap, quality: Int): String {

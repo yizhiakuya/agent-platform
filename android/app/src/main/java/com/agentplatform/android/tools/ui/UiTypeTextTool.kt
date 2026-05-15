@@ -1,26 +1,32 @@
 package com.agentplatform.android.tools.ui
 
 import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ObjectNode
 
 /**
- * Type text into the currently focused editable field. The LLM should
- * normally call [UiTapTool] on the input field first to focus it.
+ * Type text into the active input target. The best path is still for the LLM
+ * to call [UiTapTool] on the input first, but the accessibility service also
+ * tries focused editable nodes, the Android 13+ input connection, and a
+ * clipboard paste fallback.
  *
  * On most apps this performs ACTION_SET_TEXT which replaces the field's
- * entire contents in a single accessibility event — much faster and more
+ * contents in a single accessibility event — much faster and more
  * reliable than synthesising key events one character at a time.
  */
 class UiTypeTextTool(private val mapper: ObjectMapper) : Tool {
     override val name = "ui.type_text"
 
     override val description = """
-        Type text into the currently focused editable field. Tap the input
-        first to focus it (LLM should call ui.tap on the input field then
-        ui.type_text). Replaces the field's entire current text — pass the
-        full intended content, not an incremental delta.
+        Type text into the active input field. Prefer tapping the intended
+        input first, then call ui.type_text. The tool can also use the active
+        Android input connection or a clipboard paste fallback when an app
+        shows the keyboard but does not expose a normal editable node. Replaces
+        the field's current text when the target supports replacement; pass
+        the full intended content, not an incremental delta.
         Requires the user to have enabled accessibility for Agent Platform.
     """.trimIndent()
 
@@ -42,15 +48,37 @@ class UiTypeTextTool(private val mapper: ObjectMapper) : Tool {
     override suspend fun execute(args: JsonNode): JsonNode {
         val text = args.path("text").asText("")
         if (!UiAccessibilityService.isAvailable()) {
-            return mapper.createObjectNode().apply {
-                put("error", "accessibility service not enabled — open Settings → Accessibility → Agent Platform")
+            return ToolResultEnvelope.error(
+                mapper = mapper,
+                tool = this,
+                code = "accessibility_disabled",
+                message = "accessibility service not enabled - open Settings -> Accessibility -> Agent Platform",
+                hint = "Enable Agent Platform in Android Accessibility settings.",
+                request = args
+            )
+        }
+        val result = UiAccessibilityService.typeText(text)
+        val out = mapper.createObjectNode().apply {
+            put("typed", result.typed)
+            put("length", text.length)
+            if (result.method != null) put("method", result.method)
+            put("focused_input", result.focusedInput)
+            put("editable_candidates", result.editableCandidates)
+            if (!result.typed) {
+                put("reason", result.reason ?: "unable to type into the current screen")
+                put("hint", "tap the intended input field and retry ui.type_text; if the app still hides the field, ask the user to paste manually")
             }
         }
-        val ok = UiAccessibilityService.typeText(text)
-        return mapper.createObjectNode().apply {
-            put("typed", ok)
-            put("length", text.length)
-            if (!ok) put("hint", "no editable field has focus — call ui.tap on the input first")
+        ToolResultEnvelope.applyStandardFields(mapper, this, out, ok = result.typed, request = args)
+        if (!result.typed) {
+            out.put("error", result.reason ?: "unable to type into the current screen")
+            out.set<ObjectNode>("error_detail", mapper.createObjectNode().apply {
+                put("code", "input_unavailable")
+                put("message", result.reason ?: "unable to type into the current screen")
+                put("retryable", true)
+                put("hint", "Tap the intended input field and retry ui.type_text.")
+            })
         }
+        return out
     }
 }

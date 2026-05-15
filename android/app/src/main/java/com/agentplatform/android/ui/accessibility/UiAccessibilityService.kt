@@ -2,14 +2,17 @@ package com.agentplatform.android.ui.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.graphics.Path
 import android.graphics.Rect
-import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -19,6 +22,14 @@ import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
+
+data class UiTypeTextResult(
+    val typed: Boolean,
+    val method: String? = null,
+    val reason: String? = null,
+    val editableCandidates: Int = 0,
+    val focusedInput: Boolean = false
+)
 
 /**
  * The single point through which the agent drives other apps' UI:
@@ -40,9 +51,17 @@ class UiAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "UiAccessibilityService"
+        private const val MIN_LONG_PRESS_MS = 300L
+        private const val MAX_LONG_PRESS_MS = 3_000L
 
         @Volatile
         private var instance: UiAccessibilityService? = null
+
+        @Volatile
+        private var currentPackageName: String = ""
+
+        @Volatile
+        private var currentPackageUpdatedAtMs: Long = 0L
 
         /** True when the user has enabled the service and the system has
          *  bound to it (onServiceConnected fired). */
@@ -50,6 +69,9 @@ class UiAccessibilityService : AccessibilityService() {
 
         fun canTakeScreenshots(): Boolean =
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && instance != null
+
+        fun currentPackage(minUpdatedAtMs: Long = 0L): String =
+            if (currentPackageUpdatedAtMs >= minUpdatedAtMs) currentPackageName else ""
 
         /** Internal — tools should not directly hold this; they go through
          *  the public methods so we can swap implementation later (e.g.
@@ -68,6 +90,16 @@ class UiAccessibilityService : AccessibilityService() {
             return s.dispatchGestureAwait(gesture)
         }
 
+        /** Single-finger long press at (x, y), useful for app image menus. */
+        suspend fun longPress(x: Float, y: Float, durationMs: Long): Boolean {
+            val s = require()
+            val pressMs = durationMs.coerceIn(MIN_LONG_PRESS_MS, MAX_LONG_PRESS_MS)
+            val path = Path().apply { moveTo(x, y) }
+            val stroke = GestureDescription.StrokeDescription(path, 0L, pressMs)
+            val gesture = GestureDescription.Builder().addStroke(stroke).build()
+            return s.dispatchGestureAwait(gesture)
+        }
+
         /** Single-finger swipe from (x1, y1) to (x2, y2) over [durationMs]. */
         suspend fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long): Boolean {
             val s = require()
@@ -81,22 +113,61 @@ class UiAccessibilityService : AccessibilityService() {
         }
 
         /**
-         * Type [text] into the currently focused editable node. Returns false
-         * if no editable node has focus (LLM should usually call [tap] on the
-         * input field first to focus it).
+         * Type [text] into the active input target. Prefer Accessibility's
+         * SET_TEXT API, then the Android 13+ accessibility input connection,
+         * then a conservative clipboard paste fallback.
          */
-        fun typeText(text: String): Boolean {
+        fun typeText(text: String): UiTypeTextResult {
             val s = require()
             val focused = s.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                 ?: s.rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                ?: return false
-            return try {
-                val args = Bundle().apply {
-                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            if (focused != null) {
+                try {
+                    trySetText(focused, text)?.let {
+                        return it.copy(focusedInput = true)
+                    }
+                    tryPasteText(s, focused, text)?.let {
+                        return it.copy(focusedInput = true)
+                    }
+                } finally {
+                    focused.recycle()
                 }
-                focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            }
+
+            tryInputConnectionText(s, text)?.let { return it }
+
+            val candidates = findEditableNodes(s.rootInActiveWindow)
+            try {
+                if (candidates.size == 1) {
+                    val target = candidates[0]
+                    target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                    target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    trySetText(target, text)?.let {
+                        return it.copy(editableCandidates = 1)
+                    }
+                    tryPasteText(s, target, text)?.let {
+                        return it.copy(editableCandidates = 1)
+                    }
+                    tryInputConnectionText(s, text)?.let {
+                        return it.copy(editableCandidates = 1)
+                    }
+                    return UiTypeTextResult(
+                        typed = false,
+                        reason = "single editable node found, but it rejected SET_TEXT and paste actions",
+                        editableCandidates = 1
+                    )
+                }
+
+                return UiTypeTextResult(
+                    typed = false,
+                    reason = when (candidates.size) {
+                        0 -> "no editable field or active input connection is available"
+                        else -> "multiple editable fields are visible; tap the intended input first"
+                    },
+                    editableCandidates = candidates.size
+                )
             } finally {
-                focused.recycle()
+                candidates.forEach { it.recycle() }
             }
         }
 
@@ -151,7 +222,10 @@ class UiAccessibilityService : AccessibilityService() {
                 return out
             }
             try {
-                out.put("package", root.packageName?.toString() ?: "")
+                val packageName = root.packageName?.toString() ?: ""
+                currentPackageName = packageName
+                currentPackageUpdatedAtMs = System.currentTimeMillis()
+                out.put("package", packageName)
                 val nodesArr = mapper.createArrayNode()
                 walk(root, "", maxDepth, mapper, nodesArr)
                 out.set<JsonNode>("nodes", nodesArr)
@@ -228,6 +302,91 @@ class UiAccessibilityService : AccessibilityService() {
                 }
             }
         }
+
+        private fun trySetText(node: AccessibilityNodeInfo, text: String): UiTypeTextResult? {
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
+            return if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                UiTypeTextResult(typed = true, method = "accessibility_set_text")
+            } else {
+                null
+            }
+        }
+
+        private fun tryPasteText(
+            service: UiAccessibilityService,
+            node: AccessibilityNodeInfo,
+            text: String
+        ): UiTypeTextResult? {
+            return runCatching {
+                val clipboard = service.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Agent Platform", text))
+                val currentLength = node.text?.length ?: 0
+                if (currentLength > 0) {
+                    val selectionArgs = Bundle().apply {
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, currentLength)
+                    }
+                    node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectionArgs)
+                }
+                if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
+                    UiTypeTextResult(typed = true, method = "clipboard_paste")
+                } else {
+                    null
+                }
+            }.getOrNull()
+        }
+
+        private fun tryInputConnectionText(
+            service: UiAccessibilityService,
+            text: String
+        ): UiTypeTextResult? {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
+            return runCatching {
+                val inputMethod = service.inputMethod ?: return null
+                if (!inputMethod.currentInputStarted) return null
+                val connection = inputMethod.currentInputConnection ?: return null
+                val surrounding = connection.getSurroundingText(100_000, 100_000, 0)
+                if (surrounding != null) {
+                    val existingText = surrounding.text ?: ""
+                    val start = surrounding.offset
+                    val end = start + existingText.length
+                    connection.setSelection(start, end)
+                }
+                connection.commitText(text, 1, null)
+                UiTypeTextResult(typed = true, method = "accessibility_input_connection")
+            }.getOrNull()
+        }
+
+        private fun findEditableNodes(root: AccessibilityNodeInfo?): List<AccessibilityNodeInfo> {
+            if (root == null) return emptyList()
+            val out = mutableListOf<AccessibilityNodeInfo>()
+            try {
+                collectEditableNodes(root, out)
+            } finally {
+                root.recycle()
+            }
+            return out
+        }
+
+        private fun collectEditableNodes(
+            node: AccessibilityNodeInfo,
+            out: MutableList<AccessibilityNodeInfo>
+        ) {
+            if (node.isVisibleToUser && node.isEnabled && node.isEditable) {
+                out.add(AccessibilityNodeInfo.obtain(node))
+            }
+            val n = node.childCount
+            for (i in 0 until n) {
+                val child = node.getChild(i) ?: continue
+                try {
+                    collectEditableNodes(child, out)
+                } finally {
+                    child.recycle()
+                }
+            }
+        }
     }
 
     private suspend fun dispatchGestureAwait(gesture: GestureDescription): Boolean =
@@ -248,14 +407,18 @@ class UiAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         instance = null
+        currentPackageName = ""
+        currentPackageUpdatedAtMs = 0L
         Log.i(TAG, "AccessibilityService unbound — agent UI control offline")
         return super.onUnbind(intent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // We don't subscribe to event observers right now — tools query state
-        // on demand. Future: expose a tool that watches for specific events
-        // (e.g. "wait until app X opens") via a subscription registry here.
+        val packageName = event?.packageName?.toString()
+        if (!packageName.isNullOrBlank()) {
+            currentPackageName = packageName
+            currentPackageUpdatedAtMs = System.currentTimeMillis()
+        }
     }
 
     override fun onInterrupt() {

@@ -1,6 +1,7 @@
 package com.agentplatform.android.tools.ui
 
 import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -52,14 +53,24 @@ class UiSwipeTool(private val mapper: ObjectMapper) : Tool {
         val y2 = args.path("y2").floatValue()
         val duration = args.path("duration_ms").asLong(300L).coerceIn(50L, 5000L)
         if (!UiAccessibilityService.isAvailable()) {
-            return mapper.createObjectNode().apply {
-                put("error", "accessibility service not enabled — open Settings → Accessibility → Agent Platform")
-            }
+            return ToolResultEnvelope.error(
+                mapper = mapper,
+                tool = this,
+                code = "accessibility_disabled",
+                message = "accessibility service not enabled - open Settings -> Accessibility -> Agent Platform",
+                hint = "Enable Agent Platform in Android Accessibility settings.",
+                request = args
+            )
         }
         val ok = UiAccessibilityService.swipe(x1, y1, x2, y2, duration)
-        return mapper.createObjectNode().apply {
+        val result = mapper.createObjectNode().apply {
             put("dispatched", ok)
             put("duration_ms", duration)
+            put("x1", x1.toDouble())
+            put("y1", y1.toDouble())
+            put("x2", x2.toDouble())
+            put("y2", y2.toDouble())
         }
+        return ToolResultEnvelope.applyStandardFields(mapper, this, result, ok = ok, request = args)
     }
 }

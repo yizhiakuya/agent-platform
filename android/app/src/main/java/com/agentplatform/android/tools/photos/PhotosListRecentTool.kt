@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
 import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
@@ -186,7 +187,22 @@ class PhotosListRecentTool(
         val result: ObjectNode = mapper.createObjectNode()
         result.set<JsonNode>("photos", photos)
         result.put("count", photos.size())
-        result
+        result.set<ObjectNode>("summary", mapper.createObjectNode().apply {
+            put("count", photos.size())
+            put("limit", limit)
+            if (nameContains != null) put("name_contains", nameContains)
+            if (dateAfter != null) put("date_after", dateAfter)
+            if (dateBefore != null) put("date_before", dateBefore)
+        })
+        ToolResultEnvelope.applyStandardFields(
+            mapper = mapper,
+            tool = this@PhotosListRecentTool,
+            result = result,
+            ok = true,
+            resultType = "results",
+            displayPolicy = "show_grid",
+            request = args
+        )
     }
 
     companion object {

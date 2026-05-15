@@ -3,9 +3,11 @@ package com.agentplatform.android.tools.ui
 import android.content.Context
 import android.content.Intent
 import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlinx.coroutines.delay
 
 /**
@@ -17,6 +19,8 @@ class UiOpenAppTool(
     private val mapper: ObjectMapper
 ) : Tool {
     override val name = "ui.open_app"
+
+    override val safetyLevel = "local_state"
 
     override val description = """
         Open an installed Android app by package name and verify it reaches the
@@ -41,16 +45,27 @@ class UiOpenAppTool(
     override suspend fun execute(args: JsonNode): JsonNode {
         val packageName = args.path("package").asText("")
         if (packageName.isBlank()) {
-            return mapper.createObjectNode().apply { put("error", "missing package") }
+            return ToolResultEnvelope.error(
+                mapper = mapper,
+                tool = this,
+                code = "invalid_args",
+                message = "missing package",
+                request = args
+            )
         }
 
         val intent = context.packageManager.getLaunchIntentForPackage(packageName)
             ?: knownLaunchIntent(packageName)
-            ?: return mapper.createObjectNode().apply {
+            ?: return ToolResultEnvelope.applyStandardFields(mapper, this, mapper.createObjectNode().apply {
                 put("opened", false)
                 put("package", packageName)
                 put("error", "app not installed or has no launcher activity")
-            }
+                set<ObjectNode>("error_detail", mapper.createObjectNode().apply {
+                    put("code", "app_not_found")
+                    put("message", "app not installed or has no launcher activity")
+                    put("retryable", false)
+                })
+            }, ok = false, request = args)
 
         intent.addFlags(
             Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -58,38 +73,51 @@ class UiOpenAppTool(
                 Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
         )
         val launchResults = mutableListOf<LaunchResult>()
+        val launchStartedAtMs = System.currentTimeMillis()
         val launchResult = sendLaunchIntent(intent)
         launchResults += launchResult
         if (!launchResult.sent) {
-            return mapper.createObjectNode().apply {
+            return ToolResultEnvelope.applyStandardFields(mapper, this, mapper.createObjectNode().apply {
                 put("opened", false)
                 put("intentSent", false)
                 put("package", packageName)
                 put("verified", false)
                 put("error", launchResult.error ?: "failed to start activity")
-            }
+                set<ObjectNode>("error_detail", mapper.createObjectNode().apply {
+                    put("code", "launch_failed")
+                    put("message", launchResult.error ?: "failed to start activity")
+                    put("retryable", true)
+                })
+            }, ok = false, request = args)
         }
 
         if (!UiAccessibilityService.isAvailable()) {
-            return mapper.createObjectNode().apply {
+            return ToolResultEnvelope.applyStandardFields(mapper, this, mapper.createObjectNode().apply {
                 put("opened", false)
                 put("intentSent", true)
                 put("package", packageName)
                 put("verified", false)
                 put("error", "accessibility service not enabled; foreground package could not be verified")
-            }
+                set<ObjectNode>("error_detail", mapper.createObjectNode().apply {
+                    put("code", "accessibility_disabled")
+                    put("message", "accessibility service not enabled; foreground package could not be verified")
+                    put("retryable", true)
+                    put("hint", "Enable Agent Platform in Android Accessibility settings.")
+                })
+            }, ok = false, request = args)
         }
 
         val waitMs = 2500L
-        var foregroundPackage = waitForForegroundPackage(packageName, waitMs)
+        var foregroundPackage = waitForForegroundPackage(packageName, waitMs, launchStartedAtMs)
         if (foregroundPackage != packageName && launchResult.source == "application" && UiAccessibilityService.isAvailable()) {
             val accessibilityResult = sendLaunchIntentFromAccessibility(intent)
             launchResults += accessibilityResult
             if (accessibilityResult.sent) {
-                foregroundPackage = waitForForegroundPackage(packageName, waitMs)
+                foregroundPackage = waitForForegroundPackage(packageName, waitMs, System.currentTimeMillis())
             }
         }
-        return mapper.createObjectNode().apply {
+        val opened = foregroundPackage == packageName
+        val result = mapper.createObjectNode().apply {
             put("opened", foregroundPackage == packageName)
             put("intentSent", true)
             put("launchedFrom", launchResults.lastOrNull { it.sent }?.source ?: launchResult.source)
@@ -113,8 +141,15 @@ class UiOpenAppTool(
                     "hint",
                     "MIUI/HyperOS may require enabling background popup/background launch permission for Agent Platform"
                 )
+                set<ObjectNode>("error_detail", mapper.createObjectNode().apply {
+                    put("code", "foreground_verification_failed")
+                    put("message", "launch intent sent but target app did not reach foreground")
+                    put("retryable", true)
+                    put("hint", "MIUI/HyperOS may require enabling background popup/background launch permission for Agent Platform")
+                })
             }
         }
+        return ToolResultEnvelope.applyStandardFields(mapper, this, result, ok = opened, request = args)
     }
 
     private fun sendLaunchIntent(intent: Intent): LaunchResult {
@@ -138,21 +173,24 @@ class UiOpenAppTool(
         }
     }
 
-    private suspend fun waitForForegroundPackage(packageName: String, waitMs: Long): String {
+    private suspend fun waitForForegroundPackage(packageName: String, waitMs: Long, minUpdatedAtMs: Long): String {
         val deadline = System.currentTimeMillis() + waitMs
         var lastPackage = ""
         while (System.currentTimeMillis() < deadline) {
-            lastPackage = foregroundPackage()
+            lastPackage = foregroundPackage(packageName, minUpdatedAtMs)
             if (lastPackage == packageName) return lastPackage
             delay(250L)
         }
-        return foregroundPackage().ifBlank { lastPackage }
+        return foregroundPackage(packageName, minUpdatedAtMs).ifBlank { lastPackage }
     }
 
-    private fun foregroundPackage(): String =
-        runCatching {
+    private fun foregroundPackage(expectedPackage: String, minUpdatedAtMs: Long): String {
+        val cached = UiAccessibilityService.currentPackage(minUpdatedAtMs)
+        if (cached == expectedPackage) return cached
+        return runCatching {
             UiAccessibilityService.dumpTree(mapper, 1).path("package").asText("")
-        }.getOrDefault("")
+        }.getOrDefault("").ifBlank { cached }
+    }
 
     private fun knownLaunchIntent(packageName: String): Intent? =
         when (packageName) {

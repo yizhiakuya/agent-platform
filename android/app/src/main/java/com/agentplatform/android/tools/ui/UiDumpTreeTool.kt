@@ -1,9 +1,11 @@
 package com.agentplatform.android.tools.ui
 
 import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ObjectNode
 
 /**
  * Dump the AccessibilityNodeInfo tree of the foreground window. Returns a
@@ -51,10 +53,25 @@ class UiDumpTreeTool(private val mapper: ObjectMapper) : Tool {
     override suspend fun execute(args: JsonNode): JsonNode {
         val maxDepth = args.path("max_depth").asInt(12).coerceIn(1, 30)
         if (!UiAccessibilityService.isAvailable()) {
-            return mapper.createObjectNode().apply {
-                put("error", "accessibility service not enabled — open Settings → Accessibility → Agent Platform")
-            }
+            return ToolResultEnvelope.error(
+                mapper = mapper,
+                tool = this,
+                code = "accessibility_disabled",
+                message = "accessibility service not enabled - open Settings -> Accessibility -> Agent Platform",
+                hint = "Enable Agent Platform in Android Accessibility settings.",
+                request = args
+            )
         }
-        return UiAccessibilityService.dumpTree(mapper, maxDepth)
+        val tree = UiAccessibilityService.dumpTree(mapper, maxDepth)
+        if (tree.has("error")) {
+            ToolResultEnvelope.applyStandardFields(mapper, this, tree, ok = false, request = args)
+            tree.set<ObjectNode>("error_detail", mapper.createObjectNode().apply {
+                put("code", "dump_tree_failed")
+                put("message", tree.path("error").asText())
+                put("retryable", true)
+            })
+            return tree
+        }
+        return ToolResultEnvelope.applyStandardFields(mapper, this, tree, ok = true, request = args)
     }
 }

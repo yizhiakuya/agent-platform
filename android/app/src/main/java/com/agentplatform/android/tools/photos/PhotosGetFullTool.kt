@@ -5,6 +5,7 @@ import android.content.Context
 import android.provider.MediaStore
 import android.util.Log
 import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ObjectNode
@@ -112,8 +113,26 @@ class PhotosGetFullTool(
         } catch (e: Exception) {
             Log.w(TAG, "photo fetch failed for id=$id: ${e.message}", e)
             result.put("error", e.message ?: "decode failed")
+            result.set<ObjectNode>("error_detail", mapper.createObjectNode().apply {
+                put("code", "photo_decode_failed")
+                put("message", e.message ?: "decode failed")
+                put("retryable", true)
+            })
         }
-        result
+        result.set<ObjectNode>("summary", mapper.createObjectNode().apply {
+            put("id", idStr)
+            put("max_dim", maxDim)
+            put("has_image", result.has("image_url") || result.has("image_b64") || result.has("vision_b64"))
+        })
+        ToolResultEnvelope.applyStandardFields(
+            mapper = mapper,
+            tool = this@PhotosGetFullTool,
+            result = result,
+            ok = !result.has("error"),
+            resultType = "confirmed",
+            displayPolicy = "show_primary",
+            request = args
+        )
     }
 
     companion object {
