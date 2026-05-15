@@ -23,8 +23,11 @@ export default function ChatPage() {
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [composerError, setComposerError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const selectAllRef = useRef<HTMLInputElement | null>(null);
   const sessionCount = sessions.length;
   const selectedCount = selectedSessionIds.size;
@@ -64,6 +67,7 @@ export default function ChatPage() {
     setSessionId(null);
     setEvents([]);
     setInput('');
+    clearPendingImages();
     lastSentRef.current = '';
     sentEventsIdxRef.current = -1;
   }
@@ -145,6 +149,84 @@ export default function ChatPage() {
     }
   }
 
+  function clearPendingImages() {
+    setPendingImages(prev => {
+      prev.forEach(img => URL.revokeObjectURL(img.previewUrl));
+      return [];
+    });
+    setComposerError(null);
+  }
+
+  function removePendingImage(id: string) {
+    setPendingImages(prev => {
+      const target = prev.find(img => img.id === id);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter(img => img.id !== id);
+    });
+  }
+
+  async function addImageFiles(files: Iterable<File>) {
+    const incoming = Array.from(files).filter(file => file.type.startsWith('image/'));
+    if (incoming.length === 0) return;
+    setComposerError(null);
+    const slots = Math.max(0, MAX_ATTACHMENTS - pendingImages.length);
+    if (slots === 0) {
+      setComposerError(`最多一次添加 ${MAX_ATTACHMENTS} 张图片`);
+      return;
+    }
+    const accepted: PendingImage[] = [];
+    for (const file of incoming.slice(0, slots)) {
+      if (!SUPPORTED_IMAGE_TYPES.has(file.type)) {
+        setComposerError('仅支持 JPG、PNG、WebP 图片');
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        setComposerError('单张图片不能超过 10MB');
+        continue;
+      }
+      const dimensions = await readImageDimensions(file).catch(() => ({ width: undefined, height: undefined }));
+      accepted.push({
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        width: dimensions.width,
+        height: dimensions.height
+      });
+    }
+    if (incoming.length > slots) {
+      setComposerError(`最多一次添加 ${MAX_ATTACHMENTS} 张图片`);
+    }
+    if (accepted.length > 0) {
+      setPendingImages(prev => [...prev, ...accepted]);
+    }
+  }
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.currentTarget.files;
+    if (files) void addImageFiles(files);
+    e.currentTarget.value = '';
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(e.clipboardData.files).filter(file => file.type.startsWith('image/'));
+    if (files.length === 0) return;
+    e.preventDefault();
+    void addImageFiles(files);
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLFormElement>) {
+    const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('image/'));
+    if (files.length === 0) return;
+    e.preventDefault();
+    void addImageFiles(files);
+  }
+
+  function handleDragOver(e: React.DragEvent<HTMLFormElement>) {
+    if (Array.from(e.dataTransfer.items).some(item => item.type.startsWith('image/'))) {
+      e.preventDefault();
+    }
+  }
+
   async function deleteSelectedSessions() {
     if (busy || bulkDeleting || selectedSessionIds.size === 0) return;
     const ids = Array.from(selectedSessionIds);
@@ -168,9 +250,7 @@ export default function ChatPage() {
     if (!busy) return;
     abortRef.current?.abort();
     abortRef.current = null;
-    if (lastSentRef.current && !input) setInput(lastSentRef.current);
-    const cutoff = sentEventsIdxRef.current;
-    if (cutoff >= 0) setEvents(prev => prev.slice(0, cutoff));
+    appendCancelEvent(setEvents, sentEventsIdxRef.current);
     setBusy(false);
   }
 
@@ -231,25 +311,38 @@ export default function ChatPage() {
 
   async function send() {
     const message = input.trim();
-    if (!message || busy) return;
+    const attachmentsToSend = pendingImages;
+    if ((!message && attachmentsToSend.length === 0) || busy) return;
     const sentAt = new Date().toISOString();
     setInput('');
+    setPendingImages([]);
+    setComposerError(null);
     lastSentRef.current = message;
     turnStartedAtRef.current = Date.now();
+    sentEventsIdxRef.current = -1;
     setBusy(true);
-    setEvents(prev => {
-      sentEventsIdxRef.current = prev.length;
-      return [...prev, { type: 'user_message', data: { content: message, createdAt: sentAt } }];
-    });
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
     let assistantBuf = '';
     let streamSessionId = sessionId;
+    let uploadedAttachments: UploadedChatImage[] = [];
+    let turnStarted = false;
     try {
+      uploadedAttachments = await uploadPendingImages(attachmentsToSend);
+      attachmentsToSend.forEach(img => URL.revokeObjectURL(img.previewUrl));
+      setEvents(prev => {
+        sentEventsIdxRef.current = prev.length;
+        return [...prev, {
+          type: 'user_message',
+          data: { content: message, attachments: uploadedAttachments, createdAt: sentAt }
+        }];
+      });
+      turnStarted = true;
       await streamChat({
         message,
         sessionId: sessionId ?? undefined,
+        attachments: uploadedAttachments.map(toChatAttachment),
         signal: ctrl.signal,
         onEvent(name, data) {
           if (name === 'session') {
@@ -293,11 +386,30 @@ export default function ChatPage() {
       });
       await refreshSessions();
     } catch {
+      attachmentsToSend.forEach(img => URL.revokeObjectURL(img.previewUrl));
+      if (ctrl.signal.aborted) {
+        appendCancelEvent(setEvents, sentEventsIdxRef.current);
+        if (!turnStarted) {
+          if (lastSentRef.current && !input) setInput(lastSentRef.current);
+          if (attachmentsToSend.length > 0) restorePendingImages(attachmentsToSend);
+        }
+        markLatestAssistantDuration(setEvents, Date.now() - turnStartedAtRef.current);
+      } else {
+        if (attachmentsToSend.length > 0) restorePendingImages(attachmentsToSend);
+        setComposerError('图片上传或发送失败，请重试');
+      }
       setBusy(false);
     } finally {
       abortRef.current = null;
       if (streamSessionId) setSessionId(streamSessionId);
     }
+  }
+
+  function restorePendingImages(items: PendingImage[]) {
+    setPendingImages(items.map(img => ({
+      ...img,
+      previewUrl: URL.createObjectURL(img.file)
+    })));
   }
 
   const activeSession = sessionId ? sessions.find(s => s.id === sessionId) : null;
@@ -553,41 +665,102 @@ export default function ChatPage() {
           {busy && <ThinkingRow startedAt={turnStartedAtRef.current} now={now} />}
         </div>
 
-        <form onSubmit={ev => { ev.preventDefault(); void send(); }} className="border-t p-3 flex gap-2 items-end">
-          <textarea
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            rows={1}
-            placeholder={busy ? '生成中... 按 Esc 或点"停止"中断' : '输入消息...'}
-            className="flex-1 min-h-[42px] max-h-32 resize-none border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            disabled={busy || messagesLoading}
-          />
+        <form
+          onSubmit={ev => { ev.preventDefault(); void send(); }}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          className="border-t p-3 space-y-2"
+        >
+          {(pendingImages.length > 0 || composerError) && (
+            <div className="space-y-2">
+              {pendingImages.length > 0 && (
+                <PendingImageGrid
+                  items={pendingImages}
+                  disabled={busy || messagesLoading}
+                  onRemove={removePendingImage}
+                />
+              )}
+              {composerError && <div className="text-xs text-red-600">{composerError}</div>}
+            </div>
+          )}
+          <div className="flex gap-2 items-end">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              multiple
+              className="hidden"
+              onChange={handleFileChange}
+              disabled={busy || messagesLoading}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || messagesLoading || pendingImages.length >= MAX_ATTACHMENTS}
+              className="h-[42px] w-[42px] shrink-0 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              title="添加图片"
+              aria-label="添加图片"
+            >
+              +
+            </button>
+            <textarea
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onPaste={handlePaste}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+              rows={1}
+              placeholder={busy ? '生成中... 按 Esc 或点"停止"中断' : '输入消息或粘贴图片...'}
+              className="flex-1 min-h-[42px] max-h-32 resize-none border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={busy || messagesLoading}
+            />
           <button
             type="submit"
-            disabled={!input.trim() || busy || messagesLoading}
+            disabled={(!input.trim() && pendingImages.length === 0) || busy || messagesLoading}
             className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded h-[42px]"
           >
             发送
           </button>
+          </div>
         </form>
       </section>
 
       {lightboxSrc && (
         <div
-          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 cursor-zoom-out"
+          className="fixed inset-0 bg-black/85 z-50"
           onClick={() => setLightboxSrc(null)}
         >
-          <div onClick={e => e.stopPropagation()}>
+          <div className="absolute right-3 top-3 flex items-center gap-2" onClick={e => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => void downloadImage(lightboxSrc)}
+              className="rounded bg-white/95 px-3 py-2 text-sm font-medium text-slate-800 shadow hover:bg-white"
+            >
+              保存图片
+            </button>
+            <button
+              type="button"
+              onClick={() => setLightboxSrc(null)}
+              className="h-9 w-9 rounded bg-white/95 text-xl leading-9 text-slate-700 shadow hover:bg-white"
+              aria-label="关闭预览"
+              title="关闭"
+            >
+              x
+            </button>
+          </div>
+          <div
+            className="flex h-full w-full items-center justify-center p-4 pt-16"
+            onClick={e => e.stopPropagation()}
+            onContextMenu={e => e.stopPropagation()}
+          >
             <AuthImage
               src={lightboxSrc}
-              className="max-w-[95vw] max-h-[95vh] object-contain"
-            alt="预览"
+              className="max-w-[95vw] max-h-[85vh] object-contain"
+              alt="预览"
             />
           </div>
         </div>
@@ -598,10 +771,86 @@ export default function ChatPage() {
 
 type OpenImage = (src: string) => void;
 
+const MAX_ATTACHMENTS = 4;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+interface PendingImage {
+  id: string;
+  file: File;
+  previewUrl: string;
+  width?: number;
+  height?: number;
+}
+
+interface UploadedChatImage {
+  type: 'image';
+  imageUrl: string;
+  assetId?: string;
+  contentType?: string;
+  bytes?: number;
+  name?: string;
+  width?: number;
+  height?: number;
+}
+
 type TimelineItem =
   | { kind: 'event'; event: ChatEvent; index: number }
   | { kind: 'process'; events: ChatEvent[]; startIndex: number; endIndex: number }
   | { kind: 'media_result'; event: ChatEvent; index: number };
+
+type StandardToolMedia =
+  | { mode: 'primary'; primary: any }
+  | { mode: 'grid'; items: any[] }
+  | { mode: 'collapsed'; items: any[]; summary: string }
+  | { mode: 'details'; result: any; summary: string };
+
+async function uploadPendingImages(items: PendingImage[]): Promise<UploadedChatImage[]> {
+  const out: UploadedChatImage[] = [];
+  for (const item of items) {
+    const uploaded = await api.uploadPhoto(item.file);
+    out.push({
+      type: 'image',
+      imageUrl: uploaded.imageUrl,
+      assetId: uploaded.assetId,
+      contentType: uploaded.contentType || item.file.type,
+      bytes: uploaded.bytes || item.file.size,
+      name: item.file.name || uploaded.assetId,
+      width: item.width,
+      height: item.height
+    });
+  }
+  return out;
+}
+
+function toChatAttachment(item: UploadedChatImage) {
+  return {
+    imageUrl: item.imageUrl,
+    assetId: item.assetId,
+    contentType: item.contentType,
+    bytes: item.bytes,
+    name: item.name,
+    width: item.width,
+    height: item.height
+  };
+}
+
+function readImageDimensions(file: File): Promise<{ width?: number; height?: number }> {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const result = { width: img.naturalWidth || undefined, height: img.naturalHeight || undefined };
+      URL.revokeObjectURL(url);
+      resolve(result);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve({});
+    };
+    img.src = url;
+  });
+}
 
 function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
   const items: TimelineItem[] = [];
@@ -702,6 +951,7 @@ function messageToEvent(m: MessageDto): ChatEvent | null {
   const metadata = asRecord(m.metadata);
   const base = {
     content: m.content,
+    attachments: normalizeMessageAttachments(metadata?.attachments),
     createdAt: m.createdAt,
     durationMs: numberOrNull(metadata?.durationMs)
   };
@@ -741,8 +991,70 @@ function asRecord(value: unknown): Record<string, any> | null {
     : null;
 }
 
+function normalizeMessageAttachments(value: unknown): UploadedChatImage[] {
+  if (!Array.isArray(value)) return [];
+  const out: UploadedChatImage[] = [];
+  value.forEach(item => {
+    const r = asRecord(item);
+    if (!r) return;
+    const imageUrlValue = typeof r.imageUrl === 'string'
+      ? r.imageUrl
+      : typeof r.image_url === 'string'
+        ? r.image_url
+        : null;
+    if (!imageUrlValue) return;
+    out.push({
+      type: 'image' as const,
+      imageUrl: imageUrlValue,
+      assetId: typeof r.assetId === 'string' ? r.assetId : typeof r.asset_id === 'string' ? r.asset_id : undefined,
+      contentType: typeof r.contentType === 'string' ? r.contentType : typeof r.content_type === 'string' ? r.content_type : undefined,
+      bytes: typeof r.bytes === 'number' ? r.bytes : undefined,
+      name: typeof r.name === 'string' ? r.name : undefined,
+      width: typeof r.width === 'number' ? r.width : undefined,
+      height: typeof r.height === 'number' ? r.height : undefined
+    });
+  });
+  return out;
+}
+
 function numberOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+async function downloadImage(src: string) {
+  const filename = imageDownloadName(src);
+  try {
+    const token = getToken();
+    const resp = await fetch(src, {
+      headers: needsAuthenticatedFetch(src) && token ? { Authorization: `Bearer ${token}` } : {}
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, filename);
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  } catch {
+    triggerDownload(src, filename);
+  }
+}
+
+function triggerDownload(href: string, filename: string) {
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = filename;
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function imageDownloadName(src: string) {
+  if (src.startsWith('data:image/png')) return `agent-image-${Date.now()}.png`;
+  if (src.startsWith('data:image/webp')) return `agent-image-${Date.now()}.webp`;
+  const clean = src.split('?')[0].split('#')[0];
+  const last = clean.split('/').filter(Boolean).pop();
+  if (last && /\.[a-z0-9]{2,5}$/i.test(last)) return last;
+  return `agent-image-${Date.now()}.jpg`;
 }
 
 function markLatestAssistantDuration(
@@ -766,6 +1078,28 @@ function markLatestAssistantDuration(
   });
 }
 
+function appendCancelEvent(
+  setEvents: React.Dispatch<React.SetStateAction<ChatEvent[]>>,
+  sentEventsIndex: number
+) {
+  setEvents(prev => {
+    if (sentEventsIndex < 0 || prev.length <= sentEventsIndex) return prev;
+    const last = prev[prev.length - 1];
+    if (last?.type === 'error' && last.data?.code === 'client_cancelled') return prev;
+    return [
+      ...prev,
+      {
+        type: 'error',
+        data: {
+          code: 'client_cancelled',
+          message: '已取消本次执行',
+          createdAt: new Date().toISOString()
+        }
+      }
+    ];
+  });
+}
+
 function hasRicherToolHistory(cached: ChatEvent[], loaded: ChatEvent[]) {
   const cachedToolResults = cached.filter(ev => ev.type === 'tool_call_result').length;
   const loadedToolResults = loaded.filter(ev => ev.type === 'tool_call_result').length;
@@ -780,6 +1114,8 @@ function shouldShowToolResultOutsideProcess(ev: ChatEvent) {
   if (ev.type !== 'tool_call_result') return false;
   const tool = ev.data?.tool;
   const result = ev.data?.result;
+  if (isStandardDisplayableToolResult(result)) return true;
+  if (isStandardHiddenToolResult(result)) return false;
   return (
     (isPhotoListTool(tool) && hasAnyPhotoImage(result?.photos)) ||
     (tool === 'photos.semantic_search' && (Boolean(semanticPrimaryPhoto(result)) || hasAnyPhotoImage(result?.photos))) ||
@@ -791,6 +1127,8 @@ function shouldShowToolResultOutsideProcess(ev: ChatEvent) {
 function isRenderableToolResult(ev: ChatEvent) {
   const tool = ev.data?.tool;
   const result = ev.data?.result;
+  if (isStandardDisplayableToolResult(result)) return true;
+  if (isStandardHiddenToolResult(result)) return false;
   return (
     (isPhotoListTool(tool) && hasAnyPhotoImage(result?.photos)) ||
     (tool === 'photos.semantic_search' && (Boolean(semanticPrimaryPhoto(result)) || hasAnyPhotoImage(result?.photos))) ||
@@ -806,6 +1144,43 @@ function isPhotoListTool(tool: unknown) {
     tool === 'photos.list_by_album' ||
     tool === 'photos.recent_screenshots'
   );
+}
+
+function toolDisplayPolicy(result: unknown): string | null {
+  const r = asRecord(result);
+  const display = asRecord(r?.display);
+  const value = r?.display_policy ?? display?.policy;
+  return typeof value === 'string' ? value : null;
+}
+
+function toolResultType(result: unknown): string | null {
+  const value = asRecord(result)?.result_type;
+  return typeof value === 'string' ? value : null;
+}
+
+function isStandardHiddenToolResult(result: unknown) {
+  const policy = toolDisplayPolicy(result);
+  return policy === 'hidden_candidates' || policy === 'debug_only';
+}
+
+function isStandardDisplayableToolResult(result: unknown) {
+  const policy = toolDisplayPolicy(result);
+  if (policy === 'show_primary' || policy === 'show_grid' || policy === 'collapsed_candidates') {
+    return hasDisplayableToolMedia(result);
+  }
+  if (isStandardHiddenToolResult(result)) return false;
+  const type = toolResultType(result);
+  return (
+    (type === 'confirmed' || type === 'results') &&
+    !asRecord(result)?.candidate_only &&
+    hasDisplayableToolMedia(result)
+  );
+}
+
+function hasDisplayableToolMedia(result: unknown) {
+  return Boolean(primaryToolImage(result)) ||
+    hasAnyPhotoImage(toolResultItems(result)) ||
+    hasAnyPhotoImage(asRecord(result)?.photos);
 }
 
 function sortSessions(items: SessionDto[]) {
@@ -903,6 +1278,21 @@ function processToolNames(item: Extract<TimelineItem, { kind: 'process' }>) {
   return names;
 }
 
+function toolProgress(ev: ChatEvent | undefined) {
+  const index = numberOrNull(ev?.data?.toolIndex);
+  const max = numberOrNull(ev?.data?.maxToolCalls);
+  if (!index || !max) return null;
+  return { index, max };
+}
+
+function processToolProgress(item: Extract<TimelineItem, { kind: 'process' }>) {
+  for (let i = item.events.length - 1; i >= 0; i -= 1) {
+    const progress = toolProgress(item.events[i]);
+    if (progress) return progress;
+  }
+  return null;
+}
+
 function processSummary(item: Extract<TimelineItem, { kind: 'process' }>) {
   const notes = item.events
     .filter(ev => ev.type === 'assistant_message')
@@ -976,6 +1366,63 @@ function ToolCallRow({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: ChatEve
   );
 }
 
+function PendingImageGrid({
+  items,
+  disabled,
+  onRemove
+}: {
+  items: PendingImage[];
+  disabled: boolean;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map(item => (
+        <div key={item.id} className="relative h-20 w-20 overflow-hidden rounded border border-slate-200 bg-slate-100">
+          <img src={item.previewUrl} alt={item.file.name || '待发送图片'} className="h-full w-full object-cover" />
+          <button
+            type="button"
+            onClick={() => onRemove(item.id)}
+            disabled={disabled}
+            className="absolute right-1 top-1 h-6 w-6 rounded-full bg-black/65 text-sm leading-6 text-white disabled:opacity-50"
+            title="移除图片"
+            aria-label="移除图片"
+          >
+            x
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MessageAttachmentGrid({
+  items,
+  onOpenImage
+}: {
+  items: UploadedChatImage[];
+  onOpenImage: OpenImage;
+}) {
+  return (
+    <div className="grid max-w-xs grid-cols-2 gap-2 justify-end">
+      {items.map(item => {
+        const src = imageUrl(item.imageUrl);
+        if (!src) return null;
+        return (
+          <AuthImage
+            key={item.imageUrl}
+            src={src}
+            alt={item.name ?? '图片附件'}
+            title={item.name}
+            onOpen={() => onOpenImage(src)}
+            className="h-32 w-32 rounded border object-cover cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition"
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 function ProcessPanel({
   item,
   busy,
@@ -992,6 +1439,7 @@ function ProcessPanel({
   const duration = processDuration(item, now, active);
   const toolCalls = item.events.filter(ev => ev.type === 'tool_call_started');
   const toolResults = item.events.filter(ev => ev.type === 'tool_call_result');
+  const progress = processToolProgress(item);
   const names = processToolNames(item);
   const summary = processSummary(item);
   const visibleNames = names.slice(0, 3);
@@ -1015,7 +1463,7 @@ function ProcessPanel({
           <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <span className="font-medium text-slate-600">{statusText}</span>
             {duration && <span>{duration}</span>}
-            <span>{toolCalls.length} 次调用</span>
+            <span>{progress ? `${progress.index}/${progress.max}` : toolCalls.length} 次调用</span>
             {toolResults.length > 0 && <span>{toolResults.length} 个结果</span>}
             {visibleNames.map(name => (
               <code key={name} className="rounded bg-slate-100 px-1 py-0.5 text-[11px] text-slate-600">
@@ -1078,12 +1526,14 @@ function ToolCallDetail({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: Chat
       ? '调用失败'
       : '调用完成';
   const args = ev.data?.args;
+  const progress = toolProgress(ev);
 
   return (
     <div className="rounded-md border border-slate-200 bg-white p-2 text-xs text-slate-600">
       <div className="flex min-w-0 items-center gap-2">
         <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
         <span className="shrink-0">{label}</span>
+        {progress && <span className="shrink-0 text-slate-400">第 {progress.index}/{progress.max} 个工具</span>}
         <code className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700">{ev.data?.tool}</code>
         {args && <span className="min-w-0 truncate text-slate-400">({JSON.stringify(args)})</span>}
       </div>
@@ -1125,11 +1575,22 @@ function Bubble({
   switch (ev.type) {
     case 'user_message': {
       const time = formatMessageTime(ev.data?.createdAt);
+      const attachments = normalizeMessageAttachments(ev.data?.attachments);
       return (
         <div className="flex justify-end">
           <div className="max-w-prose">
-            <div className="bg-blue-600 text-white px-3 py-2 rounded-lg whitespace-pre-wrap">
-            {ev.data?.content}
+            <div className="space-y-2">
+              {attachments.length > 0 && (
+                <MessageAttachmentGrid
+                  items={attachments}
+                  onOpenImage={onOpenImage}
+                />
+              )}
+              {ev.data?.content && (
+                <div className="bg-blue-600 text-white px-3 py-2 rounded-lg whitespace-pre-wrap">
+                  {ev.data.content}
+                </div>
+              )}
             </div>
             {time && <div className="mt-1 text-right text-[11px] text-slate-400">{time}</div>}
           </div>
@@ -1206,6 +1667,11 @@ function ToolResult({ tool, result, onOpenImage }: {
   result: any;
   onOpenImage: OpenImage;
 }) {
+  const standardMedia = standardToolMedia(result);
+  if (standardMedia) {
+    return <StandardToolMediaResult media={standardMedia} onOpenImage={onOpenImage} />;
+  }
+
   if (Array.isArray(result?.photos) &&
       isPhotoListTool(tool)) {
     return <ThumbGrid items={result.photos} onOpenImage={onOpenImage} />;
@@ -1305,6 +1771,62 @@ function ToolResult({ tool, result, onOpenImage }: {
       <summary>工具 {tool} 返回结果</summary>
       <pre className="mt-1 bg-slate-100 p-2 rounded overflow-x-auto">{JSON.stringify(result, null, 2)}</pre>
     </details>
+  );
+}
+
+function StandardToolMediaResult({
+  media,
+  onOpenImage
+}: {
+  media: StandardToolMedia;
+  onOpenImage: OpenImage;
+}) {
+  if (media.mode === 'details') {
+    return (
+      <details className="text-xs text-slate-600">
+        <summary className="cursor-pointer">{media.summary}</summary>
+        <pre className="mt-1 bg-slate-100 p-2 rounded overflow-x-auto">{JSON.stringify(media.result, null, 2)}</pre>
+      </details>
+    );
+  }
+
+  if (media.mode === 'primary') {
+    return <PrimaryPhotoCard photo={media.primary} onOpenImage={onOpenImage} />;
+  }
+
+  if (media.mode === 'collapsed') {
+    return (
+      <details className="text-xs text-slate-500">
+        <summary className="cursor-pointer">{media.summary}</summary>
+        <div className="mt-2">
+          {hasAnyPhotoImage(media.items) ? (
+            <ThumbGrid items={media.items} onOpenImage={onOpenImage} />
+          ) : (
+            <SelectedPhotoSummary photos={media.items} />
+          )}
+        </div>
+      </details>
+    );
+  }
+
+  return <ThumbGrid items={media.items} onOpenImage={onOpenImage} />;
+}
+
+function PrimaryPhotoCard({ photo, onOpenImage }: { photo: any; onOpenImage: OpenImage }) {
+  const { big, small } = photoImageSources(photo);
+  const w = photo?.vision_width ?? photo?.source_width ?? photo?.width;
+  const h = photo?.vision_height ?? photo?.source_height ?? photo?.height;
+  const preview = big ?? small;
+  return (
+    <div className="max-w-md">
+      <AuthImage src={small} alt={photo?.name}
+                 title={photo?.name}
+                 onOpen={() => preview && onOpenImage(preview)}
+                 className="w-full max-h-96 object-contain rounded border cursor-zoom-in hover:ring-2 hover:ring-blue-400 transition" />
+      <div className="text-xs text-slate-500 mt-1">
+        {photo?.name ?? '图片结果'}{w && h ? ` · ${w}×${h}` : ''}
+      </div>
+    </div>
   );
 }
 
@@ -1518,6 +2040,74 @@ function semanticPrimaryPhoto(result: any) {
   const primary = result?.primary_image ?? result?.primaryImage ?? result?.primary;
   const candidate = primary?.result ?? primary;
   return hasPhotoImage(candidate) ? candidate : null;
+}
+
+function standardToolMedia(result: unknown): StandardToolMedia | null {
+  if (isStandardHiddenToolResult(result)) return null;
+  const policy = toolDisplayPolicy(result);
+  const candidateOnly = Boolean(asRecord(result)?.candidate_only);
+  const primary = primaryToolImage(result);
+  const items = toolResultItems(result).filter(item => asRecord(item));
+
+  if (policy === 'show_primary' && primary) {
+    return { mode: 'primary', primary };
+  }
+
+  if (policy === 'show_grid' && hasAnyPhotoImage(items)) {
+    return { mode: 'grid', items };
+  }
+
+  if (policy === 'collapsed_candidates' || candidateOnly) {
+    if (items.length > 0) {
+      return {
+        mode: 'collapsed',
+        items,
+        summary: toolResultSummary(result) ?? `已检索 ${items.length} 个候选结果`
+      };
+    }
+    if (toolResultSummary(result)) {
+      return { mode: 'details', result, summary: toolResultSummary(result) ?? '工具结果' };
+    }
+    return null;
+  }
+
+  if (primary && isStandardDisplayableToolResult(result)) {
+    return { mode: 'primary', primary };
+  }
+
+  if (hasAnyPhotoImage(items) && isStandardDisplayableToolResult(result)) {
+    return { mode: 'grid', items };
+  }
+
+  return null;
+}
+
+function primaryToolImage(result: unknown): any | null {
+  const r = asRecord(result);
+  const primary = r?.primary_image ?? r?.primaryImage ?? r?.primary;
+  const candidate = asRecord(primary)?.result ?? primary;
+  if (hasPhotoImage(candidate)) return candidate;
+  const items = toolResultItems(result);
+  return items.find(item => hasPhotoImage(item)) ?? null;
+}
+
+function toolResultItems(result: unknown): any[] {
+  const r = asRecord(result);
+  const values = [
+    r?.items,
+    r?.photos,
+    r?.results,
+    r?.candidates
+  ];
+  for (const value of values) {
+    if (Array.isArray(value)) return value;
+  }
+  return [];
+}
+
+function toolResultSummary(result: unknown): string | null {
+  const value = asRecord(result)?.summary;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function hasAnyPhotoImage(items: unknown) {

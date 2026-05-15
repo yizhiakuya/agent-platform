@@ -97,7 +97,34 @@ export const api = {
     request<UserPreferenceDto>('/api/me/preferences', {
       method: 'PUT',
       body: JSON.stringify({ content })
-    })
+    }),
+
+  uploadPhoto: async (file: File) => {
+    const token = getToken();
+    const headers = new Headers();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    const form = new FormData();
+    form.append('file', file, file.name || 'image');
+    const resp = await fetch('/api/uploads/photos', {
+      method: 'POST',
+      headers,
+      body: form
+    });
+    if (resp.status === 401) {
+      setToken(null);
+      window.location.assign('/login');
+      throw new ApiError(401, '未登录或登录已过期');
+    }
+    if (!resp.ok) {
+      let message = `HTTP ${resp.status}`;
+      try {
+        const body = await resp.json();
+        if (body?.message) message = body.message;
+      } catch { /* ignore */ }
+      throw new ApiError(resp.status, message);
+    }
+    return resp.json() as Promise<PhotoUploadResponse>;
+  }
 };
 
 export interface DeviceDto {
@@ -135,4 +162,11 @@ export interface MessageDto {
 export interface UserPreferenceDto {
   content: string;
   updatedAt: string | null;
+}
+
+export interface PhotoUploadResponse {
+  assetId: string;
+  imageUrl: string;
+  bytes: number;
+  contentType: string;
 }

@@ -9,10 +9,21 @@ export interface ChatStreamOptions {
   message: string;
   sessionId?: string;
   deviceId?: string;
+  attachments?: ChatImageAttachment[];
   onEvent: SseHandler;
   onError?: (err: unknown) => void;
   onClose?: () => void;
   signal?: AbortSignal;
+}
+
+export interface ChatImageAttachment {
+  imageUrl: string;
+  assetId?: string;
+  contentType?: string;
+  bytes?: number;
+  name?: string;
+  width?: number;
+  height?: number;
 }
 
 /**
