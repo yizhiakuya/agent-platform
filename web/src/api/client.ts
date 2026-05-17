@@ -96,10 +96,10 @@ export const api = {
   getPreferences: () =>
     request<UserPreferenceDto>('/api/me/preferences'),
 
-  updatePreferences: (content: string) =>
+  updatePreferences: (input: UpdatePreferenceRequest) =>
     request<UserPreferenceDto>('/api/me/preferences', {
       method: 'PUT',
-      body: JSON.stringify({ content })
+      body: JSON.stringify(input)
     }),
 
   uploadPhoto: async (file: File) => {
@@ -165,6 +165,12 @@ export interface MessageDto {
 export interface UserPreferenceDto {
   content: string;
   updatedAt: string | null;
+  autoMemoryEnabled?: boolean | null;
+}
+
+export interface UpdatePreferenceRequest {
+  content?: string | null;
+  autoMemoryEnabled?: boolean | null;
 }
 
 export interface PhotoUploadResponse {

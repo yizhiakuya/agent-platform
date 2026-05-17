@@ -145,7 +145,10 @@ class ChatServiceProviderFailoverTest {
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any()))
                 .thenReturn(resolvedTools);
+        when(contextAssembler.loadUserContextSettings(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(ContextAssembler.UserContextSettings.defaults());
         when(contextAssembler.assemble(
+                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
