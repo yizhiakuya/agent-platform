@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -30,6 +31,11 @@ public class PhotoToolArgsSanitizer implements ToolPreInterceptor {
     private static final Set<String> DATE_FIELDS = Set.of(
             "date_after",
             "date_before");
+    private static final Map<String, Integer> LIST_LIMIT_CAPS = new HashMap<>(Map.of(
+            "photos.list_recent", 8,
+            "photos.list_by_album", 8,
+            "photos.recent_screenshots", 8
+    ));
 
     private final ObjectMapper mapper;
 
@@ -50,7 +56,7 @@ public class PhotoToolArgsSanitizer implements ToolPreInterceptor {
             if (shouldDrop(key, value)) {
                 return;
             }
-            normalized.set(key, value);
+            normalized.set(key, normalizeValue(spec.name(), key, value));
         });
         return normalized;
     }
@@ -63,5 +69,16 @@ public class PhotoToolArgsSanitizer implements ToolPreInterceptor {
             return true;
         }
         return DATE_FIELDS.contains(key) && value.isNumber() && value.asLong() <= 0L;
+    }
+
+    private JsonNode normalizeValue(String toolName, String key, JsonNode value) {
+        if (!"limit".equals(key) || value == null || !value.isNumber()) {
+            return value;
+        }
+        Integer cap = LIST_LIMIT_CAPS.get(toolName);
+        if (cap == null || value.asInt() <= cap) {
+            return value;
+        }
+        return mapper.getNodeFactory().numberNode(cap);
     }
 }

@@ -45,7 +45,7 @@ import java.util.UUID;
 public class RemoteToolCallback {
 
     private static final Logger log = LoggerFactory.getLogger(RemoteToolCallback.class);
-    private static final int MAX_UPLOADED_VISION_ATTACHMENTS = 6;
+    private static final int MAX_UPLOADED_VISION_ATTACHMENTS = 8;
     private static final Set<String> ANTHROPIC_UNSUPPORTED_ROOT_SCHEMA_KEYS = Set.of("oneOf", "anyOf", "allOf");
 
     private final UUID deviceId;

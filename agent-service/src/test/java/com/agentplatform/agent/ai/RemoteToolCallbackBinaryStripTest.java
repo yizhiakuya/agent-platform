@@ -202,8 +202,8 @@ class RemoteToolCallbackBinaryStripTest {
 
         ExecutionResult result = callback.executeJsonToolUse(mapper.createObjectNode(), userId, UUID.randomUUID(), null);
 
-        assertEquals(6, result.images().size(), "uploaded image attachments are capped per tool result");
-        assertTrue(result.jsonText().contains("\"_vision_attached_count\":6"));
+        assertEquals(8, result.images().size(), "uploaded image attachments are capped per tool result");
+        assertTrue(result.jsonText().contains("\"_vision_attached_count\":8"));
         org.mockito.Mockito.verify(dispatcher, org.mockito.Mockito.never())
                 .fetchUploadAsset(userId, "/api/uploads/photos/cover-1");
     }

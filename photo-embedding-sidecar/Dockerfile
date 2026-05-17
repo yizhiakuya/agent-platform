@@ -4,7 +4,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/models/huggingface \
     TRANSFORMERS_CACHE=/models/huggingface \
-    SENTENCE_TRANSFORMERS_HOME=/models/sentence-transformers
+    SENTENCE_TRANSFORMERS_HOME=/models/sentence-transformers \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    HF_HUB_DISABLE_TELEMETRY=1
 
 WORKDIR /app
 

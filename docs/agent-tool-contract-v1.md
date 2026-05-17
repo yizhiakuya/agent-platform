@@ -10,12 +10,16 @@ This document defines the first project-level standard for agent-facing tools.
 ## Goals
 
 - Make tool behavior predictable for the model.
-- Encode user intent in parameters instead of relying on prompt guessing.
+- Encode reusable constraints and intent signals in parameters instead of
+  relying on prompt guessing.
 - Separate recall candidates from confirmed results.
 - Make frontend rendering deterministic after live streaming and history replay.
 - Preserve auditability: every important choice should be visible in args or
   result metadata.
 - Put safety at the tool boundary, not only in system prompts.
+- Keep subjective or business-specific decisions in the agent/skill layer.
+  Tools provide capabilities and state; skills orchestrate workflows; the
+  agent inspects, judges, explains, and confirms.
 
 ## Core Rule
 

@@ -1,15 +1,19 @@
 import base64
 import io
+import logging
 import os
 import threading
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 from PIL import Image
 from sentence_transformers import SentenceTransformer
 
+
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+log = logging.getLogger("photo-embedding-sidecar")
 
 MODEL_NAME = os.getenv("PHOTO_EMBEDDING_MODEL", "clip-ViT-B-32-multilingual-v1")
 # The multilingual text model was trained to project text into the same
@@ -18,11 +22,13 @@ TEXT_MODEL_NAME = os.getenv("PHOTO_EMBEDDING_TEXT_MODEL", "sentence-transformers
 IMAGE_MODEL_NAME = os.getenv("PHOTO_EMBEDDING_IMAGE_MODEL", "sentence-transformers/clip-ViT-B-32")
 DIM = int(os.getenv("PHOTO_EMBEDDING_DIM", "1024"))
 DEVICE = os.getenv("PHOTO_EMBEDDING_DEVICE", "cpu")
+PRELOAD_MODELS = os.getenv("PHOTO_EMBEDDING_PRELOAD", "true").lower() in {"1", "true", "yes", "on"}
 
 app = FastAPI(title="Agent Platform Photo Embedding Sidecar")
 text_model: SentenceTransformer | None = None
 image_model: SentenceTransformer | None = None
 model_lock = threading.Lock()
+startup_error: str | None = None
 
 
 class EmbeddingRequest(BaseModel):
@@ -47,6 +53,31 @@ def get_image_model() -> SentenceTransformer:
             if image_model is None:
                 image_model = SentenceTransformer(IMAGE_MODEL_NAME, device=DEVICE)
     return image_model
+
+
+def model_status() -> dict[str, Any]:
+    return {
+        "text_loaded": text_model is not None,
+        "image_loaded": image_model is not None,
+        "startup_error": startup_error,
+        "preload": PRELOAD_MODELS,
+    }
+
+
+@app.on_event("startup")
+def preload_models() -> None:
+    global startup_error
+    if not PRELOAD_MODELS:
+        return
+    try:
+        log.info("preloading text model %s on %s", TEXT_MODEL_NAME, DEVICE)
+        get_text_model()
+        log.info("preloading image model %s on %s", IMAGE_MODEL_NAME, DEVICE)
+        get_image_model()
+        startup_error = None
+    except Exception as exc:
+        startup_error = str(exc)
+        log.exception("photo embedding model preload failed")
 
 
 def as_list(value: Any) -> list[Any]:
@@ -88,13 +119,17 @@ def to_dim(vector: np.ndarray) -> list[float]:
 
 
 @app.get("/health")
-def health() -> dict[str, Any]:
+def health(response: Response) -> dict[str, Any]:
+    ready = startup_error is None and (not PRELOAD_MODELS or (text_model is not None and image_model is not None))
+    if not ready:
+        response.status_code = 503
     return {
-        "status": "ok",
+        "status": "ok" if ready else "degraded",
         "model": MODEL_NAME,
         "text_model": TEXT_MODEL_NAME,
         "image_model": IMAGE_MODEL_NAME,
         "dim": DIM,
+        **model_status(),
     }
 
 
@@ -103,12 +138,16 @@ def embeddings(req: EmbeddingRequest) -> dict[str, Any]:
     items = [normalize_item(item) for item in as_list(req.input)]
     data = []
     for index, (kind, payload) in enumerate(items):
-        if kind == "image":
-            st = get_image_model()
-            vec = st.encode(payload, convert_to_numpy=True, normalize_embeddings=True)
-        else:
-            st = get_text_model()
-            vec = st.encode(payload, convert_to_numpy=True, normalize_embeddings=True)
+        try:
+            if kind == "image":
+                st = get_image_model()
+                vec = st.encode(payload, convert_to_numpy=True, normalize_embeddings=True)
+            else:
+                st = get_text_model()
+                vec = st.encode(payload, convert_to_numpy=True, normalize_embeddings=True)
+        except Exception as exc:
+            log.exception("embedding failed for %s item at index %s", kind, index)
+            raise HTTPException(status_code=503, detail=f"embedding model unavailable: {exc}") from exc
         data.append({
             "object": "embedding",
             "index": index,

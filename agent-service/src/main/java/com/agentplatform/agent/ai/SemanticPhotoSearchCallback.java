@@ -264,6 +264,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         result.put("fallback_realtime", true);
         result.put("embedding_dim", embeddingService.dim());
         result.set("photos", outPhotos);
+        attachDisplayMedia(result, outPhotos);
         if (shouldExposeReviewCandidates(contract) && !reviewCandidates.isEmpty()) {
             result.set("review_candidates", reviewCandidates);
         }
@@ -384,6 +385,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         result.put("embedding_dim", photoEmbeddingService.dim());
         result.put("min_score", round((float) contract.minScore()));
         result.set("photos", outPhotos);
+        attachDisplayMedia(result, outPhotos);
         if (shouldExposeReviewCandidates(contract) && !reviewCandidates.isEmpty()) {
             result.set("review_candidates", reviewCandidates);
         }
@@ -393,12 +395,13 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
     }
 
     ExecutionResult textOrVision(ObjectNode result) {
+        JsonNode modelResult = resultForLlm(result);
         if (visionEnabled) {
             List<PendingImage> images = new ArrayList<>();
-            JsonNode stripped = stripB64ForLlmAndCollect(result, "", images);
+            JsonNode stripped = stripB64ForLlmAndCollect(modelResult, "", images);
             return new ExecutionResult(stripped.toString(), images);
         }
-        return ExecutionResult.text(stripB64ForLlm(result).toString());
+        return ExecutionResult.text(stripB64ForLlm(modelResult).toString());
     }
 
     ObjectNode fallbackResult(String query, JsonNode candidateRoot, JsonNode photos, int limit, String reason) {
@@ -456,12 +459,79 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         out.put("scanned", candidateRoot.path("scanned").asInt(ordered.size()));
         out.put("semantic_engine", "local_text_visual_fallback");
         out.set("photos", arr);
+        attachDisplayMedia(out, arr);
         if (shouldExposeReviewCandidates(contract) && !reviewCandidates.isEmpty()) {
             out.set("review_candidates", reviewCandidates);
         }
         addInspectNext(out);
         attachFullImageForSingleResult(out, contract);
         return out;
+    }
+
+    private JsonNode resultForLlm(ObjectNode result) {
+        ObjectNode copy = result.deepCopy();
+        copy.remove("display_media");
+        return copy;
+    }
+
+    private void attachDisplayMedia(ObjectNode result, JsonNode photos) {
+        ArrayNode media = mapper.createArrayNode();
+        if (photos != null && photos.isArray()) {
+            for (JsonNode photo : photos) {
+                ObjectNode item = displayMediaItem(photo);
+                if (item != null) {
+                    media.add(item);
+                }
+            }
+        }
+        result.set("display_media", media);
+
+        ObjectNode display = mapper.createObjectNode();
+        display.put("policy", result.path("display_policy").asText(resultDisplayPolicyFallback(media.size())));
+        display.put("media_count", media.size());
+        result.set("display", display);
+    }
+
+    private ObjectNode displayMediaItem(JsonNode photo) {
+        if (photo == null || !photo.isObject()) {
+            return null;
+        }
+        ObjectNode item = mapper.createObjectNode();
+        String id = firstText(photo, "id", "media_store_id", "mediaStoreId");
+        String mediaStoreId = firstText(photo, "media_store_id", "mediaStoreId", "id");
+        String assetId = firstText(photo, "photo_asset_id", "asset_id", "assetId");
+
+        item.put("kind", "image");
+        put(item, "id", id);
+        put(item, "media_store_id", mediaStoreId);
+        put(item, "photo_asset_id", assetId);
+        copyField(photo, item, "device_id");
+        copyField(photo, item, "name");
+        copyField(photo, item, "mime_type");
+        copyField(photo, item, "width");
+        copyField(photo, item, "height");
+        copyField(photo, item, "date_taken_ms");
+        copyField(photo, item, "date_modified_sec");
+        copyField(photo, item, "rank");
+        copyField(photo, item, "match_score");
+        copyField(photo, item, "match_reason");
+        copyField(photo, item, "source");
+        copyFirstText(photo, item, "preview_b64", "thumb_b64", "thumbnail_b64", "cover_thumb_b64");
+        copyFirstText(photo, item, "preview_url", "thumb_url", "thumbnail_url", "cover_thumb_url");
+        copyFirstText(photo, item, "image_url", "image_url", "asset_url", "url");
+
+        if (id != null && !id.isBlank()) {
+            item.put("open_tool", "photos.get_full");
+            ObjectNode args = mapper.createObjectNode();
+            args.put("id", id);
+            args.put("max_dim", 2048);
+            item.set("open_args", args);
+        }
+        return item;
+    }
+
+    private static String resultDisplayPolicyFallback(int mediaCount) {
+        return mediaCount == 1 ? "show_primary" : "show_grid";
     }
 
     private void attachFullImageForSingleResult(ObjectNode result, SearchContract contract) {
@@ -707,6 +777,32 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
 
     private static void put(ObjectNode obj, String key, Integer value) {
         if (value != null) obj.put(key, value);
+    }
+
+    private static String firstText(JsonNode src, String... keys) {
+        if (src == null) return null;
+        for (String key : keys) {
+            JsonNode value = src.get(key);
+            if (value != null && !value.isNull()) {
+                String text = value.asText("").trim();
+                if (!text.isEmpty()) return text;
+            }
+        }
+        return null;
+    }
+
+    private static void copyField(JsonNode src, ObjectNode dst, String key) {
+        JsonNode value = src.get(key);
+        if (value != null && !value.isNull()) {
+            dst.set(key, value);
+        }
+    }
+
+    private static void copyFirstText(JsonNode src, ObjectNode dst, String dstKey, String... srcKeys) {
+        String value = firstText(src, srcKeys);
+        if (value != null) {
+            dst.put(dstKey, value);
+        }
     }
 
     private static int clamp(int value, int min, int max) {

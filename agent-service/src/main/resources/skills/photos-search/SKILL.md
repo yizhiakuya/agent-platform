@@ -3,6 +3,47 @@ name: photos-search
 description: Best practices for searching photos via photos.semantic_search and list-style photo tools. Trigger when user asks for photos by app, date, visible text, or content keyword.
 ---
 
+# Photo management intent routing
+
+Do not treat "整理相册 / 管理相册 / 看看最近图片 / 帮我整理一下" as a
+delete-or-cleanup request by default. Default photo management is
+non-destructive: browse, group, summarize, suggest albums, rename/move/copy
+plans, and ask a clarifying question if the next action is ambiguous.
+
+Only discuss "recommended deletion", "trash", or "cleanup candidates" when the
+user explicitly asks for deletion or cleanup intent, for example "删除",
+"清理垃圾图", "哪些可以删", "释放空间", "重复图", or "废图". Previous memories
+about photo cleanup must not broaden a neutral organization request into a
+delete workflow.
+
+For neutral organization requests:
+
+1. Narrow the scope with `photos.semantic_search`, `photos.list_recent`,
+   `photos.recent_screenshots`, or album/date/name filters.
+2. If several photos need visual judgment, call `photos.get_full_batch` with
+   the ids and inspect them together.
+3. Report non-destructive organization output: categories, suggested albums,
+   noteworthy photos, duplicates to review, or "needs user choice". Do not say
+   "不建议删除" unless the user asked about deletion.
+4. Use `media.selection.create` only when the user or agent has selected a
+   working set for a follow-up action. The selection itself is generic state,
+   not a cleanup classifier.
+
+For explicit cleanup/delete requests:
+
+1. Narrow the scope with the same search/list tools. Do not show a huge raw
+   grid unless the user explicitly wants to browse all photos.
+2. Use `photos.get_full_batch` to inspect multiple candidates together; do not
+   fetch one image per tool call unless batch fetch fails or the set is larger
+   than the batch limit.
+3. Decide in the agent layer which images look disposable, and explain the
+   visible candidates by display order and short reasons. The tool layer should
+   not hide this judgment inside a business-specific cleanup API.
+4. Create a stable working set with `media.selection.create`, including the
+   selected ids, display indexes, reasons, and intended action such as `trash`.
+5. After the user confirms, call `photos.trash` with the returned
+   `selection_id` (or pass `ids` directly for older clients).
+
 # Skill: photos-search
 
 ## 什么时候用
@@ -34,6 +75,7 @@ description: Best practices for searching photos via photos.semantic_search and 
 - 内容语义搜索：用 `photos.semantic_search`。
 - 明确要最近照片、指定相册、文件名/app 包名、日期窗口：用 list 工具，范围越窄越好。
 - 搜到候选后，若用户问某张图的具体内容、文字、数字、页面细节、图表、聊天原文：必须对对应 `id` 调 `photos.get_full`，让视觉模型看原图后再回答。
+- 搜到多张候选并且需要逐张判断内容/垃圾图/重复图时：优先一次调用 `photos.get_full_batch`，传 `ids` 数组和 `max_dim: 1024`，不要连续一张一张调 `photos.get_full`。只有批量工具不可用、失败，或超过批量上限时，才分批/单张补看。
 
 `photos.semantic_search` 的 `photos` 字段只包含最终选中的结果，数量等于 `limit`；正常 `confirmed_only` 搜索不暴露内部候选。只有显式调试/浏览候选时才使用 `display: show_candidates`，这时 `review_candidates` 也只能是不带图片二进制的审计信息。单张搜索优先使用返回的 `primary_image`，如果没有 `primary_image`，按 `next.args.id` 再调 `photos.get_full`。
 

@@ -1704,7 +1704,11 @@ function ProcessPanel({
                 <code className="tool-chip">{ev.data?.tool}</code>
                 <span>返回结果</span>
               </div>
-              <ProcessToolResult ev={ev} />
+              {shouldShowToolResultOutsideProcess(ev) ? (
+                <ToolResultExternalSummary ev={ev} />
+              ) : (
+                <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} />
+              )}
             </div>
           ) : ev.type === 'assistant_message' ? (
             <div key={`note-${item.startIndex}-${index}`} className="assistant-card">
@@ -1724,43 +1728,32 @@ function ProcessPanel({
   );
 }
 
-function ProcessToolResult({ ev }: { ev: ChatEvent }) {
-  const tool = String(ev.data?.tool ?? 'tool');
-  const result = ev.data?.result;
-  if (shouldShowToolResultOutsideProcess(ev)) {
-    return <ToolResultReference tool={tool} result={result} />;
-  }
-  return <ToolResultDetails tool={tool} result={result} />;
-}
-
-function ToolResultReference({ tool, result }: { tool: string; result: any }) {
-  const summary = processResultSummary(tool, result);
+function ToolResultExternalSummary({ ev }: { ev: ChatEvent }) {
+  const count = visibleToolResultCount(ev);
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-      <div className="font-medium text-slate-700">{summary}</div>
-      <details className="mt-1">
-        <summary className="cursor-pointer text-slate-500">查看原始结果 JSON</summary>
-        <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-white p-2 text-[11px] leading-5 text-slate-600">
-          {JSON.stringify(result, null, 2)}
-        </pre>
-      </details>
+    <div className="flex min-w-0 items-center gap-2 text-xs text-slate-500">
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />
+      <span className="min-w-0 truncate">
+        结果已在对话中单独展示{count ? ` · ${count} 项` : ''}
+      </span>
     </div>
   );
 }
 
-function ToolResultDetails({ tool, result }: { tool: string; result: any }) {
-  return (
-    <details className="text-xs text-slate-600">
-      <summary className="cursor-pointer">工具 {tool} 返回结果</summary>
-      <pre className="mt-1 max-h-72 overflow-auto rounded-md bg-slate-100 p-2">{JSON.stringify(result, null, 2)}</pre>
-    </details>
-  );
-}
+function visibleToolResultCount(ev: ChatEvent): number | null {
+  const result = ev.data?.result;
+  const media = standardToolMedia(result);
+  if (media?.mode === 'primary') return 1;
+  if (media?.mode === 'grid' || media?.mode === 'collapsed') return media.items.length;
 
-function processResultSummary(tool: string, result: any) {
-  const count = Number(result?.count ?? result?.summary?.count ?? result?.photos?.length ?? result?.items?.length);
-  const countText = Number.isFinite(count) && count >= 0 ? `，${Math.floor(count)} 项` : '';
-  return `${toolResultTitle(tool)}已在主结果区展示${countText}`;
+  const tool = ev.data?.tool;
+  if (tool === 'photos.get_full' && hasPhotoImage(result)) return 1;
+  if ((isPhotoListTool(tool) || tool === 'photos.semantic_search') && Array.isArray(result?.photos)) {
+    return result.photos.length;
+  }
+  if (tool === 'videos.list_recent' && Array.isArray(result?.videos)) return result.videos.length;
+  const items = toolResultItems(result);
+  return items.length > 0 ? items.length : null;
 }
 
 function ToolCallDetail({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: ChatEvent | null }) {
@@ -2302,6 +2295,9 @@ function needsAuthenticatedFetch(src: string) {
 }
 
 function semanticPrimaryPhoto(result: any) {
+  const media = displayMediaItems(result);
+  const firstMedia = media.find(item => hasPhotoImage(item));
+  if (firstMedia) return firstMedia;
   const primary = result?.primary_image ?? result?.primaryImage ?? result?.primary;
   const candidate = primary?.result ?? primary;
   return hasPhotoImage(candidate) ? candidate : null;
@@ -2313,13 +2309,14 @@ function standardToolMedia(result: unknown): StandardToolMedia | null {
   const candidateOnly = Boolean(asRecord(result)?.candidate_only);
   const primary = primaryToolImage(result);
   const items = toolResultItems(result).filter(item => asRecord(item));
+  const imageItems = items.filter(item => hasPhotoImage(item));
+
+  if ((policy === 'show_grid' || (policy === 'show_primary' && imageItems.length > 1)) && imageItems.length > 0) {
+    return { mode: 'grid', items: imageItems };
+  }
 
   if (policy === 'show_primary' && primary) {
     return { mode: 'primary', primary };
-  }
-
-  if (policy === 'show_grid' && hasAnyPhotoImage(items)) {
-    return { mode: 'grid', items };
   }
 
   if (policy === 'collapsed_candidates' || candidateOnly) {
@@ -2372,6 +2369,12 @@ function toolResultItems(result: unknown): any[] {
   return [];
 }
 
+function displayMediaItems(result: unknown): any[] {
+  const r = asRecord(result);
+  const value = r?.display_media ?? r?.displayMedia;
+  return Array.isArray(value) ? value : [];
+}
+
 function toolResultSummary(result: unknown): string | null {
   const value = asRecord(result)?.summary;
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -2389,8 +2392,18 @@ function hasPhotoImage(photo: unknown) {
 function photoImageSources(photo: unknown) {
   const p = asRecord(photo);
   if (!p) return { big: null, small: null };
-  const uploadUrl = uploadAssetUrl(p.asset_id ?? p.assetId);
+  const uploadUrl = isPhotoIndexAsset(p) ? null : uploadAssetUrl(p.asset_id ?? p.assetId);
+  const thumbB64 = imageDataUrl(p.preview_b64 ?? p.thumb_b64 ?? p.thumbnail_b64 ?? p.cover_thumb_b64);
+  const bigB64 = imageDataUrl(
+    p.full_b64 ??
+    p.image_b64 ??
+    p.vision_b64 ??
+    p.image_base64 ??
+    p.cover_image_b64 ??
+    p.cover_b64
+  );
   const bigUrl = firstImageUrl(
+    p.full_url,
     p.image_url,
     p.asset_url,
     p.url,
@@ -2403,6 +2416,7 @@ function photoImageSources(photo: unknown) {
     p.coverUrl
   );
   const smallUrl = firstImageUrl(
+    p.preview_url,
     p.thumb_url,
     p.thumbnail_url,
     p.cover_thumb_url,
@@ -2412,17 +2426,13 @@ function photoImageSources(photo: unknown) {
     p.coverThumbUrl,
     p.coverThumbnailUrl
   );
-  const bigB64 = imageDataUrl(
-    p.image_b64 ??
-    p.vision_b64 ??
-    p.image_base64 ??
-    p.cover_image_b64 ??
-    p.cover_b64 ??
-    p.full_b64
-  );
-  const big = bigUrl ?? bigB64;
-  const small = smallUrl ?? big ?? imageDataUrl(p.thumb_b64 ?? p.thumbnail_b64 ?? p.cover_thumb_b64);
+  const big = bigUrl ?? bigB64 ?? thumbB64;
+  const small = smallUrl ?? thumbB64 ?? big;
   return { big, small };
+}
+
+function isPhotoIndexAsset(photo: Record<string, any>) {
+  return photo.source === 'photo_index' || photo.match_reason === 'photo_index_embedding';
 }
 
 function uploadAssetUrl(value: unknown): string | null {
