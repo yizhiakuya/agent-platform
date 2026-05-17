@@ -37,6 +37,8 @@ public class UserPreferenceController {
     @PutMapping
     public UserPreferenceDto put(@RequestBody UpdatePreferenceRequest req) {
         UUID userId = PrincipalContext.requireUserId();
-        return service.put(userId, req.content());
+        String content = req == null ? null : req.content();
+        Boolean autoMemoryEnabled = req == null ? null : req.autoMemoryEnabled();
+        return service.put(userId, content, autoMemoryEnabled);
     }
 }

@@ -58,9 +58,20 @@ public class ContextAssembler {
                                   UUID sessionId,
                                   String currentMessage,
                                   List<MemoryFactDto> memories) {
+        return assemble(userId, sessionId, currentMessage, memories, loadUserContextSettings(userId));
+    }
+
+    public ContextBundle assemble(UUID userId,
+                                  UUID sessionId,
+                                  String currentMessage,
+                                  List<MemoryFactDto> memories,
+                                  UserContextSettings userContextSettings) {
+        UserContextSettings settings = userContextSettings == null
+                ? UserContextSettings.defaults()
+                : userContextSettings;
         String stableSystemText = PromptAssembler.buildSystemText(
                 personaLoader.getBundle(),
-                loadUserPrefs(userId),
+                settings.promptPreferences(),
                 skillRegistry.all(userId));
 
         boolean cacheEnabled = Boolean.TRUE.equals(props.agent().memory().enablePromptCache())
@@ -109,15 +120,23 @@ public class ContextAssembler {
                 stats);
     }
 
-    private String loadUserPrefs(UUID userId) {
+    public UserContextSettings loadUserContextSettings(UUID userId) {
         try {
             UserPreferenceDto pref = authClient.getPreferences(userId);
-            if (pref == null) return "";
+            if (pref == null) return UserContextSettings.defaults();
             String content = pref.content();
-            return content == null ? "" : content.trim();
+            return new UserContextSettings(
+                    content == null ? "" : content.trim(),
+                    pref.autoMemoryEnabledOrDefault());
         } catch (Exception e) {
-            log.debug("loadUserPrefs failed for user {}: {}", userId, e.getMessage());
-            return "";
+            log.debug("loadUserContextSettings failed for user {}: {}", userId, e.getMessage());
+            return UserContextSettings.defaults();
+        }
+    }
+
+    public record UserContextSettings(String promptPreferences, boolean autoMemoryEnabled) {
+        public static UserContextSettings defaults() {
+            return new UserContextSettings("", true);
         }
     }
 

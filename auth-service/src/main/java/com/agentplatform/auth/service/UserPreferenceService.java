@@ -13,8 +13,8 @@ import java.util.UUID;
  * CRUD for per-user preference documents. {@link #get(UUID)} returns an empty
  * document when no row exists yet (so callers — both the user's web UI and
  * agent-service's prompt builder — never have to special-case "first time").
- * {@link #put(UUID, String)} upserts: insert if missing, update content and
- * bump {@code updated_at} otherwise.
+ * {@link #put(UUID, String, Boolean)} upserts: insert if missing, update
+ * provided settings, and bump {@code updated_at}.
  */
 @Service
 public class UserPreferenceService {
@@ -28,21 +28,37 @@ public class UserPreferenceService {
     @Transactional(readOnly = true)
     public UserPreferenceDto get(UUID userId) {
         return repo.findById(userId)
-                .map(p -> new UserPreferenceDto(p.getContent(), p.getUpdatedAt()))
-                .orElseGet(() -> new UserPreferenceDto("", null));
+                .map(this::toDto)
+                .orElseGet(() -> new UserPreferenceDto("", null, true));
     }
 
     @Transactional
     public UserPreferenceDto put(UUID userId, String content) {
-        String safe = content == null ? "" : content;
+        return put(userId, content == null ? "" : content, null);
+    }
+
+    @Transactional
+    public UserPreferenceDto put(UUID userId, String content, Boolean autoMemoryEnabled) {
         UserPreference entity = repo.findById(userId).orElseGet(() -> {
             UserPreference fresh = new UserPreference();
             fresh.setUserId(userId);
             return fresh;
         });
-        entity.setContent(safe);
+        if (content != null) {
+            entity.setContent(content);
+        }
+        if (autoMemoryEnabled != null) {
+            entity.setAutoMemoryEnabled(autoMemoryEnabled);
+        }
         entity.setUpdatedAt(OffsetDateTime.now());
         UserPreference saved = repo.save(entity);
-        return new UserPreferenceDto(saved.getContent(), saved.getUpdatedAt());
+        return toDto(saved);
+    }
+
+    private UserPreferenceDto toDto(UserPreference pref) {
+        return new UserPreferenceDto(
+                pref.getContent(),
+                pref.getUpdatedAt(),
+                pref.isAutoMemoryEnabled());
     }
 }
