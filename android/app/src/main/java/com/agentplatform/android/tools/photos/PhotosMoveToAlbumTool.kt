@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import android.provider.MediaStore
 import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.Dispatchers
@@ -18,9 +19,10 @@ class PhotosMoveToAlbumTool(
 
     override val description: String = """
         Move existing gallery photos into an album/folder under Pictures.
-        Pass `id` for one photo or `ids` for a batch. On Android 10+ this uses
-        MediaStore RELATIVE_PATH and may trigger Android's system media
-        confirmation UI.
+        Pass `id` for one photo, `ids` for a batch, or `selection_id` from
+        media.selection.create for a previously reviewed set. On Android 10+
+        this uses MediaStore RELATIVE_PATH and may trigger Android's system
+        media confirmation UI.
     """.trimIndent()
 
     override val schema: JsonNode = mapper.readTree(
@@ -37,6 +39,10 @@ class PhotosMoveToAlbumTool(
               "items": { "type": "string" },
               "description": "Photo ids to move. Maximum 100."
             },
+            "selection_id": {
+              "type": "string",
+              "description": "Reusable photo selection id from media.selection.create."
+            },
             "album": {
               "type": "string",
               "description": "Album/folder name under Pictures. Created by the gallery when the first image is moved there."
@@ -45,7 +51,8 @@ class PhotosMoveToAlbumTool(
           "required": ["album"],
           "anyOf": [
             { "required": ["id"] },
-            { "required": ["ids"] }
+            { "required": ["ids"] },
+            { "required": ["selection_id"] }
           ]
         }
         """.trimIndent()
@@ -57,7 +64,7 @@ class PhotosMoveToAlbumTool(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             throw UnsupportedOperationException("moving photos by album requires Android 10 or newer")
         }
-        val ids = PhotoMutationHelpers.parseIds(args)
+        val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
         val album = PhotoMutationHelpers.sanitizeAlbum(args.path("album").asText(""))
         val relativePath = PhotoMutationHelpers.relativePicturesPath(album)
         val failures = PhotoMutationHelpers.failuresArray(mapper)
@@ -81,13 +88,24 @@ class PhotosMoveToAlbumTool(
             }
         }
 
-        mapper.createObjectNode().apply {
-            put("ok", failures.size() == 0)
+        val result = mapper.createObjectNode().apply {
             set<JsonNode>("ids", PhotoMutationHelpers.idsArray(mapper, ids))
             put("album", album)
             put("relative_path", relativePath)
             put("updated_count", updatedCount)
             set<JsonNode>("failures", failures)
+            set<JsonNode>("summary", mapper.createObjectNode().apply {
+                put("updated_count", updatedCount)
+                put("failure_count", failures.size())
+                put("album", album)
+            })
         }
+        ToolResultEnvelope.applyStandardFields(
+            mapper,
+            this@PhotosMoveToAlbumTool,
+            result,
+            ok = failures.size() == 0,
+            request = args
+        )
     }
 }

@@ -1128,12 +1128,12 @@ function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
         endIndex: segmentStart + finalAssistantOffset - 1
       });
     }
+    pushVisibleToolResults(items, processEvents, segmentStart);
     items.push({
       kind: 'event',
       event: segment[finalAssistantOffset],
       index: segmentStart + finalAssistantOffset
     });
-    pushVisibleToolResults(items, processEvents, segmentStart);
 
     const trailing = segment.slice(finalAssistantOffset + 1);
     if (trailing.length > 0) {
@@ -1704,7 +1704,7 @@ function ProcessPanel({
                 <code className="tool-chip">{ev.data?.tool}</code>
                 <span>返回结果</span>
               </div>
-              <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} />
+              <ProcessToolResult ev={ev} />
             </div>
           ) : ev.type === 'assistant_message' ? (
             <div key={`note-${item.startIndex}-${index}`} className="assistant-card">
@@ -1722,6 +1722,45 @@ function ProcessPanel({
       </div>
     </details>
   );
+}
+
+function ProcessToolResult({ ev }: { ev: ChatEvent }) {
+  const tool = String(ev.data?.tool ?? 'tool');
+  const result = ev.data?.result;
+  if (shouldShowToolResultOutsideProcess(ev)) {
+    return <ToolResultReference tool={tool} result={result} />;
+  }
+  return <ToolResultDetails tool={tool} result={result} />;
+}
+
+function ToolResultReference({ tool, result }: { tool: string; result: any }) {
+  const summary = processResultSummary(tool, result);
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+      <div className="font-medium text-slate-700">{summary}</div>
+      <details className="mt-1">
+        <summary className="cursor-pointer text-slate-500">查看原始结果 JSON</summary>
+        <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-white p-2 text-[11px] leading-5 text-slate-600">
+          {JSON.stringify(result, null, 2)}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+function ToolResultDetails({ tool, result }: { tool: string; result: any }) {
+  return (
+    <details className="text-xs text-slate-600">
+      <summary className="cursor-pointer">工具 {tool} 返回结果</summary>
+      <pre className="mt-1 max-h-72 overflow-auto rounded-md bg-slate-100 p-2">{JSON.stringify(result, null, 2)}</pre>
+    </details>
+  );
+}
+
+function processResultSummary(tool: string, result: any) {
+  const count = Number(result?.count ?? result?.summary?.count ?? result?.photos?.length ?? result?.items?.length);
+  const countText = Number.isFinite(count) && count >= 0 ? `，${Math.floor(count)} 项` : '';
+  return `${toolResultTitle(tool)}已在主结果区展示${countText}`;
 }
 
 function ToolCallDetail({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: ChatEvent | null }) {
@@ -2320,6 +2359,8 @@ function primaryToolImage(result: unknown): any | null {
 function toolResultItems(result: unknown): any[] {
   const r = asRecord(result);
   const values = [
+    r?.display_media,
+    r?.displayMedia,
     r?.items,
     r?.photos,
     r?.results,

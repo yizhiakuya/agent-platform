@@ -180,8 +180,20 @@ public class ChatService {
         // Cache layout — system text is bit-identical across requests so the
         // ephemeral cache breakpoint hits cleanly. Per-request memories ride
         // along on the user message instead so they don't churn the cache.
-        List<MemoryFactDto> memories = recallMemories(userId, req.message());
-        ContextBundle context = contextAssembler.assemble(userId, sessionId, req.message(), memories);
+        ContextAssembler.UserContextSettings userContextSettings = loadUserContextSettings(userId);
+        boolean autoMemoryEnabled = userContextSettings.autoMemoryEnabled();
+        List<MemoryFactDto> memories = autoMemoryEnabled
+                ? recallMemories(userId, req.message())
+                : List.of();
+        if (!autoMemoryEnabled) {
+            log.debug("auto memory disabled for user {}; skipping memory recall", userId);
+        }
+        ContextBundle context = contextAssembler.assemble(
+                userId,
+                sessionId,
+                req.message(),
+                memories,
+                userContextSettings);
         List<com.anthropic.models.messages.Tool> executableTools = new java.util.ArrayList<>(resolved.definitions());
         executableTools.addAll(serverToolRegistry.toAnthropicTools());
         executableTools.add(skillLoadCallback.toAnthropicTool());
@@ -261,10 +273,14 @@ public class ChatService {
         long durMs = System.currentTimeMillis() - t0;
         persist(sessionId, userId, MessageRole.ASSISTANT, fullReply, assistantMetadata(durMs));
         logUsage(userId, result.usage(), durMs);
-        try {
-            memoryExtractor.extractAsync(userId, sessionId, req.message(), fullReply);
-        } catch (Exception ex) {
-            log.warn("memoryExtractor.extractAsync failed: {}", ex.getMessage());
+        if (autoMemoryEnabled) {
+            try {
+                memoryExtractor.extractAsync(userId, sessionId, req.message(), fullReply);
+            } catch (Exception ex) {
+                log.warn("memoryExtractor.extractAsync failed: {}", ex.getMessage());
+            }
+        } else {
+            log.debug("auto memory disabled for user {}; skipping memory extraction", userId);
         }
         try {
             sessionSummaryRefresher.refreshAsync(userId, sessionId);
@@ -374,6 +390,16 @@ public class ChatService {
     }
 
     /* -------------------- per-request loaders -------------------- */
+
+    private ContextAssembler.UserContextSettings loadUserContextSettings(UUID userId) {
+        try {
+            ContextAssembler.UserContextSettings settings = contextAssembler.loadUserContextSettings(userId);
+            return settings == null ? ContextAssembler.UserContextSettings.defaults() : settings;
+        } catch (Exception e) {
+            log.debug("loadUserContextSettings failed for user {}: {}", userId, e.getMessage());
+            return ContextAssembler.UserContextSettings.defaults();
+        }
+    }
 
     private List<MemoryFactDto> recallMemories(UUID userId, String query) {
         if (query == null || query.isBlank()) return List.of();

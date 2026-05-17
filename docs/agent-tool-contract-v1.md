@@ -30,6 +30,25 @@ Examples:
 - "show me one photo" should not render eight internal candidates as final
   user-visible results.
 
+## Agent-Native Composability
+
+Agent-facing tools should be composable capabilities, not ordinary thin API
+wrappers and not black-box workflow buttons. A good tool exposes a reusable
+operation that an agent can plan with, inspect, combine, explain, and verify.
+
+Prefer this shape:
+
+```text
+query/search -> inspect/batch inspect -> create selection -> act -> verify
+```
+
+Avoid hiding subjective business judgment inside custom tools such as
+`photos.cleanup_candidates`. Gallery cleanup, for example, should be expressed
+with generic capabilities such as `photos.semantic_search`,
+`photos.get_full_batch`, `media.selection.create`, and a mutating tool such as
+`photos.trash`. The cleanup judgment and explanation belong in the agent/skill
+layer, where the user can see and correct the reasoning.
+
 ## Tool Classes
 
 Each tool should have one primary class.
@@ -38,6 +57,7 @@ Each tool should have one primary class.
 | --- | --- | --- | --- |
 | `search` | Find possible entities | photos, videos, messages, files | read-only |
 | `inspect` | Fetch detail for known entity | full photo, metadata, screenshot | read-only |
+| `selection` | Persist a reviewed working set or ordered subset for follow-up actions | media selection, file set, message set | read-only unless it mutates user data |
 | `act` | Mutate device/app/user state | tap, type, swipe, open app | confirm when sensitive |
 | `verify` | Check current state or action result | dump tree, wait for text | read-only |
 | `meta` | Agent-side helper | skill load, memory recall | read-only |

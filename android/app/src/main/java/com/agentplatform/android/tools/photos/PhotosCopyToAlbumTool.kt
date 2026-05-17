@@ -3,6 +3,7 @@ package com.agentplatform.android.tools.photos
 import android.content.ContentUris
 import android.content.Context
 import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.Dispatchers
@@ -16,9 +17,10 @@ class PhotosCopyToAlbumTool(
 
     override val description: String = """
         Copy existing gallery photos into an album/folder under Pictures without
-        removing the originals. Pass `id` for one photo or `ids` for a batch.
-        This creates new gallery media and can be used to create a non-empty
-        album from existing photos.
+        removing the originals. Pass `id` for one photo, `ids` for a batch, or
+        `selection_id` from media.selection.create for a previously reviewed
+        set. This creates new gallery media and can be used to create a
+        non-empty album from existing photos.
     """.trimIndent()
 
     override val schema: JsonNode = mapper.readTree(
@@ -35,6 +37,10 @@ class PhotosCopyToAlbumTool(
               "items": { "type": "string" },
               "description": "Source photo ids to copy. Maximum 100."
             },
+            "selection_id": {
+              "type": "string",
+              "description": "Reusable photo selection id from media.selection.create."
+            },
             "album": {
               "type": "string",
               "description": "Album/folder name under Pictures."
@@ -47,7 +53,8 @@ class PhotosCopyToAlbumTool(
           "required": ["album"],
           "anyOf": [
             { "required": ["id"] },
-            { "required": ["ids"] }
+            { "required": ["ids"] },
+            { "required": ["selection_id"] }
           ]
         }
         """.trimIndent()
@@ -56,7 +63,7 @@ class PhotosCopyToAlbumTool(
     override val confirmRequired: Boolean = true
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
-        val ids = PhotoMutationHelpers.parseIds(args)
+        val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
         val album = PhotoMutationHelpers.sanitizeAlbum(args.path("album").asText(""))
         val requestedFilename = args.path("filename").asText("").trim().takeIf { ids.size == 1 && it.isNotBlank() }
         val copied = mapper.createArrayNode()
@@ -75,12 +82,24 @@ class PhotosCopyToAlbumTool(
             }
         }
 
-        mapper.createObjectNode().apply {
-            put("ok", failures.size() == 0)
+        val result = mapper.createObjectNode().apply {
+            set<JsonNode>("ids", PhotoMutationHelpers.idsArray(mapper, ids))
             put("album", album)
             set<JsonNode>("copied", copied)
             put("copied_count", copied.size())
             set<JsonNode>("failures", failures)
+            set<JsonNode>("summary", mapper.createObjectNode().apply {
+                put("copied_count", copied.size())
+                put("failure_count", failures.size())
+                put("album", album)
+            })
         }
+        ToolResultEnvelope.applyStandardFields(
+            mapper,
+            this@PhotosCopyToAlbumTool,
+            result,
+            ok = failures.size() == 0,
+            request = args
+        )
     }
 }
