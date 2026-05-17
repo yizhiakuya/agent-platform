@@ -5,6 +5,7 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
 export default function SettingsPage() {
   const [content, setContent] = useState('');
+  const [autoMemoryEnabled, setAutoMemoryEnabled] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -17,6 +18,7 @@ export default function SettingsPage() {
       .then(p => {
         if (cancelled) return;
         setContent(p.content ?? '');
+        setAutoMemoryEnabled(p.autoMemoryEnabled ?? true);
         setUpdatedAt(p.updatedAt);
       })
       .catch((e: unknown) => {
@@ -31,8 +33,9 @@ export default function SettingsPage() {
     setSaveState('saving');
     setSaveError(null);
     try {
-      const updated = await api.updatePreferences(content);
+      const updated = await api.updatePreferences({ content, autoMemoryEnabled });
       setUpdatedAt(updated.updatedAt);
+      setAutoMemoryEnabled(updated.autoMemoryEnabled ?? true);
       setSaveState('saved');
       setTimeout(() => setSaveState(s => (s === 'saved' ? 'idle' : s)), 2000);
     } catch (e) {
@@ -73,19 +76,62 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <div className="flex-1 p-4">
+        <div className="flex-1 space-y-4 p-4">
           {loading && <div className="status-muted">加载中...</div>}
           {loadError && <div className="status-error">加载失败: {loadError}</div>}
 
           {!loading && !loadError && (
-            <textarea
-              value={content}
-              onChange={e => setContent(e.target.value)}
-              rows={22}
-              spellCheck={false}
-              placeholder={'# 关于我\n\n# 偏好\n\n- 用中文回答。\n- 答案尽量简短。\n'}
-              className="field-input mt-0 min-h-[32rem] resize-y font-mono leading-relaxed"
-            />
+            <>
+              <div className="border-b border-slate-200 pb-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div id="auto-memory-title" className="text-sm font-semibold text-slate-950">
+                      自动长期记忆
+                    </div>
+                    <p id="auto-memory-help" className="mt-1 text-sm leading-6 text-slate-500">
+                      开启后会自动召回相关记忆，并在对话后提取可复用事实。关闭后已有记忆保留，手动记忆工具不受影响。
+                    </p>
+                  </div>
+                  <label className="inline-flex shrink-0 items-center gap-3">
+                    <input
+                      id="auto-memory-enabled"
+                      type="checkbox"
+                      role="switch"
+                      checked={autoMemoryEnabled}
+                      onChange={e => setAutoMemoryEnabled(e.target.checked)}
+                      aria-labelledby="auto-memory-title"
+                      aria-describedby="auto-memory-help"
+                      className="peer sr-only"
+                    />
+                    <span
+                      className={[
+                        'relative inline-flex h-7 w-12 rounded-full transition peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 peer-focus:ring-offset-2',
+                        autoMemoryEnabled ? 'bg-blue-600' : 'bg-slate-300'
+                      ].join(' ')}
+                    >
+                      <span
+                        className={[
+                          'absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition',
+                          autoMemoryEnabled ? 'translate-x-5' : ''
+                        ].join(' ')}
+                      />
+                    </span>
+                    <span className="w-10 text-sm font-semibold text-slate-700">
+                      {autoMemoryEnabled ? '开启' : '关闭'}
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <textarea
+                value={content}
+                onChange={e => setContent(e.target.value)}
+                rows={22}
+                spellCheck={false}
+                placeholder={'# 关于我\n\n# 偏好\n\n- 用中文回答。\n- 答案尽量简短。\n'}
+                className="field-input mt-0 min-h-[32rem] resize-y font-mono leading-relaxed"
+              />
+            </>
           )}
         </div>
       </section>
@@ -97,6 +143,7 @@ export default function SettingsPage() {
         </div>
         <div className="space-y-3 bg-slate-50/80 p-4">
           <InfoBlock title="作用范围" body="只影响你的会话，不会修改项目级 prompt 或 packaged skills。" />
+          <InfoBlock title="自动记忆" body="开关只控制自动召回和自动保存。历史记忆不会被删除，手动添加、查看、遗忘记忆仍然可用。" />
           <InfoBlock title="建议内容" body="称呼、默认语气、项目偏好、永远要记住或避免的规则。" />
           <InfoBlock title="格式" body="支持 Markdown。分标题写更容易被模型正确引用。" />
           <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700">

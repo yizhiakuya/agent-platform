@@ -28,6 +28,9 @@ public class UserPreference {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt = OffsetDateTime.now();
 
+    @Column(name = "auto_memory_enabled", nullable = false)
+    private boolean autoMemoryEnabled = true;
+
     public UUID getUserId() { return userId; }
     public void setUserId(UUID userId) { this.userId = userId; }
 
@@ -36,4 +39,9 @@ public class UserPreference {
 
     public OffsetDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(OffsetDateTime updatedAt) { this.updatedAt = updatedAt; }
+
+    public boolean isAutoMemoryEnabled() { return autoMemoryEnabled; }
+    public void setAutoMemoryEnabled(boolean autoMemoryEnabled) {
+        this.autoMemoryEnabled = autoMemoryEnabled;
+    }
 }

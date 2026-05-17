@@ -23,9 +23,11 @@ import com.agentplatform.android.core.ws.decodeJsonRpc
 import com.agentplatform.android.core.ws.JsonRpcError
 import com.agentplatform.android.data.AppPrefs
 import com.agentplatform.android.photos.PhotoIndexUploader
+import com.agentplatform.android.tools.media.MediaSelectionCreateTool
 import com.agentplatform.android.tools.photos.PhotosCopyToAlbumTool
 import com.agentplatform.android.tools.photos.PhotosDeleteTool
 import com.agentplatform.android.tools.photos.PhotosFavoriteTool
+import com.agentplatform.android.tools.photos.PhotosGetFullBatchTool
 import com.agentplatform.android.tools.photos.PhotosGetFullTool
 import com.agentplatform.android.tools.photos.PhotosGetMetadataTool
 import com.agentplatform.android.tools.photos.PhotosListAlbumsTool
@@ -98,12 +100,14 @@ class AgentForegroundService : Service() {
         toolRegistry.register(PhotosListRecentTool(applicationContext, mapper))
         toolRegistry.register(PhotosGetMetadataTool(applicationContext, mapper))
         toolRegistry.register(PhotosGetFullTool(applicationContext, mapper))
+        toolRegistry.register(PhotosGetFullBatchTool(applicationContext, mapper))
         toolRegistry.register(PhotosListAlbumsTool(applicationContext, mapper))
         toolRegistry.register(PhotosListByAlbumTool(applicationContext, mapper))
         toolRegistry.register(PhotosListFavoritesTool(applicationContext, mapper))
         toolRegistry.register(PhotosListTrashTool(applicationContext, mapper))
         toolRegistry.register(PhotosRecentScreenshotsTool(applicationContext, mapper))
         toolRegistry.register(PhotosSemanticCandidatesTool(applicationContext, mapper))
+        toolRegistry.register(MediaSelectionCreateTool(applicationContext, mapper))
         toolRegistry.register(PhotosSaveToGalleryTool(applicationContext, mapper))
         toolRegistry.register(PhotosRenameTool(applicationContext, mapper))
         toolRegistry.register(PhotosMoveToAlbumTool(applicationContext, mapper))

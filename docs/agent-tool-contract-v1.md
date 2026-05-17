@@ -10,12 +10,16 @@ This document defines the first project-level standard for agent-facing tools.
 ## Goals
 
 - Make tool behavior predictable for the model.
-- Encode user intent in parameters instead of relying on prompt guessing.
+- Encode reusable constraints and intent signals in parameters instead of
+  relying on prompt guessing.
 - Separate recall candidates from confirmed results.
 - Make frontend rendering deterministic after live streaming and history replay.
 - Preserve auditability: every important choice should be visible in args or
   result metadata.
 - Put safety at the tool boundary, not only in system prompts.
+- Keep subjective or business-specific decisions in the agent/skill layer.
+  Tools provide capabilities and state; skills orchestrate workflows; the
+  agent inspects, judges, explains, and confirms.
 
 ## Core Rule
 
@@ -30,6 +34,15 @@ Examples:
 - "show me one photo" should not render eight internal candidates as final
   user-visible results.
 
+Agent-native does not mean "one business button per user task". Avoid both
+thin low-level API wrappers and black-box workflow tools. Prefer composable
+primitives that let the agent gather evidence, batch-inspect results, create a
+stable selection, perform a confirmed action, and verify the outcome. For
+example, gallery cleanup should be expressed as `photos.query`,
+`photos.get_full_batch`, `media.selection.create`, and `photos.trash`, with the
+cleanup judgment made and explained by the agent rather than hidden inside a
+`photos.cleanup_candidates` classifier.
+
 ## Tool Classes
 
 Each tool should have one primary class.
@@ -38,6 +51,7 @@ Each tool should have one primary class.
 | --- | --- | --- | --- |
 | `search` | Find possible entities | photos, videos, messages, files | read-only |
 | `inspect` | Fetch detail for known entity | full photo, metadata, screenshot | read-only |
+| `selection` | Persist a reviewed working set or ordered subset for follow-up actions | media selection, file set, message set | read-only unless it mutates user data |
 | `act` | Mutate device/app/user state | tap, type, swipe, open app | confirm when sensitive |
 | `verify` | Check current state or action result | dump tree, wait for text | read-only |
 | `meta` | Agent-side helper | skill load, memory recall | read-only |

@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import com.agentplatform.android.media.MediaStoreRequestBridge
+import com.agentplatform.android.tools.media.MediaSelectionStore
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
@@ -28,14 +29,29 @@ internal object PhotoMutationHelpers {
     )
 
     fun parseIds(args: JsonNode): List<Long> {
+        return parseIds(args, emptyList())
+    }
+
+    fun parseIds(context: Context, mapper: ObjectMapper, args: JsonNode): List<Long> {
+        val selectionId = args.path("selection_id").asText("").trim()
+        val selectedIds = if (selectionId.isBlank()) {
+            emptyList()
+        } else {
+            MediaSelectionStore(context, mapper).resolveIds(selectionId, "photo")
+        }
+        return parseIds(args, selectedIds)
+    }
+
+    private fun parseIds(args: JsonNode, extraIds: List<String>): List<Long> {
         val raw = mutableListOf<String>()
         val idsNode = args.get("ids")
         if (idsNode != null && idsNode.isArray) {
             idsNode.forEach { raw += it.asText("").trim() }
         }
         args.get("id")?.asText("")?.trim()?.takeIf { it.isNotBlank() }?.let { raw += it }
+        raw += extraIds
         val ids = raw.mapNotNull { it.toLongOrNull() }.distinct()
-        require(ids.isNotEmpty()) { "id or ids is required" }
+        require(ids.isNotEmpty()) { "id, ids, or selection_id is required" }
         require(ids.size <= MAX_BATCH) { "at most $MAX_BATCH photos can be changed at once" }
         return ids
     }

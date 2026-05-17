@@ -1128,12 +1128,12 @@ function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
         endIndex: segmentStart + finalAssistantOffset - 1
       });
     }
+    pushVisibleToolResults(items, processEvents, segmentStart);
     items.push({
       kind: 'event',
       event: segment[finalAssistantOffset],
       index: segmentStart + finalAssistantOffset
     });
-    pushVisibleToolResults(items, processEvents, segmentStart);
 
     const trailing = segment.slice(finalAssistantOffset + 1);
     if (trailing.length > 0) {
@@ -1704,7 +1704,11 @@ function ProcessPanel({
                 <code className="tool-chip">{ev.data?.tool}</code>
                 <span>返回结果</span>
               </div>
-              <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} />
+              {shouldShowToolResultOutsideProcess(ev) ? (
+                <ToolResultExternalSummary ev={ev} />
+              ) : (
+                <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} />
+              )}
             </div>
           ) : ev.type === 'assistant_message' ? (
             <div key={`note-${item.startIndex}-${index}`} className="assistant-card">
@@ -1752,6 +1756,34 @@ function ToolCallDetail({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: Chat
       </div>
     </div>
   );
+}
+
+function ToolResultExternalSummary({ ev }: { ev: ChatEvent }) {
+  const count = visibleToolResultCount(ev);
+  return (
+    <div className="flex min-w-0 items-center gap-2 text-xs text-slate-500">
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />
+      <span className="min-w-0 truncate">
+        结果已在对话中单独展示{count ? ` · ${count} 项` : ''}
+      </span>
+    </div>
+  );
+}
+
+function visibleToolResultCount(ev: ChatEvent): number | null {
+  const result = ev.data?.result;
+  const media = standardToolMedia(result);
+  if (media?.mode === 'primary') return 1;
+  if (media?.mode === 'grid' || media?.mode === 'collapsed') return media.items.length;
+
+  const tool = ev.data?.tool;
+  if (tool === 'photos.get_full' && hasPhotoImage(result)) return 1;
+  if ((isPhotoListTool(tool) || tool === 'photos.semantic_search') && Array.isArray(result?.photos)) {
+    return result.photos.length;
+  }
+  if (tool === 'videos.list_recent' && Array.isArray(result?.videos)) return result.videos.length;
+  const items = toolResultItems(result);
+  return items.length > 0 ? items.length : null;
 }
 
 function VisibleToolResult({ ev, onOpenImage }: { ev: ChatEvent; onOpenImage: OpenImage }) {
@@ -2263,6 +2295,9 @@ function needsAuthenticatedFetch(src: string) {
 }
 
 function semanticPrimaryPhoto(result: any) {
+  const media = displayMediaItems(result);
+  const firstMedia = media.find(item => hasPhotoImage(item));
+  if (firstMedia) return firstMedia;
   const primary = result?.primary_image ?? result?.primaryImage ?? result?.primary;
   const candidate = primary?.result ?? primary;
   return hasPhotoImage(candidate) ? candidate : null;
@@ -2274,13 +2309,14 @@ function standardToolMedia(result: unknown): StandardToolMedia | null {
   const candidateOnly = Boolean(asRecord(result)?.candidate_only);
   const primary = primaryToolImage(result);
   const items = toolResultItems(result).filter(item => asRecord(item));
+  const imageItems = items.filter(item => hasPhotoImage(item));
+
+  if ((policy === 'show_grid' || (policy === 'show_primary' && imageItems.length > 1)) && imageItems.length > 0) {
+    return { mode: 'grid', items: imageItems };
+  }
 
   if (policy === 'show_primary' && primary) {
     return { mode: 'primary', primary };
-  }
-
-  if (policy === 'show_grid' && hasAnyPhotoImage(items)) {
-    return { mode: 'grid', items };
   }
 
   if (policy === 'collapsed_candidates' || candidateOnly) {
@@ -2320,6 +2356,8 @@ function primaryToolImage(result: unknown): any | null {
 function toolResultItems(result: unknown): any[] {
   const r = asRecord(result);
   const values = [
+    r?.display_media,
+    r?.displayMedia,
     r?.items,
     r?.photos,
     r?.results,
@@ -2329,6 +2367,12 @@ function toolResultItems(result: unknown): any[] {
     if (Array.isArray(value)) return value;
   }
   return [];
+}
+
+function displayMediaItems(result: unknown): any[] {
+  const r = asRecord(result);
+  const value = r?.display_media ?? r?.displayMedia;
+  return Array.isArray(value) ? value : [];
 }
 
 function toolResultSummary(result: unknown): string | null {
@@ -2348,8 +2392,18 @@ function hasPhotoImage(photo: unknown) {
 function photoImageSources(photo: unknown) {
   const p = asRecord(photo);
   if (!p) return { big: null, small: null };
-  const uploadUrl = uploadAssetUrl(p.asset_id ?? p.assetId);
+  const uploadUrl = isPhotoIndexAsset(p) ? null : uploadAssetUrl(p.asset_id ?? p.assetId);
+  const thumbB64 = imageDataUrl(p.preview_b64 ?? p.thumb_b64 ?? p.thumbnail_b64 ?? p.cover_thumb_b64);
+  const bigB64 = imageDataUrl(
+    p.full_b64 ??
+    p.image_b64 ??
+    p.vision_b64 ??
+    p.image_base64 ??
+    p.cover_image_b64 ??
+    p.cover_b64
+  );
   const bigUrl = firstImageUrl(
+    p.full_url,
     p.image_url,
     p.asset_url,
     p.url,
@@ -2362,6 +2416,7 @@ function photoImageSources(photo: unknown) {
     p.coverUrl
   );
   const smallUrl = firstImageUrl(
+    p.preview_url,
     p.thumb_url,
     p.thumbnail_url,
     p.cover_thumb_url,
@@ -2371,17 +2426,13 @@ function photoImageSources(photo: unknown) {
     p.coverThumbUrl,
     p.coverThumbnailUrl
   );
-  const bigB64 = imageDataUrl(
-    p.image_b64 ??
-    p.vision_b64 ??
-    p.image_base64 ??
-    p.cover_image_b64 ??
-    p.cover_b64 ??
-    p.full_b64
-  );
-  const big = bigUrl ?? bigB64;
-  const small = smallUrl ?? big ?? imageDataUrl(p.thumb_b64 ?? p.thumbnail_b64 ?? p.cover_thumb_b64);
+  const big = bigUrl ?? bigB64 ?? thumbB64;
+  const small = smallUrl ?? thumbB64 ?? big;
   return { big, small };
+}
+
+function isPhotoIndexAsset(photo: Record<string, any>) {
+  return photo.source === 'photo_index' || photo.match_reason === 'photo_index_embedding';
 }
 
 function uploadAssetUrl(value: unknown): string | null {

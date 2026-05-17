@@ -41,3 +41,26 @@ This project is indexed by GitNexus as **agent-platform** (5870 symbols, 14354 r
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+## Agent Tool Design
+
+- Design tools as agent action surfaces, not ordinary backend APIs and not
+  black-box business buttons. A good tool exposes composable capabilities,
+  structured state, stable handles, display policy, safety/confirmation
+  behavior, and replayable references. Keep subjective or business-specific
+  judgment in the agent/skill layer: tools provide capability and state, skills
+  orchestrate workflow, and the agent inspects, judges, explains, and asks for
+  confirmation.
+- Avoid both extremes: thin CRUD/list/get/delete wrappers that force the agent
+  into slow mechanical loops, and overly custom tools that hide the reasoning
+  behind one business action such as "cleanup candidates". Prefer reusable
+  primitives such as query/search, batch inspect, selection/set creation,
+  action-by-id-or-selection, and verify.
+
+## Product Quality Bar
+
+- Do not ship "MVP-only" implementations for user-facing or agent-facing
+  features unless the user explicitly asks for a throwaway prototype. Build to
+  the actual business workflow and expected standard: complete controls and
+  states, durable contracts, sensible edge-case handling, verification, and an
+  experience that feels fit for real use rather than a thin demo.

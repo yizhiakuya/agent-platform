@@ -2,8 +2,10 @@ package com.agentplatform.agent.ai;
 
 import com.agentplatform.agent.client.InternalChatFeignClient;
 import com.agentplatform.agent.config.AgentProperties;
+import com.agentplatform.agent.chat.SseEvent;
 import com.agentplatform.api.chat.PhotoAssetSearchRequest;
 import com.agentplatform.api.chat.PhotoAssetSearchResult;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
@@ -239,6 +241,12 @@ class SemanticPhotoSearchFormattingTest {
         assertEquals(1, out.path("photos").size());
         assertEquals("photo-0", out.path("photos").get(0).path("id").asText());
         assertTrue(out.path("photos").get(0).has("thumb_b64"));
+        assertEquals("show_primary", out.path("display").path("policy").asText());
+        assertEquals(1, out.path("display_media").size());
+        assertEquals("image", out.path("display_media").get(0).path("kind").asText());
+        assertEquals("photo-0", out.path("display_media").get(0).path("id").asText());
+        assertEquals("/9j/thumb0", out.path("display_media").get(0).path("preview_b64").asText());
+        assertEquals("photos.get_full", out.path("display_media").get(0).path("open_tool").asText());
         assertFalse(out.has("review_candidates"));
         assertEquals("photos.get_full", out.path("next").path("recommended_tool").asText());
         assertEquals("photo-0", out.path("next").path("args").path("id").asText());
@@ -308,6 +316,7 @@ class SemanticPhotoSearchFormattingTest {
                     0.9d));
         });
         SemanticPhotoSearchCallback callback = indexedCallback(photoEmbeddingService, chat);
+        AtomicReference<SseEvent> resultEvent = new AtomicReference<>();
 
         ObjectNode args = mapper.createObjectNode();
         args.put("query", "latest cat");
@@ -318,13 +327,27 @@ class SemanticPhotoSearchFormattingTest {
         args.put("sort_by", "date_taken");
         args.put("sort_direction", "desc");
 
-        ExecutionResult out = callback.executeJsonToolUse(args, userId, UUID.randomUUID(), null);
+        ExecutionResult out = callback.executeJsonToolUse(args, userId, UUID.randomUUID(), event -> {
+            if ("tool_call_result".equals(event.type())) {
+                resultEvent.set(event);
+            }
+        });
         PhotoAssetSearchRequest req = captured.get();
 
         assertEquals(1, req.resultLimit());
         assertEquals("mm", req.nameContains());
         assertEquals(50, req.topK());
         assertFalse(out.jsonText().contains("review_candidates"));
+        assertFalse(out.jsonText().contains("display_media"));
+
+        JsonNode result = resultEvent.get().data().path("result");
+        assertEquals("show_primary", result.path("display").path("policy").asText());
+        assertEquals(1, result.path("display_media").size());
+        assertEquals("image", result.path("display_media").get(0).path("kind").asText());
+        assertEquals("media-1", result.path("display_media").get(0).path("media_store_id").asText());
+        assertEquals("/9j/thumb", result.path("display_media").get(0).path("preview_b64").asText());
+        assertTrue(result.path("display_media").get(0).hasNonNull("photo_asset_id"));
+        assertEquals("photos.get_full", result.path("display_media").get(0).path("open_tool").asText());
     }
 
     @Test

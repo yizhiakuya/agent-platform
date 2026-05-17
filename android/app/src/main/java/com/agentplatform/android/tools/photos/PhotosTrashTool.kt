@@ -18,8 +18,9 @@ class PhotosTrashTool(
 
     override val description: String = """
         Move existing gallery photos to Android's trash/recycle bin. Pass `id`
-        for one photo or `ids` for a batch. Use photos.restore to restore
-        trashed photos. Requires Android 11+.
+        for one photo, `ids` for a batch, or `selection_id` from
+        media.selection.create after the agent has inspected and selected a
+        set. Use photos.restore to restore trashed photos. Requires Android 11+.
     """.trimIndent()
 
     override val schema: JsonNode = mapper.readTree(
@@ -35,11 +36,16 @@ class PhotosTrashTool(
               "type": "array",
               "items": { "type": "string" },
               "description": "Photo ids. Maximum 100."
+            },
+            "selection_id": {
+              "type": "string",
+              "description": "Selection id returned by media.selection.create. The selection must contain photo items."
             }
           },
           "anyOf": [
             { "required": ["id"] },
-            { "required": ["ids"] }
+            { "required": ["ids"] },
+            { "required": ["selection_id"] }
           ]
         }
         """.trimIndent()
@@ -51,7 +57,7 @@ class PhotosTrashTool(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             throw UnsupportedOperationException("trash requires Android 11 or newer")
         }
-        val ids = PhotoMutationHelpers.parseIds(args)
+        val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
         val uris = ids.map { PhotoMutationHelpers.photoUri(it) }
         val approved = MediaStoreRequestBridge.request(
             context,

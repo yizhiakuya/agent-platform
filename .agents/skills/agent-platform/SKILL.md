@@ -43,7 +43,7 @@ description: Project skill for D:\agent-platform, a self-hosted mobile agent pla
 | Semantic photo search noisy or wrong | `PhotosSemanticCandidatesTool.kt` + `SemanticPhotoSearchCallback.java` + `skills/photos-search/SKILL.md` + `ChatPage.tsx` |
 | Provider/model routing | `AgentBeans`, `CodexResponsesLoopRunner`, `.env`, server `agent-platform-agent` logs |
 | Background LLM / LangChain4j | `LangChain4jModelFactory`, `RoutingBackgroundChatModel`, `BackgroundFactExtractor`, `SessionSummarizer`, `BackgroundLlmClient`, `EmbeddingService` |
-| GHCR / megumin deploy | local Docker build + push, then `ssh root@192.168.0.109` and `/opt/agent-platform` |
+| GHCR / megumin deploy | build artifacts with the local toolchain first; Docker/compose is only for packaging or running already-built artifacts, then `ssh root@192.168.0.109` and `/opt/agent-platform` |
 
 ## Adding a new device tool (the canonical workflow)
 
@@ -195,13 +195,43 @@ Add a new interceptor by creating a `@Component implements ToolPreInterceptor` �
 10. `agent-service/src/main/java/com/agentplatform/agent/ai/{LangChain4jModelFactory,RoutingBackgroundChatModel,BackgroundFactExtractor,SessionSummarizer,BackgroundLlmClient,EmbeddingService}.java` — LangChain4j background LLM + embedding integration.
 11. `docker-compose.yml` + `docker-compose.ghcr.yml` + `infra/postgres/init/02-pgvector.sh` + `infra/caddy/Caddyfile` — deployment.
 
-## Local dev quick start
+## Canonical local build workflow
 
-```bash
-cp .env.example .env  # fill in ANTHROPIC_API_KEY, JWT_SECRET (openssl rand -base64 64), DB passwords
-./mvnw clean package -DskipTests
-docker compose --profile default up -d --build
+Default to the local build environment. Do not use Docker as the build runner for Java, Web, or Android unless the user explicitly asks for containerized builds.
+
+PowerShell from `D:\agent-platform`:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+.\mvnw.cmd clean package -DskipTests
 ```
+
+Targeted Java tests:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+.\mvnw.cmd "-pl" "common,auth-service,agent-service" "-am" "-Dtest=UserPreferenceServiceTest,ChatServiceAutoMemoryPreferenceTest,ChatServiceProviderFailoverTest,ContextAssemblerTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+```
+
+Web build from `D:\agent-platform\web`:
+
+```powershell
+corepack pnpm install --frozen-lockfile
+corepack pnpm build
+```
+
+Android APK build from `D:\agent-platform\android`:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot'
+$env:ANDROID_HOME = 'C:\Users\admin\AppData\Local\Android\Sdk'
+$env:Path = "$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat assembleDebug
+```
+
+Docker compose is for runtime infrastructure and deployment only. Use it to run Postgres/Nacos/services or to restart already-built images; do not use `docker compose up --build`, `docker run maven...`, or Dockerfile build stages as the normal way to compile/test this repo.
 
 Web at `http://localhost` (or whatever `WEB_PUBLIC_URL` is); first user registers via UI; create a device enrollment from the Devices page; install `app-debug.apk` on Android, scan QR, grant notification + media permissions.
 
@@ -210,7 +240,8 @@ Web at `http://localhost` (or whatever `WEB_PUBLIC_URL` is); first user register
 - Before deployment or image builds, run `git status --short` and keep the worktree clean. If there are pending changes, either commit them in a named branch or intentionally stash/park them before building, so a deploy never accidentally includes unrelated dirty worktree changes.
 - If GitNexus itself has a problem (MCP/CLI call fails, tool is unavailable, index is stale/broken, or impact/change detection cannot run), stop the current business task and fix GitNexus first. Run `npx gitnexus analyze` when needed, repair/restart the MCP/CLI path if needed, and verify GitNexus works before continuing code, deploy, or debugging work.
 - Before editing code symbols, follow `AGENTS.md`: run GitNexus impact analysis and warn if risk is HIGH/CRITICAL. Before committing, run `gitnexus_detect_changes()`.
-- Web changes: run `npm run build` in `web/`. When online deployment is available, prefer deploying and testing the live web environment directly after a successful build; use local mocked previews only when live validation is unavailable or risk isolation is needed.
+- Java changes: use the local Maven wrapper `.\mvnw.cmd` from the repository root with JDK 21. Do not use Gradle for backend services; this is a Maven multi-module backend.
+- Web changes: run `corepack pnpm build` in `web/` because `package.json` pins `pnpm@9.15.9`. When online deployment is available, prefer deploying and testing the live web environment directly after a successful build; use local mocked previews only when live validation is unavailable or risk isolation is needed.
 - Android ADB path on this machine is `C:\Users\admin\AppData\Local\Android\Sdk\platform-tools\adb.exe`; `adb` is not necessarily on PATH.
 - After installing the Android APK via ADB, always grant/check Agent Platform permissions before handing back. Grant runtime permissions with `pm grant com.agentplatform.android android.permission.POST_NOTIFICATIONS`, `CAMERA`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`, and `READ_MEDIA_VISUAL_USER_SELECTED`; set relevant appops to `allow` for `POST_NOTIFICATION`, `CAMERA`, media reads, `SYSTEM_ALERT_WINDOW`, `USE_FULL_SCREEN_INTENT`, `START_FOREGROUND`, background run ops, and `WAKE_LOCK`; whitelist battery with `dumpsys deviceidle whitelist +com.agentplatform.android`. Then confirm/enable accessibility (`com.agentplatform.android/com.agentplatform.android.ui.accessibility.UiAccessibilityService`), preserving existing enabled services, and verify with `settings get secure enabled_accessibility_services`, `dumpsys package com.agentplatform.android`, and `appops get com.agentplatform.android`.
 - For Xiaomi/HyperOS background-launch blocks, grant standard appops plus MIUI private numeric ops for `com.agentplatform.android`: `10004 10017 10018 10020 10021 10022 10045`. Do not use the displayed names like `MIUIOP(10021)` in `appops set`; they are only display labels and Android rejects them.
@@ -220,26 +251,29 @@ Web at `http://localhost` (or whatever `WEB_PUBLIC_URL` is); first user register
 - APK install preference: first check whether the user says they are local with USB/ADB or outside. If a device is connected through ADB, install with ADB and enable accessibility; do not publish or provide the APK download URL. If the user says they are outside / have no ADB, copy `android/app/build/outputs/apk/debug/app-debug.apk` to `build/apk-local-server/agent-platform-debug.apk`, run or reuse `python -m http.server 53095 --bind 0.0.0.0` from `build/apk-local-server`, and provide `http://home.rainaki.top:53095/agent-platform-debug.apk`.
 - Mobile voice/local model direction was removed at the user's request. Do not re-add Qwen/Gemma on-device LLM routing, model download UI, microphone permission, or Voice Agent UI unless the user explicitly asks to bring that feature back.
 - For quote-heavy Android shell edits, pipe a script into `adb shell run-as com.agentplatform.android sh`; PowerShell plus inline `adb shell ... sh -c` quoting is fragile and can corrupt commands.
-- Agent-service targeted tests from Windows/Docker:
+- Agent-service targeted tests from Windows:
 
 ```powershell
-docker run --rm -v ${PWD}:/workspace -v ${env:USERPROFILE}/.m2:/root/.m2 -w /workspace maven:3.9.9-eclipse-temurin-21 sh -lc './mvnw -pl agent-service -am "-Dtest=PhotoToolArgsSanitizerTest,SemanticPhotoSearchFormattingTest" -Dsurefire.failIfNoSpecifiedTests=false test'
+$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+.\mvnw.cmd "-pl" "agent-service" "-am" "-Dtest=PhotoToolArgsSanitizerTest,SemanticPhotoSearchFormattingTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
 ```
 
-- Full Java packaging can use `Dockerfile.spring`; Android compile needs local Android SDK or an Android SDK image.
+- Treat `Dockerfile.spring` and `web/Dockerfile` as legacy/container packaging references, not the canonical build path. They run Maven/pnpm inside Docker and can re-download dependencies or fail on image/network issues. For normal work, build locally first.
 - `git diff --check` is useful, but CRLF warnings in unrelated files may be pre-existing. Fix only files touched for the current task.
 
-## Preferred GHCR deploy flow
+## Preferred local-build deploy flow
 
-The user prefers local Docker builds, GHCR push, then server pull/update. If local Docker is stopped, tell the user to start Docker instead of falling back to slow server builds.
+The user prefers local environment builds. For deployment, compile/test with local Maven/pnpm/Android SDK first. If a container image is required for GHCR, package already-built `target/*.jar` or `web/dist` artifacts; do not use Docker as the dependency-resolving build environment.
 
 ```powershell
-docker build --build-arg SERVICE=agent-service -f Dockerfile.spring -t agent-platform-agent-service:latest .
-docker build -t agent-platform-web:latest ./web
-docker tag agent-platform-agent-service:latest ghcr.io/yizhiakuya/agent-platform-agent-service:<tag>
-docker tag agent-platform-web:latest ghcr.io/yizhiakuya/agent-platform-web:<tag>
-docker push ghcr.io/yizhiakuya/agent-platform-agent-service:<tag>
-docker push ghcr.io/yizhiakuya/agent-platform-web:<tag>
+$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+.\mvnw.cmd "-pl" "common,auth-service,agent-service,chat-service,gateway,device-hub-service" "-am" -DskipTests package
+Push-Location web
+corepack pnpm install --frozen-lockfile
+corepack pnpm build
+Pop-Location
 ```
 
 Megumin deploy shortcut when remote compose has only local image names:

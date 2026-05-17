@@ -78,6 +78,51 @@ class PhotoToolArgsSanitizerTest {
         assertFalse(out.has("date_before"));
     }
 
+    @Test
+    void capsHeavyPhotoListLimits() {
+        ObjectNode args = mapper.createObjectNode();
+        args.put("limit", 30);
+
+        JsonNode out = sanitizer.before(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                spec("photos.list_recent"),
+                args,
+                Map.of());
+
+        assertEquals(8, out.path("limit").asInt());
+    }
+
+    @Test
+    void capsRecentScreenshotLimits() {
+        ObjectNode args = mapper.createObjectNode();
+        args.put("limit", 20);
+
+        JsonNode out = sanitizer.before(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                spec("photos.recent_screenshots"),
+                args,
+                Map.of());
+
+        assertEquals(8, out.path("limit").asInt());
+    }
+
+    @Test
+    void leavesVideoLimitUncapped() {
+        ObjectNode args = mapper.createObjectNode();
+        args.put("limit", 30);
+
+        JsonNode out = sanitizer.before(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                spec("videos.list_recent"),
+                args,
+                Map.of());
+
+        assertEquals(30, out.path("limit").asInt());
+    }
+
     private ToolSpec spec(String name) {
         return new ToolSpec(name, "test", mapper.createObjectNode(), false);
     }
