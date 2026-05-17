@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.provider.MediaStore
 import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.media.MediaStoreRequestBridge
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -18,8 +19,9 @@ class PhotosTrashTool(
 
     override val description: String = """
         Move existing gallery photos to Android's trash/recycle bin. Pass `id`
-        for one photo or `ids` for a batch. Use photos.restore to restore
-        trashed photos. Requires Android 11+.
+        for one photo, `ids` for a batch, or `selection_id` from
+        media.selection.create for a previously reviewed set. Use
+        photos.restore to restore trashed photos. Requires Android 11+.
     """.trimIndent()
 
     override val schema: JsonNode = mapper.readTree(
@@ -35,11 +37,16 @@ class PhotosTrashTool(
               "type": "array",
               "items": { "type": "string" },
               "description": "Photo ids. Maximum 100."
+            },
+            "selection_id": {
+              "type": "string",
+              "description": "Reusable photo selection id from media.selection.create."
             }
           },
           "anyOf": [
             { "required": ["id"] },
-            { "required": ["ids"] }
+            { "required": ["ids"] },
+            { "required": ["selection_id"] }
           ]
         }
         """.trimIndent()
@@ -51,7 +58,7 @@ class PhotosTrashTool(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             throw UnsupportedOperationException("trash requires Android 11 or newer")
         }
-        val ids = PhotoMutationHelpers.parseIds(args)
+        val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
         val uris = ids.map { PhotoMutationHelpers.photoUri(it) }
         val approved = MediaStoreRequestBridge.request(
             context,
@@ -60,11 +67,15 @@ class PhotosTrashTool(
         )
         if (!approved) throw SecurityException("Android media trash confirmation rejected")
 
-        mapper.createObjectNode().apply {
-            put("ok", true)
+        val result = mapper.createObjectNode().apply {
             set<JsonNode>("ids", PhotoMutationHelpers.idsArray(mapper, ids))
             put("trashed", true)
             put("affected_count", ids.size)
+            set<JsonNode>("summary", mapper.createObjectNode().apply {
+                put("affected_count", ids.size)
+                put("trashed", true)
+            })
         }
+        ToolResultEnvelope.applyStandardFields(mapper, this@PhotosTrashTool, result, ok = true, request = args)
     }
 }

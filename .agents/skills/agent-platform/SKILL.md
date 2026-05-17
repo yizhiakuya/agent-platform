@@ -202,7 +202,7 @@ Default to the local build environment. Do not use Docker as the build runner fo
 PowerShell from `D:\agent-platform`:
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot'
+$env:JAVA_HOME = 'D:\Apps\Temurin\jdk-21'
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 .\mvnw.cmd clean package -DskipTests
 ```
@@ -210,7 +210,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 Targeted Java tests:
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot'
+$env:JAVA_HOME = 'D:\Apps\Temurin\jdk-21'
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 .\mvnw.cmd "-pl" "agent-service" "-am" "-Dtest=PhotoToolArgsSanitizerTest,SemanticPhotoSearchFormattingTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
 ```
@@ -224,7 +224,7 @@ npm run build
 Android APK build from `D:\agent-platform\android`:
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot'
+$env:JAVA_HOME = 'D:\Apps\Temurin\jdk-21'
 $env:ANDROID_HOME = 'C:\Users\admin\AppData\Local\Android\Sdk'
 $env:Path = "$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
 .\gradlew.bat assembleDebug
@@ -242,7 +242,7 @@ Web at `http://localhost` (or whatever `WEB_PUBLIC_URL` is); first user register
 - Android ADB path on this machine is `C:\Users\admin\AppData\Local\Android\Sdk\platform-tools\adb.exe`; `adb` is not necessarily on PATH.
 - After installing the Android APK via ADB, always grant/check Agent Platform permissions before handing back. Grant runtime permissions with `pm grant com.agentplatform.android android.permission.POST_NOTIFICATIONS`, `CAMERA`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`, and `READ_MEDIA_VISUAL_USER_SELECTED`; set relevant appops to `allow` for `POST_NOTIFICATION`, `CAMERA`, media reads, `SYSTEM_ALERT_WINDOW`, `USE_FULL_SCREEN_INTENT`, `START_FOREGROUND`, background run ops, and `WAKE_LOCK`; whitelist battery with `dumpsys deviceidle whitelist +com.agentplatform.android`. Then confirm/enable accessibility (`com.agentplatform.android/com.agentplatform.android.ui.accessibility.UiAccessibilityService`), preserving existing enabled services, and verify with `settings get secure enabled_accessibility_services`, `dumpsys package com.agentplatform.android`, and `appops get com.agentplatform.android`.
 - For Xiaomi/HyperOS background-launch blocks, grant standard appops plus MIUI private numeric ops for `com.agentplatform.android`: `10004 10017 10018 10020 10021 10022 10045`. Do not use the displayed names like `MIUIOP(10021)` in `appops set`; they are only display labels and Android rejects them.
-- Android builds should use process-local `JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot` and `ANDROID_HOME=C:\Users\admin\AppData\Local\Android\Sdk`. Do not use `C:\Users\admin\.jdks\openjdk-26`; Gradle/AGP fails with a bare `* What went wrong: 26`. The older `C:\Users\admin\.jdks\ms-21.0.10` path may not exist on this machine.
+- Android builds should use process-local `JAVA_HOME=D:\Apps\Temurin\jdk-21` and `ANDROID_HOME=C:\Users\admin\AppData\Local\Android\Sdk`. Do not use `C:\Users\admin\.jdks\openjdk-26`; Gradle/AGP fails with a bare `* What went wrong: 26`. The older `C:\Users\admin\.jdks\ms-21.0.10` path may not exist on this machine.
 - The Android Gradle wrapper lives under `android/`, not the repository root. Run `.\gradlew.bat assembleDebug` with `workdir=D:\agent-platform\android`.
 - After changing accessibility service config or UI tools, install with `adb install -r -d -t android/app/build/outputs/apk/debug/app-debug.apk`, start `com.agentplatform.android/.ui.MainActivity`, then verify `settings get secure enabled_accessibility_services`, `settings get secure accessibility_enabled`, and `dumpsys accessibility` show `UiAccessibilityService` bound. If a tool manifest changed, restart the app/foreground service so the phone re-registers tools over WebSocket.
 - APK install preference: first check whether the user says they are local with USB/ADB or outside. If a device is connected through ADB, install with ADB and enable accessibility; do not publish or provide the APK download URL. If the user says they are outside / have no ADB, copy `android/app/build/outputs/apk/debug/app-debug.apk` to `build/apk-local-server/agent-platform-debug.apk`, run or reuse `python -m http.server 53095 --bind 0.0.0.0` from `build/apk-local-server`, and provide `http://home.rainaki.top:53095/agent-platform-debug.apk`.
@@ -251,7 +251,7 @@ Web at `http://localhost` (or whatever `WEB_PUBLIC_URL` is); first user register
 - Agent-service targeted tests from Windows:
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot'
+$env:JAVA_HOME = 'D:\Apps\Temurin\jdk-21'
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 .\mvnw.cmd "-pl" "agent-service" "-am" "-Dtest=PhotoToolArgsSanitizerTest,SemanticPhotoSearchFormattingTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
 ```
@@ -264,7 +264,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 Always build/test locally first. If deployment needs GHCR, package already-built `target/*.jar` or `web/dist` artifacts into an image. Do not use Docker as the dependency-resolving build environment.
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot'
+$env:JAVA_HOME = 'D:\Apps\Temurin\jdk-21'
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 .\mvnw.cmd "-pl" "common,auth-service,agent-service,chat-service,gateway,device-hub-service" "-am" -DskipTests package
 Push-Location web

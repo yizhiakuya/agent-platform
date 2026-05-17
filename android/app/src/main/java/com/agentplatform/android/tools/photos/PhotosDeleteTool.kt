@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.provider.MediaStore
 import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.media.MediaStoreRequestBridge
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -19,7 +20,8 @@ class PhotosDeleteTool(
     override val description: String = """
         Permanently delete existing gallery photos. Prefer photos.trash when the
         user did not explicitly ask for permanent deletion. Pass `id` for one
-        photo or `ids` for a batch.
+        photo, `ids` for a batch, or `selection_id` from media.selection.create
+        for a previously reviewed set.
     """.trimIndent()
 
     override val schema: JsonNode = mapper.readTree(
@@ -35,11 +37,16 @@ class PhotosDeleteTool(
               "type": "array",
               "items": { "type": "string" },
               "description": "Photo ids. Maximum 100."
+            },
+            "selection_id": {
+              "type": "string",
+              "description": "Reusable photo selection id from media.selection.create."
             }
           },
           "anyOf": [
             { "required": ["id"] },
-            { "required": ["ids"] }
+            { "required": ["ids"] },
+            { "required": ["selection_id"] }
           ]
         }
         """.trimIndent()
@@ -48,7 +55,7 @@ class PhotosDeleteTool(
     override val confirmRequired: Boolean = true
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
-        val ids = PhotoMutationHelpers.parseIds(args)
+        val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val approved = MediaStoreRequestBridge.request(
                 context,
@@ -58,11 +65,14 @@ class PhotosDeleteTool(
                 )
             )
             if (!approved) throw SecurityException("Android media delete confirmation rejected")
-            mapper.createObjectNode().apply {
-                put("ok", true)
+            val result = mapper.createObjectNode().apply {
                 set<JsonNode>("ids", PhotoMutationHelpers.idsArray(mapper, ids))
                 put("deleted_count", ids.size)
+                set<JsonNode>("summary", mapper.createObjectNode().apply {
+                    put("deleted_count", ids.size)
+                })
             }
+            ToolResultEnvelope.applyStandardFields(mapper, this@PhotosDeleteTool, result, ok = true, request = args)
         } else {
             val failures = PhotoMutationHelpers.failuresArray(mapper)
             var deletedCount = 0
@@ -79,12 +89,22 @@ class PhotosDeleteTool(
                     PhotoMutationHelpers.addFailure(failures, id, e)
                 }
             }
-            mapper.createObjectNode().apply {
-                put("ok", failures.size() == 0)
+            val result = mapper.createObjectNode().apply {
                 set<JsonNode>("ids", PhotoMutationHelpers.idsArray(mapper, ids))
                 put("deleted_count", deletedCount)
                 set<JsonNode>("failures", failures)
+                set<JsonNode>("summary", mapper.createObjectNode().apply {
+                    put("deleted_count", deletedCount)
+                    put("failure_count", failures.size())
+                })
             }
+            ToolResultEnvelope.applyStandardFields(
+                mapper,
+                this@PhotosDeleteTool,
+                result,
+                ok = failures.size() == 0,
+                request = args
+            )
         }
     }
 }
