@@ -1128,12 +1128,12 @@ function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
         endIndex: segmentStart + finalAssistantOffset - 1
       });
     }
+    pushVisibleToolResults(items, processEvents, segmentStart);
     items.push({
       kind: 'event',
       event: segment[finalAssistantOffset],
       index: segmentStart + finalAssistantOffset
     });
-    pushVisibleToolResults(items, processEvents, segmentStart);
 
     const trailing = segment.slice(finalAssistantOffset + 1);
     if (trailing.length > 0) {
