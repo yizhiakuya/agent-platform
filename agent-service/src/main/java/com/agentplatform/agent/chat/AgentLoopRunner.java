@@ -39,7 +39,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -79,10 +78,9 @@ public class AgentLoopRunner {
      * turns) in place; collects the streamed assistant text + last-seen
      * {@link Usage} + cancellation flag into the returned {@link RunResult}.
      *
-     * <p>Returns {@code cancelled=true} when the SSE emitter ended mid-stream
-     * (esc / tab close / async timeout). The caller must NOT persist the
-     * partial assistant text in that case — replaying truncated text on the
-     * next turn pollutes LLM context.
+     * <p>Returns {@code cancelled=true} for explicit stop requests or
+     * server-side timeout. Plain SSE disconnects are allowed to finish so the
+     * final assistant row can be persisted for session history.
      */
     public RunResult run(ConfiguredProvider provider,
                          UUID sessionId,
@@ -94,20 +92,33 @@ public class AgentLoopRunner {
                          List<MessageParam> messages,
                          ChatEventSink sink,
                          SseEmitter emitter) {
+        return run(provider, sessionId, userId, resolved, systemBlocks, tools, thinking,
+                messages, sink, emitter, new ChatCancellationToken());
+    }
+
+    public RunResult run(ConfiguredProvider provider,
+                         UUID sessionId,
+                         UUID userId,
+                         ResolvedTools resolved,
+                         List<TextBlockParam> systemBlocks,
+                         List<ToolUnion> tools,
+                         @Nullable ThinkingConfigEnabled thinking,
+                         List<MessageParam> messages,
+                         ChatEventSink sink,
+                         SseEmitter emitter,
+                         ChatCancellationToken cancellation) {
         if (!provider.isAnthropicMessages() || provider.client() == null) {
             throw new IllegalArgumentException("AgentLoopRunner requires anthropic-messages provider");
         }
-        // Hold the active stream so emitter cancellation can close it from
+        // Hold the active stream so explicit cancellation can close it from
         // another thread — SDK forEach is blocking on the worker thread, the
         // close() interrupts the iterator and forEach unwinds with an IO error
         // which we catch and treat as a clean cancel.
         AtomicReference<StreamResponse<RawMessageStreamEvent>> currentStream = new AtomicReference<>();
-        AtomicBoolean cancelled = new AtomicBoolean(false);
-        Runnable cancel = () -> {
-            cancelled.set(true);
+        Runnable closeCurrentStream = () -> {
             StreamResponse<RawMessageStreamEvent> s = currentStream.getAndSet(null);
             if (s != null) {
-                log.info("emitter ended — closing SDK stream for user {}", userId);
+                log.info("chat run cancelled - closing SDK stream for user {}", userId);
                 try {
                     s.close();
                 } catch (Exception ignore) {
@@ -115,9 +126,8 @@ public class AgentLoopRunner {
                 }
             }
         };
-        emitter.onCompletion(cancel);
-        emitter.onTimeout(cancel);
-        emitter.onError(t -> cancel.run());
+        cancellation.setCancelAction(closeCurrentStream);
+        emitter.onTimeout(cancellation::cancel);
 
         StringBuilder textBuf = new StringBuilder();
         Usage lastUsage = null;
@@ -128,7 +138,7 @@ public class AgentLoopRunner {
         for (int iter = 0; iter < maxIterations; iter++) {
             // If a previous iteration drained without erroring but cancel
             // already fired, bail before opening another (billed) stream.
-            if (cancelled.get()) {
+            if (cancellation.isCancelled()) {
                 return new RunResult(textBuf.toString(), lastUsage, true);
             }
 
@@ -164,8 +174,8 @@ public class AgentLoopRunner {
                 });
                 finalMsg = acc.message();
             } catch (RuntimeException e) {
-                if (cancelled.get()) {
-                    // Emitter cancelled the stream — normal interruption,
+                if (cancellation.isCancelled()) {
+                    // Explicit cancellation interrupted the stream - normal,
                     // not a setup/transport failure. Don't propagate (would
                     // trigger provider failover for nothing) and don't let
                     // the partial text get persisted downstream.
@@ -189,11 +199,7 @@ public class AgentLoopRunner {
             // agent loop on every tool_use turn, so device tools never fired.
             if (stop.isEmpty() || !StopReason.TOOL_USE.equals(stop.get())) {
                 // Clean finish (end_turn / max_tokens / stop_sequence / refusal).
-                // If cancel fired AFTER the stream drained naturally, the text
-                // is still complete — flag it cancelled so caller skips persist
-                // anyway (user may have walked away; saving the reply they
-                // never read pollutes future history with stale Q/A).
-                return new RunResult(textBuf.toString(), lastUsage, cancelled.get());
+                return new RunResult(textBuf.toString(), lastUsage, cancellation.isCancelled());
             }
 
             // Run every tool_use block produced by the assistant; pack results
@@ -225,7 +231,7 @@ public class AgentLoopRunner {
                 // Assistant said tool_use but emitted no tool_use blocks (rare).
                 // Bail rather than loop forever on identical request.
                 log.warn("stop_reason=tool_use but no tool_use blocks present — aborting loop");
-                return new RunResult(textBuf.toString(), lastUsage, cancelled.get());
+                return new RunResult(textBuf.toString(), lastUsage, cancellation.isCancelled());
             }
             messages.add(MessageParam.builder()
                     .role(MessageParam.Role.USER)

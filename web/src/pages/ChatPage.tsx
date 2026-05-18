@@ -265,6 +265,9 @@ export default function ChatPage() {
 
   function handleStop() {
     if (!activeRun) return;
+    void api.cancelChatRun(activeRun.runId).catch(() => {
+      // Local abort still gives immediate UI feedback if the cancel request is lost.
+    });
     activeRun.abortController.abort();
     appendCancelEventToKey(activeDraftKey, activeRun.sentEventsIndex);
     setRunsByKey(prev => {
@@ -511,6 +514,7 @@ export default function ChatPage() {
       await streamChat({
         message,
         sessionId: targetSessionId ?? undefined,
+        clientRunId: runId,
         attachments: uploadedAttachments.map(toChatAttachment),
         signal: ctrl.signal,
         onEvent(name, data) {

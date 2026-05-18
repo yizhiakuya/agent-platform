@@ -33,7 +33,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Minimal OpenAI-compatible Responses API agent loop for Codex models.
@@ -97,15 +96,26 @@ public class CodexResponsesLoopRunner {
                          ChatAttachmentContext attachments,
                          ChatEventSink sink,
                          SseEmitter emitter) {
+        return run(provider, sessionId, userId, resolved, systemText, history, userText,
+                attachments, sink, emitter, new ChatCancellationToken());
+    }
+
+    public RunResult run(ConfiguredProvider provider,
+                         UUID sessionId,
+                         UUID userId,
+                         ResolvedTools resolved,
+                         String systemText,
+                         List<MessageDto> history,
+                         String userText,
+                         ChatAttachmentContext attachments,
+                         ChatEventSink sink,
+                         SseEmitter emitter,
+                         ChatCancellationToken cancellation) {
         if (!provider.isCodexResponses()) {
             throw new IllegalArgumentException("CodexResponsesLoopRunner requires codex-responses provider");
         }
 
-        AtomicBoolean cancelled = new AtomicBoolean(false);
-        Runnable cancel = () -> cancelled.set(true);
-        emitter.onCompletion(cancel);
-        emitter.onTimeout(cancel);
-        emitter.onError(t -> cancel.run());
+        emitter.onTimeout(cancellation::cancel);
 
         WebClient client = webClientBuilder
                 .baseUrl(stripTrailingSlash(provider.baseUrl()))
@@ -120,7 +130,7 @@ public class CodexResponsesLoopRunner {
                 props.agent().maxToolCallsPerTurn(),
                 props.agent().maxConsecutiveUiToolCalls());
         for (int iter = 0; iter < maxIterations; iter++) {
-            if (cancelled.get()) {
+            if (cancellation.isCancelled()) {
                 return new RunResult(textBuf.toString(), lastUsage, true);
             }
 
@@ -138,9 +148,9 @@ public class CodexResponsesLoopRunner {
             }
 
             int textLenBeforeRequest = textBuf.length();
-            JsonNode resp = streamResponse(client, provider, request, textBuf, sink, cancelled);
+            JsonNode resp = streamResponse(client, provider, request, textBuf, sink, cancellation);
             if (resp == null) {
-                if (cancelled.get()) {
+                if (cancellation.isCancelled()) {
                     return new RunResult(textBuf.toString(), lastUsage, true);
                 }
                 throw new IllegalStateException("empty Codex Responses API response");
@@ -161,7 +171,7 @@ public class CodexResponsesLoopRunner {
 
             List<FunctionCall> calls = extractFunctionCalls(resp);
             if (calls.isEmpty()) {
-                return new RunResult(textBuf.toString(), lastUsage, cancelled.get());
+                return new RunResult(textBuf.toString(), lastUsage, cancellation.isCancelled());
             }
 
             JsonNode output = resp.path("output");
@@ -207,7 +217,7 @@ public class CodexResponsesLoopRunner {
                                     ObjectNode request,
                                     StringBuilder textBuf,
                                     ChatEventSink sink,
-                                    AtomicBoolean cancelled) {
+                                    ChatCancellationToken cancellation) {
         JsonNode completed = null;
         JsonNode lastResponse = null;
         ArrayNode outputItems = mapper.createArrayNode();
@@ -221,7 +231,7 @@ public class CodexResponsesLoopRunner {
                 .bodyToFlux(SSE_EVENT_TYPE)
                 .timeout(Duration.ofMinutes(10))
                 .toIterable()) {
-            if (cancelled.get()) {
+            if (cancellation.isCancelled()) {
                 return null;
             }
             String data = event.data();

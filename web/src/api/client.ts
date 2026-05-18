@@ -68,6 +68,9 @@ export const api = {
   deleteSession: (sessionId: string) =>
     request<void>(`/api/sessions/${sessionId}`, { method: 'DELETE' }),
 
+  cancelChatRun: (clientRunId: string) =>
+    request<void>(`/api/chat/runs/${encodeURIComponent(clientRunId)}/cancel`, { method: 'POST' }),
+
   sessionExportUrl: (sessionId: string) =>
     `/api/sessions/${sessionId}/export.jsonl`,
 

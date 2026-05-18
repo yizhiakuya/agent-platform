@@ -2,8 +2,11 @@ package com.agentplatform.agent.chat;
 
 import com.agentplatform.security.PrincipalContext;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -30,5 +33,12 @@ public class ChatController {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         chatService.handle(userId, req, emitter);
         return emitter;
+    }
+
+    @PostMapping("/runs/{clientRunId}/cancel")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void cancelRun(@PathVariable String clientRunId) {
+        UUID userId = PrincipalContext.requireUserId();
+        chatService.cancelRun(userId, clientRunId);
     }
 }

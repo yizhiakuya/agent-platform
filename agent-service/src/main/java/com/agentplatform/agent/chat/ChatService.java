@@ -47,6 +47,8 @@ import java.util.Deque;
 import java.util.Locale;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -94,6 +96,7 @@ public class ChatService {
     private final ToolArtifactExtractor artifactExtractor;
     private final SessionSummaryRefresher sessionSummaryRefresher;
     private final DeviceToolDispatcher deviceToolDispatcher;
+    private final ConcurrentMap<RunKey, ChatCancellationToken> activeRuns = new ConcurrentHashMap<>();
 
     public ChatService(RemoteDeviceToolCallbackProvider toolProvider,
                        InternalChatFeignClient chatClientFeign,
@@ -130,10 +133,31 @@ public class ChatService {
     }
 
     public void handle(UUID userId, ChatRequest req, SseEmitter emitter) {
-        chatExecutor.execute(() -> handleInternal(userId, req, emitter));
+        ChatCancellationToken cancellation = new ChatCancellationToken();
+        RunKey runKey = runKey(userId, req.clientRunId());
+        if (runKey != null) {
+            activeRuns.put(runKey, cancellation);
+        }
+        chatExecutor.execute(() -> {
+            try {
+                handleInternal(userId, req, emitter, cancellation);
+            } finally {
+                if (runKey != null) {
+                    activeRuns.remove(runKey, cancellation);
+                }
+            }
+        });
     }
 
-    private void handleInternal(UUID userId, ChatRequest req, SseEmitter emitter) {
+    public boolean cancelRun(UUID userId, String clientRunId) {
+        RunKey key = runKey(userId, clientRunId);
+        if (key == null) return false;
+        ChatCancellationToken cancellation = activeRuns.get(key);
+        return cancellation != null && cancellation.cancel();
+    }
+
+    private void handleInternal(UUID userId, ChatRequest req, SseEmitter emitter,
+                                ChatCancellationToken cancellation) {
         try {
             UUID sessionId = ensureSession(userId, req.sessionId(), req.message());
             ChatAttachmentContext attachments = resolveAttachments(userId, req.attachments());
@@ -150,7 +174,7 @@ public class ChatService {
                 return;
             }
 
-            handleWithLlm(userId, sessionId, req, attachments, emitter);
+            handleWithLlm(userId, sessionId, req, attachments, emitter, cancellation);
         } catch (Exception e) {
             log.warn("Chat handling failed for user {}", userId, e);
             safeSend(emitter, SseEvent.error(mapper, userFacingGeneralFailureMessage(e)));
@@ -163,17 +187,23 @@ public class ChatService {
     private void handleWithLlm(UUID userId, UUID sessionId, ChatRequest req, SseEmitter emitter) {
         handleWithLlm(userId, sessionId, req,
                 new ChatAttachmentContext(List.of(), List.of(), mapper.createArrayNode(), ""),
-                emitter);
+                emitter, new ChatCancellationToken());
     }
 
     private void handleWithLlm(UUID userId, UUID sessionId, ChatRequest req,
                                ChatAttachmentContext attachments, SseEmitter emitter) {
+        handleWithLlm(userId, sessionId, req, attachments, emitter, new ChatCancellationToken());
+    }
+
+    private void handleWithLlm(UUID userId, UUID sessionId, ChatRequest req,
+                               ChatAttachmentContext attachments, SseEmitter emitter,
+                               ChatCancellationToken cancellation) {
         ResolvedTools resolved = toolProvider.getForUser(userId, req.deviceId());
         if (req.deviceId() != null && resolved.definitions().isEmpty()) {
             log.info("Requested device {} has no online tools for user {}", req.deviceId(), userId);
             safeSend(emitter, SseEvent.error(mapper,
                     "Target device is not connected yet, or it has not reported its tool manifest."));
-            emitter.complete();
+            safeComplete(emitter);
             return;
         }
 
@@ -224,7 +254,8 @@ public class ChatService {
             try {
                 result = runProvider(provider, sessionId, userId, resolved,
                         context.stableSystemText(), context.systemBlocks(), tools, thinking,
-                        messages, context.historyRows(), context.userText(), attachments, sink, emitter);
+                        messages, context.historyRows(), context.userText(), attachments, sink, emitter,
+                        cancellation);
                 break;
             } catch (RuntimeException e) {
                 lastErr = e;
@@ -242,17 +273,16 @@ public class ChatService {
             log.warn("[agent] all providers failed for user {} session {}",
                     userId, sessionId, lastErr);
             safeSend(emitter, SseEvent.error(mapper, userFacingProviderFailureMessage(lastErr)));
-            emitter.complete();
+            safeComplete(emitter);
             return;
         }
 
         if (result.cancelled()) {
-            // SSE emitter ended (esc / tab close / async timeout). The text
-            // buffer may be partial — persisting it would replay a truncated
-            // assistant turn next session and pollute LLM context. Skip
-            // persist + memory extraction; emitter is already closed by the
-            // cancel callback so there's no SSE work left.
-            log.info("Chat cancelled mid-stream for user {} session {} — skipping persist", userId, sessionId);
+            safeComplete(emitter);
+            // Explicit stop or server-side timeout. Plain SSE disconnects are
+            // deliberately not treated as cancellation, so the final assistant
+            // row can still be persisted and shown after refresh.
+            log.info("Chat run cancelled for user {} session {} - skipping persist", userId, sessionId);
             return;
         }
 
@@ -265,7 +295,7 @@ public class ChatService {
             long durMs = System.currentTimeMillis() - t0;
             persist(sessionId, userId, MessageRole.ASSISTANT, message, assistantMetadata(durMs));
             logUsage(userId, result.usage(), durMs);
-            emitter.complete();
+            safeComplete(emitter);
             return;
         }
 
@@ -287,7 +317,7 @@ public class ChatService {
         } catch (Exception ex) {
             log.warn("sessionSummaryRefresher.refreshAsync failed: {}", ex.getMessage());
         }
-        emitter.complete();
+        safeComplete(emitter);
     }
 
     private RunResult runProvider(ConfiguredProvider provider,
@@ -303,16 +333,17 @@ public class ChatService {
                                   String userText,
                                   ChatAttachmentContext attachments,
                                   ChatEventSink sink,
-                                  SseEmitter emitter) {
+                                  SseEmitter emitter,
+                                  ChatCancellationToken cancellation) {
         if (provider.isAnthropicMessages()) {
             return agentLoopRunner.run(provider, sessionId, userId, resolved,
-                    systemBlocks, tools, thinking, messages, sink, emitter);
+                    systemBlocks, tools, thinking, messages, sink, emitter, cancellation);
         }
         if (provider.isCodexResponses()) {
             return codexResponsesLoopRunner.run(provider, sessionId, userId, resolved,
                     stableSystemText,
                     historyRows,
-                    userText, attachments, sink, emitter);
+                    userText, attachments, sink, emitter, cancellation);
         }
         throw new IllegalArgumentException("unsupported provider kind: " + provider.kind());
     }
@@ -720,4 +751,19 @@ public class ChatService {
             log.debug("SSE send failed (client likely disconnected): {}", e.getMessage());
         }
     }
+
+    private void safeComplete(SseEmitter emitter) {
+        try {
+            emitter.complete();
+        } catch (Exception e) {
+            log.debug("SSE complete failed (client likely disconnected): {}", e.getMessage());
+        }
+    }
+
+    private static RunKey runKey(UUID userId, String clientRunId) {
+        if (userId == null || clientRunId == null || clientRunId.isBlank()) return null;
+        return new RunKey(userId, clientRunId.trim());
+    }
+
+    private record RunKey(UUID userId, String clientRunId) {}
 }

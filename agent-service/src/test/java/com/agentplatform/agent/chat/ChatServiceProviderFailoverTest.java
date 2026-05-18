@@ -14,6 +14,9 @@ import com.agentplatform.agent.ai.SkillRegistry;
 import com.agentplatform.agent.client.DeviceToolDispatcher;
 import com.agentplatform.agent.client.InternalChatFeignClient;
 import com.agentplatform.agent.config.AgentProperties;
+import com.agentplatform.api.chat.MessageDto;
+import com.agentplatform.api.chat.MessageRole;
+import com.agentplatform.api.chat.WriteMessageRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -24,6 +27,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.lang.reflect.Method;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -90,6 +94,35 @@ class ChatServiceProviderFailoverTest {
     }
 
     @Test
+    void sseDisconnectDoesNotCancelCompletedAssistantPersistence() throws Exception {
+        AtomicInteger codexCalls = new AtomicInteger();
+        CapturingChatClient chatClient = new CapturingChatClient();
+        AgentLoopRunner agentLoop = new CompletedAfterSseFailureAgentLoopRunner(mapper, props());
+        ChatService service = service(codexCalls, agentLoop, new ResolvedTools(List.of(), Map.of()), chatClient);
+
+        Method method = ChatService.class.getDeclaredMethod(
+                "handleWithLlm",
+                UUID.class,
+                UUID.class,
+                ChatRequest.class,
+                SseEmitter.class);
+        method.setAccessible(true);
+        method.invoke(
+                service,
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new ChatRequest("hello", null, null),
+                new FailingEmitter());
+
+        assertThat(chatClient.writes)
+                .anySatisfy(req -> {
+                    assertThat(req.role()).isEqualTo(MessageRole.ASSISTANT);
+                    assertThat(req.content()).isEqualTo("final after disconnect");
+                });
+        assertThat(codexCalls.get()).isZero();
+    }
+
+    @Test
     void noConfiguredProviderFailsFastWithoutDeviceMockFallback() throws Exception {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
@@ -135,7 +168,13 @@ class ChatServiceProviderFailoverTest {
     private ChatService service(AtomicInteger codexCalls,
                                 AgentLoopRunner agentLoop,
                                 ResolvedTools resolvedTools) {
-        InternalChatFeignClient chatClient = mock(InternalChatFeignClient.class);
+        return service(codexCalls, agentLoop, resolvedTools, mock(InternalChatFeignClient.class));
+    }
+
+    private ChatService service(AtomicInteger codexCalls,
+                                AgentLoopRunner agentLoop,
+                                ResolvedTools resolvedTools,
+                                InternalChatFeignClient chatClient) {
         AgentProperties props = props();
         SkillLoadCallback skillLoad = new SkillLoadCallback(new SkillRegistry(chatClient), mapper);
         ServerToolRegistry serverTools = new ServerToolRegistry(List.of(new MarkerTool()), mapper);
@@ -248,9 +287,33 @@ class ChatServiceProviderFailoverTest {
                              com.anthropic.models.messages.ThinkingConfigEnabled thinking,
                              List<com.anthropic.models.messages.MessageParam> messages,
                              ChatEventSink sink,
-                             SseEmitter emitter) {
+                             SseEmitter emitter,
+                             ChatCancellationToken cancellation) {
             sink.emit(SseEvent.assistantMessage(new ObjectMapper(), "partial"));
             throw new RuntimeException("stream failed");
+        }
+    }
+
+    private static class CompletedAfterSseFailureAgentLoopRunner extends AgentLoopRunner {
+
+        CompletedAfterSseFailureAgentLoopRunner(ObjectMapper mapper, AgentProperties props) {
+            super(mapper, props, mock(SkillLoadCallback.class), new ServerToolRegistry(List.of(), mapper));
+        }
+
+        @Override
+        public RunResult run(ConfiguredProvider provider,
+                             UUID sessionId,
+                             UUID userId,
+                             ResolvedTools resolved,
+                             List<com.anthropic.models.messages.TextBlockParam> systemBlocks,
+                             List<com.anthropic.models.messages.ToolUnion> tools,
+                             com.anthropic.models.messages.ThinkingConfigEnabled thinking,
+                             List<com.anthropic.models.messages.MessageParam> messages,
+                             ChatEventSink sink,
+                             SseEmitter emitter,
+                             ChatCancellationToken cancellation) {
+            sink.emit(SseEvent.assistantMessage(new ObjectMapper(), "streamed but disconnected"));
+            return new RunResult("final after disconnect", null, false);
         }
     }
 
@@ -270,8 +333,10 @@ class ChatServiceProviderFailoverTest {
                              String systemText,
                              List<com.agentplatform.api.chat.MessageDto> history,
                              String userText,
+                             ChatAttachmentContext attachments,
                              ChatEventSink sink,
-                             SseEmitter emitter) {
+                             SseEmitter emitter,
+                             ChatCancellationToken cancellation) {
             calls.incrementAndGet();
             return new RunResult("fallback", null, false);
         }
@@ -306,6 +371,116 @@ class ChatServiceProviderFailoverTest {
         @Override
         public void send(Object object, org.springframework.http.MediaType mediaType) throws IOException {
             send(object);
+        }
+    }
+
+    private static class FailingEmitter extends SseEmitter {
+        @Override
+        public synchronized void send(SseEventBuilder builder) throws IOException {
+            throw new IOException("broken pipe");
+        }
+    }
+
+    private static class CapturingChatClient implements InternalChatFeignClient {
+        private final List<WriteMessageRequest> writes = new ArrayList<>();
+
+        @Override
+        public com.agentplatform.api.chat.SessionDto createSession(com.agentplatform.api.chat.CreateSessionRequest req) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public MessageDto writeMessage(WriteMessageRequest req) {
+            writes.add(req);
+            return new MessageDto(UUID.randomUUID(), req.sessionId(), req.role(), req.content(), req.metadata(),
+                    OffsetDateTime.now());
+        }
+
+        @Override
+        public List<MessageDto> listMessages(UUID sessionId, UUID userId) {
+            return List.of();
+        }
+
+        @Override
+        public com.agentplatform.api.chat.SessionArtifactDto upsertArtifact(
+                com.agentplatform.api.chat.UpsertSessionArtifactRequest req) {
+            return null;
+        }
+
+        @Override
+        public List<com.agentplatform.api.chat.SessionArtifactDto> listArtifacts(UUID sessionId, UUID userId, int limit) {
+            return List.of();
+        }
+
+        @Override
+        public com.agentplatform.api.chat.SessionContextSummaryDto getContextSummary(UUID sessionId, UUID userId) {
+            return null;
+        }
+
+        @Override
+        public com.agentplatform.api.chat.SessionContextSummaryDto upsertContextSummary(
+                com.agentplatform.api.chat.UpsertSessionContextSummaryRequest req) {
+            return null;
+        }
+
+        @Override
+        public Map<String, UUID> saveFact(com.agentplatform.api.chat.SaveFactRequest req) {
+            return Map.of();
+        }
+
+        @Override
+        public List<com.agentplatform.api.chat.MemoryFactDto> queryFacts(com.agentplatform.api.chat.QueryFactRequest req) {
+            return List.of();
+        }
+
+        @Override
+        public List<com.agentplatform.api.chat.MemoryFactDto> listFacts(Map<String, Object> req) {
+            return List.of();
+        }
+
+        @Override
+        public Map<String, Boolean> deleteFact(UUID userId, UUID factId) {
+            return Map.of();
+        }
+
+        @Override
+        public Map<String, Integer> promote(com.agentplatform.api.chat.PromoteRequest req) {
+            return Map.of();
+        }
+
+        @Override
+        public List<com.agentplatform.api.chat.PhotoAssetSearchResult> searchPhotos(
+                com.agentplatform.api.chat.PhotoAssetSearchRequest req) {
+            return List.of();
+        }
+
+        @Override
+        public List<com.agentplatform.api.chat.PendingPhotoAssetDto> listPendingPhotos(int limit) {
+            return List.of();
+        }
+
+        @Override
+        public void savePhotoEmbedding(com.agentplatform.api.chat.PhotoAssetEmbeddingRequest req) {
+        }
+
+        @Override
+        public List<com.agentplatform.api.chat.RuntimeSkillDto> listRuntimeSkills(UUID userId, boolean includeDisabled) {
+            return List.of();
+        }
+
+        @Override
+        public com.agentplatform.api.chat.RuntimeSkillDto getRuntimeSkill(String name, UUID userId) {
+            return null;
+        }
+
+        @Override
+        public com.agentplatform.api.chat.RuntimeSkillDto upsertRuntimeSkill(
+                com.agentplatform.api.chat.UpsertRuntimeSkillRequest req) {
+            return null;
+        }
+
+        @Override
+        public void deleteRuntimeSkill(String name, UUID userId) {
         }
     }
 }

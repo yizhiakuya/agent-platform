@@ -19,15 +19,22 @@ public record ChatRequest(
         String message,
         UUID sessionId,
         UUID deviceId,
-        @Valid @Size(max = 4) List<ChatImageAttachment> attachments
+        @Valid @Size(max = 4) List<ChatImageAttachment> attachments,
+        @Size(max = 96) String clientRunId
 ) {
     public ChatRequest(String message, UUID sessionId, UUID deviceId) {
-        this(message, sessionId, deviceId, List.of());
+        this(message, sessionId, deviceId, List.of(), null);
+    }
+
+    public ChatRequest(String message, UUID sessionId, UUID deviceId,
+                       List<ChatImageAttachment> attachments) {
+        this(message, sessionId, deviceId, attachments, null);
     }
 
     public ChatRequest {
         message = message == null ? "" : message;
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
+        clientRunId = clientRunId == null || clientRunId.isBlank() ? null : clientRunId.trim();
     }
 
     @AssertTrue(message = "message or image attachment required")

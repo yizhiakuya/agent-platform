@@ -3,17 +3,17 @@ package com.agentplatform.agent.chat;
 import org.springframework.lang.Nullable;
 
 /**
- * Outcome of one {@link AgentLoopRunner#run} call.
+ * Outcome of one provider runner call.
  *
- * <p>{@code cancelled = true} means the SSE emitter ended (client esc / tab
- * close / spring-mvc async-request timeout) before the loop completed
- * cleanly, so the assistant text in {@code assistantText} may be a partial
- * snippet. Callers must NOT persist a cancelled reply — replaying truncated
- * text on the next turn pollutes LLM context.
+ * <p>{@code cancelled=true} means the user explicitly stopped the run or the
+ * server-side request timed out before the loop completed cleanly, so
+ * {@code assistantText} may be partial. Callers must not persist a cancelled
+ * reply because replaying truncated text pollutes LLM context. A plain SSE
+ * client disconnect is not cancellation; the backend should finish and persist
+ * the reply.
  *
- * <p>{@code usage} is the last seen Anthropic Usage record (prompt cache
- * stats etc); may be {@code null} if no streaming response landed before
- * cancellation.
+ * <p>{@code usage} is the last seen provider usage object; it may be null if
+ * no streaming response landed before cancellation.
  */
 public record RunResult(
         String assistantText,

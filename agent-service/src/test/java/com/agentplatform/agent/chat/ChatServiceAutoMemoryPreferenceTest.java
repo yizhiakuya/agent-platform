@@ -152,7 +152,8 @@ class ChatServiceAutoMemoryPreferenceTest {
                              com.anthropic.models.messages.ThinkingConfigEnabled thinking,
                              List<com.anthropic.models.messages.MessageParam> messages,
                              ChatEventSink sink,
-                             SseEmitter emitter) {
+                             SseEmitter emitter,
+                             ChatCancellationToken cancellation) {
             return new RunResult("done", null, false);
         }
     }
