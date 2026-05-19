@@ -197,7 +197,6 @@ Web at `http://localhost` (or whatever `WEB_PUBLIC_URL` is); first user register
 - Android builds should use process-local `JAVA_HOME=C:\Users\admin\.jdks\ms-21.0.10`. Do not use `C:\Users\admin\.jdks\openjdk-26`; Gradle/AGP fails with a bare `* What went wrong: 26`.
 - The Android Gradle wrapper lives under `android/`, not the repository root. Run `.\gradlew.bat assembleDebug` with `workdir=D:\agent-platform\android`.
 - APK install preference: first check whether the user says they are local with USB/ADB or outside. If a device is connected through ADB, install with ADB and enable accessibility; do not publish or provide the APK download URL. If the user says they are outside / have no ADB, copy `android/app/build/outputs/apk/debug/app-debug.apk` to `build/apk-local-server/agent-platform-debug.apk`, run or reuse `python -m http.server 53095 --bind 0.0.0.0` from `build/apk-local-server`, and provide `http://home.rainaki.top:53095/agent-platform-debug.apk`.
-- Mobile voice/local model direction was removed at the user's request. Do not re-add Qwen/Gemma on-device LLM routing, model download UI, microphone permission, or Voice Agent UI unless the user explicitly asks to bring that feature back.
 - For quote-heavy Android shell edits, pipe a script into `adb shell run-as com.agentplatform.android sh`; PowerShell plus inline `adb shell ... sh -c` quoting is fragile and can corrupt commands.
 - Agent-service targeted tests from Windows/Docker:
 
