@@ -122,7 +122,7 @@ Android 端新增工具的基本流程：
 
 ## 本地开发
 
-后端是 Maven 多模块项目。推荐用本地 JDK/Maven 构建，不把 Docker 当成依赖下载和编译环境。
+后端是 Maven 多模块项目，可直接使用 Maven Wrapper 构建：
 
 ```bash
 ./mvnw clean package -DskipTests
@@ -174,7 +174,7 @@ ghcr.io/yizhiakuya/agent-platform-chat-service
 ghcr.io/yizhiakuya/agent-platform-web
 ```
 
-实际生产部署推荐先在本地完成 Maven / Web 构建，再把已经构建好的 `target/*.jar` 或 `web/dist` 打进运行镜像。这样可以避免 Docker 构建阶段重复下载依赖，也更容易定位环境问题。
+也可以先完成本地构建，再把 `target/*.jar` 或 `web/dist` 打进运行镜像。
 
 ## 健康检查
 
