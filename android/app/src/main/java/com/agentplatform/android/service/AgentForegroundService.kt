@@ -23,6 +23,7 @@ import com.agentplatform.android.core.ws.decodeJsonRpc
 import com.agentplatform.android.core.ws.JsonRpcError
 import com.agentplatform.android.data.AppPrefs
 import com.agentplatform.android.photos.PhotoIndexUploader
+import com.agentplatform.android.tools.diagnostics.AndroidDiagnosticsTool
 import com.agentplatform.android.tools.media.MediaSelectionCreateTool
 import com.agentplatform.android.tools.photos.PhotosCopyToAlbumTool
 import com.agentplatform.android.tools.photos.PhotosDeleteTool
@@ -42,6 +43,8 @@ import com.agentplatform.android.tools.photos.PhotosRestoreTool
 import com.agentplatform.android.tools.photos.PhotosSaveToGalleryTool
 import com.agentplatform.android.tools.photos.PhotosSemanticCandidatesTool
 import com.agentplatform.android.tools.photos.PhotosTrashTool
+import com.agentplatform.android.tools.privileges.PrivilegesConfigureTool
+import com.agentplatform.android.tools.privileges.PrivilegesStatusTool
 import com.agentplatform.android.tools.ui.UiDumpTreeTool
 import com.agentplatform.android.tools.ui.UiGlobalTool
 import com.agentplatform.android.tools.ui.UiListAppsTool
@@ -116,6 +119,9 @@ class AgentForegroundService : Service() {
         toolRegistry.register(PhotosRestoreTool(applicationContext, mapper))
         toolRegistry.register(PhotosDeleteTool(applicationContext, mapper))
         toolRegistry.register(MediaSelectionCreateTool(applicationContext, mapper))
+        toolRegistry.register(AndroidDiagnosticsTool(applicationContext, mapper))
+        toolRegistry.register(PrivilegesStatusTool(applicationContext, mapper))
+        toolRegistry.register(PrivilegesConfigureTool(applicationContext, mapper))
         toolRegistry.register(VideosListRecentTool(applicationContext, mapper))
         toolRegistry.register(UiDumpTreeTool(mapper))
         toolRegistry.register(UiScreenCaptureTool(mapper))

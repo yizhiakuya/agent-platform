@@ -25,11 +25,20 @@ description: Project skill for D:\agent-platform, a self-hosted mobile agent pla
 ```
 
 - 8 Spring Cloud services (auth/agent/chat/hub/gateway) + Nacos discovery + Postgres (pgvector) + Caddy TLS + nginx static web.
+- Compose is organized for horizontal scaling: use `--scale gateway=N auth-service=N agent-service=N chat-service=N`. Keep `device-hub-service` single-instance until its WebSocket device registry is externalized or routed with sticky/cross-hub forwarding. Keep `PHOTO_INDEX_WORKER_ENABLED=false` on general agent-service replicas; enable it only on one explicit worker replica/process.
 - LLM tool list dynamically registered per chat request from currently online devices.
 - WS protocol is raw JSON-RPC 2.0 (form-similar to MCP, not wire-compatible).
 - See `README.md` and `pom.xml` for full module layout.
 
 ## Routing — pick by the symptom
+
+**Server runtime location:** production/backend services run only on Megumin
+(`root@192.168.0.109`, `/opt/agent-platform`). When checking live sessions,
+service logs, Postgres data, container status, health checks, or deployment
+state, SSH to Megumin and inspect the remote compose stack. Do not look for
+server containers on this local workstation unless the user explicitly says a
+local dev stack was started. The local workstation is for source edits, local
+builds/tests, Android APK builds, and packaging/publishing deploy artifacts.
 
 | Problem | Files / commands |
 |---|---|
@@ -41,7 +50,7 @@ description: Project skill for D:\agent-platform, a self-hosted mobile agent pla
 | New device tool | Android `Tool.kt` impl + register in `AgentForegroundService.toolRegistry` (server zero-change) |
 | Slow repeated mobile UI tool calls | Use/extend Android `ui.run_steps` for known ordered UI workflows; keep exploratory `ui.dump_tree`/`ui.screen_capture` for unknown pages |
 | Semantic photo search noisy or wrong | `PhotosSemanticCandidatesTool.kt` + `SemanticPhotoSearchCallback.java` + `skills/photos-search/SKILL.md` + `ChatPage.tsx` |
-| Provider/model routing | `AgentBeans`, `CodexResponsesLoopRunner`, `.env`, server `agent-platform-agent` logs |
+| Provider/model routing | `AgentBeans`, `CodexResponsesLoopRunner`, `.env`, `docker compose logs agent-service` |
 | Background LLM / LangChain4j | `LangChain4jModelFactory`, `RoutingBackgroundChatModel`, `BackgroundFactExtractor`, `SessionSummarizer`, `BackgroundLlmClient`, `EmbeddingService` |
 | GHCR / megumin deploy | build locally first, package the already-built artifact into GHCR, then `ssh root@192.168.0.109` and `/opt/agent-platform` |
 
@@ -54,6 +63,80 @@ description: Project skill for D:\agent-platform, a self-hosted mobile agent pla
 
 **Server-side: zero changes needed.** That's the headline feature of the platform.
 
+## Device-tool validation policy
+
+Do not proactively self-test Android device tools by calling them directly from
+the developer side. After changing a tool, APK, prompt, or frontend rendering,
+tell the user what changed, what root-agent test prompt to run, and what result
+to expect. The user will run the root agent flow and provide a session id for
+analysis.
+
+If the user explicitly asks for direct tool testing or a low-level bridge
+check, Megumin has `/opt/agent-platform/direct-tool-call.sh` as a helper for
+`device-hub-service /internal/tools/call -> WS -> Android AgentForegroundService
+-> ToolRegistry`. It reads `INTERNAL_API_TOKEN` inside the remote host and does
+not print it. Treat this as an explicit-debug tool, not the default validation
+path.
+
+## Session log analysis workflow
+
+When the user gives a session prefix/id, inspect Megumin only. Do not look for
+local server containers unless the user explicitly says a local dev stack is
+running.
+
+1. Resolve the full session id:
+
+```powershell
+$remote = @'
+set -e
+sid_prefix='__SESSION_PREFIX__'
+docker exec -i agent-platform-postgres psql -U agent -d agent_platform <<SQL
+\x on
+SELECT id, user_id, title, created_at, last_message_at
+FROM chat.sessions
+WHERE id::text LIKE '${sid_prefix}%';
+SQL
+'@
+$remote = $remote.Replace('__SESSION_PREFIX__', '<session prefix>')
+$b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remote))
+ssh root@192.168.0.109 "echo $b64 | base64 -d | bash"
+```
+
+2. Print a compact message/tool timeline:
+
+```sql
+SELECT row_number() OVER (ORDER BY created_at) AS n,
+       role,
+       to_char(created_at AT TIME ZONE 'Asia/Shanghai', 'HH24:MI:SS') AS cn_time,
+       CASE
+         WHEN role = 'TOOL_CALL' THEN concat('CALL ', metadata::jsonb->>'tool', ' args=', (metadata::jsonb->'args')::text)
+         WHEN role = 'TOOL_RESULT' THEN concat(
+           'RESULT ', metadata::jsonb->>'tool',
+           ' error=', coalesce(metadata::jsonb #>> '{result,error,message}', ''),
+           ' result_type=', coalesce(metadata::jsonb #>> '{result,result_type}', ''),
+           ' display=', coalesce(metadata::jsonb #>> '{result,display_policy}', metadata::jsonb #>> '{result,display,policy}', ''),
+           ' count=', coalesce(metadata::jsonb #>> '{result,count}', metadata::jsonb #>> '{result,returned_count}', metadata::jsonb #>> '{result,summary,affected_count}', ''),
+           ' ids=', coalesce((metadata::jsonb #> '{result,ids}')::text, (metadata::jsonb #> '{result,photos}')::text, (metadata::jsonb #> '{result,items}')::text, '')
+         )
+         ELSE left(replace(replace(content, E'\n', ' '), E'\r', ' '), 800)
+       END AS summary
+FROM chat.messages
+WHERE session_id = '<full session uuid>'
+ORDER BY created_at;
+```
+
+3. Pull related service logs for the exact time window:
+
+```bash
+cd /opt/agent-platform
+docker compose --profile default logs --since '<UTC start>' --until '<UTC end>' \
+  agent-service chat-service device-hub-service
+```
+
+4. Report whether the issue is agent reasoning, tool args, device result,
+bridge timeout/offline state, storage/context, or frontend rendering. Include
+the exact tool calls, result metadata, and timestamps needed to verify it.
+
 ## Mobile UI tool speed pattern
 
 - The server/provider may emit multiple tool calls, and Android can run independent non-UI tools concurrently, but all `ui.*` operations share the foreground screen and are serialized by `AgentForegroundService.uiToolMutex`.
@@ -62,7 +145,14 @@ description: Project skill for D:\agent-platform, a self-hosted mobile agent pla
 - First-time app learning still starts with `ui.dump_tree` and sometimes `ui.screen_capture`. Project/runtime skills should store stable package names, page recognition patterns, node ids/bounds, safe workflow segments, and safety stops. Later turns can execute those known segments through `ui.run_steps` instead of one observe-after-each-action loop.
 - To save an image shown inside another Android app, locate the image bounds, call `ui.long_press` or `ui.run_steps` action `long_press`, wait for the app context menu, tap the visible save action (`保存图片`, `保存到手机`, `保存到相册`, etc.), then verify/show it with `photos.list_recent`, `photos.recent_screenshots`, `photos.semantic_search`, or `photos.get_full`.
 - Keep dangerous or externally consequential steps (pay, submit order, delete, send, permission acceptance) outside macros unless the user explicitly confirmed the exact action.
-- Android MediaStore mutations such as `photos.trash` still launch a system confirmation PendingIntent. After the agent-side confirmation has already happened, the Android client may arm a short-lived MediaStore-only auto-approve window and use the Agent Platform accessibility service to click that specific system dialog. Do not generalize this into a global "click any allow button" behavior.
+- Android MediaStore destructive mutations such as `photos.trash` and
+  `photos.delete` should run through Shizuku shell media commands or a verified
+  `MANAGE_MEDIA` path. They must not silently open Android's foreground
+  MediaStore confirmation dialog during the default agent flow. If privileged
+  media access is unavailable, the tool returns
+  `privileged_media_access_required` or `media_mutation_denied` with
+  `system_confirmation_suppressed=true`, and the agent should explain that
+  Shizuku/MANAGE_MEDIA setup is required before retrying.
 
 ## Adding a new skill (LLM playbook)
 
@@ -180,6 +270,7 @@ Add a new interceptor by creating a `@Component implements ToolPreInterceptor` �
 26. **Android system MediaStore confirmations are a second confirmation layer.** The agent/tool confirmation (`confirmRequired`) does not remove Android's `MediaStore.createTrashRequest` / delete / favorite confirmation UI. For `photos.trash`, the Android client arms a short-lived MediaStore confirmation auto-approve using accessibility after the user already confirmed through the agent. Keep this scoped to the exact MediaStore flow and known system/media packages; never auto-click arbitrary permission or app dialogs.
 27. **LangChain4j AI Service beans need explicit, real `ChatModel` names.** This project has multiple background models plus dynamic provider routing, so `@AiService` uses explicit wiring. `BackgroundFactExtractor` maps to `backgroundFactExtractorChatModel`; `SessionSummarizer` maps to `sessionSummarizerChatModel`. If either bean is renamed or removed, Spring startup can fail.
 28. **LangChain4j `ChatRequest.toBuilder()` can carry `parameters`.** Setting `modelName`, token limits, or other individual fields on that builder can throw `Cannot set both 'parameters' and 'modelName'`. `RoutingBackgroundChatModel` rebuilds a clean request per provider; keep this pattern.
+29. **`ui.open_app` success and foreground verification are different things.** If the phone visibly opens the target app but the tool reports timeout, blank `foregroundPackage`, or "blocked by system", first inspect the Android verification path and Megumin hub timeout logs. The launch intent may have been sent successfully while Accessibility failed to emit a fresh foreground package. Keep verification probes short, prefer a lightweight active-window package check over a full tree dump, and return `intentSentButUnverified`/next-step metadata instead of claiming MIUI/HyperOS blocked the launch without evidence.
 
 ## Critical files (read these first when picking up the project)
 
@@ -328,8 +419,8 @@ PY
 grep -n "$new_image" docker-compose.ghcr-photo.yml
 docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull web
 docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml up -d --no-build --force-recreate web
-curl -fsSI http://localhost:3000/ | sed -n '1,10p'
-docker inspect -f '{{.Name}} {{.Config.Image}} {{.State.Status}}' agent-platform-web
+curl -fsSI http://localhost/ | sed -n '1,10p'
+docker compose --profile default ps web
 '@
 $remote = $remote.Replace('__IMAGE__', $image)
 $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remote))
@@ -345,8 +436,8 @@ docker pull ghcr.io/yizhiakuya/agent-platform-web:<tag>
 docker tag ghcr.io/yizhiakuya/agent-platform-agent-service:<tag> agent-platform-agent-service:latest
 docker tag ghcr.io/yizhiakuya/agent-platform-web:<tag> agent-platform-web:latest
 docker compose --profile default up -d --no-build --force-recreate agent-service web
-docker exec agent-platform-agent curl -fsS http://localhost:8082/actuator/health
-curl -fsSI http://localhost:3000/ | head
+docker compose --profile default exec agent-service curl -fsS http://localhost:8082/actuator/health
+curl -fsSI http://localhost/ | head
 ```
 
 Megumin deploy shortcut when using `/opt/agent-platform/docker-compose.ghcr-photo.yml`:
@@ -354,7 +445,7 @@ Megumin deploy shortcut when using `/opt/agent-platform/docker-compose.ghcr-phot
 ```powershell
 $old = 'ghcr.io/yizhiakuya/agent-platform-agent-service:old-tag'
 $new = 'ghcr.io/yizhiakuya/agent-platform-agent-service:new-tag'
-ssh root@192.168.0.109 "cd /opt/agent-platform && set -e && sed -i 's#$old#$new#g' docker-compose.ghcr-photo.yml && grep -n '$new' docker-compose.ghcr-photo.yml && docker compose -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull agent-service && docker compose -f docker-compose.yml -f docker-compose.ghcr-photo.yml up -d --no-build --force-recreate agent-service && docker exec agent-platform-agent curl -fsS http://localhost:8082/actuator/health"
+ssh root@192.168.0.109 "cd /opt/agent-platform && set -e && sed -i 's#$old#$new#g' docker-compose.ghcr-photo.yml && grep -n '$new' docker-compose.ghcr-photo.yml && docker compose -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull agent-service && docker compose -f docker-compose.yml -f docker-compose.ghcr-photo.yml up -d --no-build --force-recreate agent-service && docker compose exec agent-service curl -fsS http://localhost:8082/actuator/health"
 ```
 
 If the remote command needs `$(...)`, `$VAR`, heredocs, or embedded quotes, avoid inline SSH strings. Base64-encode a small remote script or upload a temp script, run it with `set -e`, and verify the compose file before restarting.

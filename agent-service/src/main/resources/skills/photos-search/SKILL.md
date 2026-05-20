@@ -81,23 +81,24 @@ For explicit cleanup/delete requests:
 
 ## 参数原则
 
-- `limit` 是用户最终想要的数量。用户说“一张/那张/最近那张”时用 `limit: 1`。
-- `review_limit` 只控制内部召回/审计候选，不是展示数量；普通搜索不要依赖它让模型看多张图。
+- `limit` 是用户最终想要的数量，必须由 agent 按任务显式选择。用户说“一张/那张/最近那张”时用 `limit: 1`；不确定但只需要浏览少量结果时用 `3-5`；用户明确要很多张时再放大。
+- `candidate_k` 是语义召回池大小，也由 agent 按任务显式选择。普通精确搜索可以接近 `limit`；“最新/最近 X”、先语义召回再按时间排序、或需要更稳妥比较时，主动放大到足够覆盖可能结果，例如 `20-50`。
+- `review_limit` 只控制内部审计/调试候选，不是展示数量；只有需要打开 `display: show_candidates` 调试或浏览候选时才设置。普通搜索不要依赖它让模型看多张图。
 - `scan_limit` 只影响旧实时扫描 fallback。索引命中时不依赖手机在线扫描。
 - 有 app、相册、日期等线索时传过滤条件，不要无脑放大 `limit`。
 
 示例：
 
 ```json
-{"query":"猫 宠物 小猫 照片","limit":1,"review_limit":8}
+{"query":"猫 宠物 小猫 照片","limit":1,"candidate_k":5}
 ```
 
 ```json
-{"query":"学超 微信 聊天记录 消息 截图","name_contains":"mm","limit":3,"review_limit":8}
+{"query":"学超 微信 聊天记录 消息 截图","name_contains":"mm","limit":3,"candidate_k":12}
 ```
 
 ```json
-{"query":"付款码 二维码 收款码 截图","limit":1,"review_limit":8}
+{"query":"付款码 二维码 收款码 截图","limit":1,"candidate_k":8}
 ```
 
 ## 截图文件名线索

@@ -39,9 +39,11 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.agentplatform.android.data.AppPrefs
+import com.agentplatform.android.privilege.PrivilegeManager
 import com.agentplatform.android.service.AgentForegroundService
 import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.agentplatform.android.ui.capture.UiCaptureManager
+import rikka.shizuku.Shizuku
 
 /**
  * Status / management screen shown after the device is bound. Shows live WS
@@ -86,6 +88,7 @@ fun BoundScreen(
     var accessibilityReady by remember { mutableStateOf(UiAccessibilityService.isAvailable()) }
     var captureReady by remember { mutableStateOf(UiCaptureManager.isReady()) }
     var autoApproveUiTools by remember { mutableStateOf(prefs.autoApproveUiTools) }
+    var privilegeStatus by remember { mutableStateOf(PrivilegeManager.status(ctx)) }
 
     // 用户从系统设置改完权限切回 app 时,Compose 默认不会重新检查 —
     // 监听 ON_RESUME 重算这三个状态,UI 自动重渲染。
@@ -99,10 +102,18 @@ fun BoundScreen(
                 accessibilityReady = UiAccessibilityService.isAvailable()
                 captureReady = UiCaptureManager.isReady()
                 autoApproveUiTools = prefs.autoApproveUiTools
+                privilegeStatus = PrivilegeManager.status(ctx)
             }
         }
+        val shizukuListener = Shizuku.OnRequestPermissionResultListener { _, _ ->
+            privilegeStatus = PrivilegeManager.status(ctx)
+        }
+        runCatching { Shizuku.addRequestPermissionResultListener(shizukuListener) }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            runCatching { Shizuku.removeRequestPermissionResultListener(shizukuListener) }
+        }
     }
 
     Column(
@@ -183,6 +194,40 @@ fun BoundScreen(
             },
             actionLabel = if (isXiaomiLike) "打开小米权限设置" else "打开悬浮窗设置"
         ) { openBackgroundLaunchSettings(ctx as Activity) }
+
+        CapabilityCard(
+            title = "高级权限通道",
+            enabled = privilegeStatus.manageMediaGranted || privilegeStatus.shellAvailable,
+            desc = when {
+                privilegeStatus.manageMediaGranted ->
+                    "已获得媒体管理权限，相册移入回收站/删除可以减少 Android 系统二次确认。"
+                privilegeStatus.shellAvailable ->
+                    "Shizuku 已运行并已授权，agent 可以使用白名单高级配置工具。"
+                privilegeStatus.shizukuRunning ->
+                    "Shizuku 已运行，但还没有授权 Agent Platform。"
+                privilegeStatus.shizukuInstalled ->
+                    "Shizuku 已安装但当前未运行。重启手机后需要重新用 Shizuku 启动服务。"
+                else ->
+                    "未检测到 Shizuku。高级权限是可选能力，普通相册和屏幕工具仍会继续工作。"
+            },
+            actionLabel = when {
+                privilegeStatus.shizukuRunning && !privilegeStatus.shizukuPermissionGranted -> "授权 Shizuku"
+                !privilegeStatus.manageMediaGranted && privilegeStatus.canRequestManageMedia -> "打开媒体管理权限"
+                else -> "刷新状态"
+            }
+        ) {
+            when {
+                privilegeStatus.shizukuRunning && !privilegeStatus.shizukuPermissionGranted -> {
+                    PrivilegeManager.requestShizukuPermission()
+                    privilegeStatus = PrivilegeManager.status(ctx)
+                }
+                !privilegeStatus.manageMediaGranted && privilegeStatus.canRequestManageMedia -> {
+                    runCatching { ctx.startActivity(PrivilegeManager.manageMediaSettingsIntent(ctx)) }
+                    privilegeStatus = PrivilegeManager.status(ctx)
+                }
+                else -> privilegeStatus = PrivilegeManager.status(ctx)
+            }
+        }
 
         AutoApproveCard(
             enabled = autoApproveUiTools,

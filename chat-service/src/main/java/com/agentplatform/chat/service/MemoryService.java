@@ -112,7 +112,7 @@ public class MemoryService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId is required");
         }
         int cap = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 100));
-        String where = includeRaw ? "WHERE user_id = ?" : "WHERE user_id = ? AND is_curated = true";
+        String where = includeRaw ? "WHERE user_id = ?\n" : "WHERE user_id = ? AND is_curated = true\n";
         return jdbc.query("""
                 SELECT id, user_id, kind, content, source_message_id,
                        created_at, is_curated, access_count, curated_at

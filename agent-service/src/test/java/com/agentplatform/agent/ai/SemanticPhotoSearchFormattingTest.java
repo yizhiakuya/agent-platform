@@ -1,12 +1,16 @@
 package com.agentplatform.agent.ai;
 
 import com.agentplatform.agent.client.InternalChatFeignClient;
+import com.agentplatform.agent.client.DeviceToolDispatcher;
 import com.agentplatform.agent.config.AgentProperties;
 import com.agentplatform.api.chat.PhotoAssetSearchRequest;
 import com.agentplatform.api.chat.PhotoAssetSearchResult;
+import com.agentplatform.protocol.ToolResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 import java.util.UUID;
@@ -16,7 +20,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class SemanticPhotoSearchFormattingTest {
@@ -120,7 +127,6 @@ class SemanticPhotoSearchFormattingTest {
         ObjectNode root = mapper.createObjectNode();
         root.put("candidate_only", true);
         root.put("requested_limit", 1);
-        root.put("review_limit", 8);
         var photos = mapper.createArrayNode();
         for (int i = 0; i < 2; i++) {
             ObjectNode photo = mapper.createObjectNode();
@@ -136,7 +142,6 @@ class SemanticPhotoSearchFormattingTest {
         assertEquals(2, out.images().size());
         assertTrue(out.jsonText().contains("\"candidate_only\":true"));
         assertTrue(out.jsonText().contains("\"requested_limit\":1"));
-        assertTrue(out.jsonText().contains("\"review_limit\":8"));
     }
 
     @Test
@@ -312,7 +317,7 @@ class SemanticPhotoSearchFormattingTest {
         ObjectNode args = mapper.createObjectNode();
         args.put("query", "latest cat");
         args.put("limit", 1);
-        args.put("review_limit", 8);
+        args.put("candidate_k", 50);
         args.put("name_contains", "mm");
         args.put("ranking_mode", "semantic_then_sort");
         args.put("sort_by", "date_taken");
@@ -325,6 +330,93 @@ class SemanticPhotoSearchFormattingTest {
         assertEquals("mm", req.nameContains());
         assertEquals(50, req.topK());
         assertFalse(out.jsonText().contains("review_candidates"));
+    }
+
+    @Test
+    void searchContractDefaultsReviewAndCandidateCountsToAgentChoices() throws Exception {
+        ObjectNode root = mapper.createObjectNode();
+        root.put("scanned", 1);
+        var photos = mapper.createArrayNode();
+        ObjectNode photo = mapper.createObjectNode();
+        photo.put("id", "photo-1");
+        photo.put("name", "photo-1.jpg");
+        photos.add(photo);
+        root.set("photos", photos);
+        ObjectNode args = mapper.createObjectNode();
+        args.put("ranking_mode", "semantic_then_sort");
+        args.put("sort_by", "date_taken");
+        args.put("sort_direction", "desc");
+        var callback = callbackShell();
+
+        ObjectNode out = callback.fallbackResult(
+                "latest cat", root, photos,
+                callback.searchContract(args, "latest cat", 1, 1),
+                "test");
+
+        assertEquals(1, out.path("requested_limit").asInt());
+        assertEquals(1, out.path("review_limit").asInt());
+        assertEquals(1, out.path("candidate_k").asInt());
+    }
+
+    @Test
+    void searchContractHonorsExplicitReviewAndCandidateCounts() throws Exception {
+        ObjectNode root = mapper.createObjectNode();
+        root.put("scanned", 5);
+        var photos = mapper.createArrayNode();
+        for (int i = 0; i < 5; i++) {
+            ObjectNode photo = mapper.createObjectNode();
+            photo.put("id", "photo-" + i);
+            photo.put("name", "photo-" + i + ".jpg");
+            photos.add(photo);
+        }
+        root.set("photos", photos);
+        ObjectNode args = mapper.createObjectNode();
+        args.put("review_limit", 5);
+        args.put("candidate_k", 9);
+        args.put("ranking_mode", "semantic_then_sort");
+        args.put("sort_by", "date_taken");
+        args.put("sort_direction", "desc");
+        var callback = callbackShell();
+
+        ObjectNode out = callback.fallbackResult(
+                "latest cat", root, photos,
+                callback.searchContract(args, "latest cat", 2, 5),
+                "test");
+
+        assertEquals(2, out.path("requested_limit").asInt());
+        assertEquals(5, out.path("review_limit").asInt());
+        assertEquals(9, out.path("candidate_k").asInt());
+    }
+
+    @Test
+    void realtimeFallbackRequestsAgentChosenCandidateKFromDevice() throws Exception {
+        UUID userId = UUID.randomUUID();
+        UUID deviceId = UUID.randomUUID();
+        DeviceToolDispatcher dispatcher = mock(DeviceToolDispatcher.class);
+        EmbeddingService embeddingService = mock(EmbeddingService.class);
+        when(embeddingService.embed(anyString())).thenThrow(new IllegalStateException("offline"));
+        ObjectNode candidateRoot = mapper.createObjectNode();
+        candidateRoot.put("scanned", 10);
+        var photos = mapper.createArrayNode();
+        ObjectNode photo = mapper.createObjectNode();
+        photo.put("id", "photo-1");
+        photo.put("name", "photo-1.jpg");
+        photo.put("local_score", 1);
+        photos.add(photo);
+        candidateRoot.set("photos", photos);
+        when(dispatcher.dispatch(eq(deviceId), eq(userId), eq("photos.semantic_candidates"), any()))
+                .thenReturn(ToolResult.ok(candidateRoot));
+        SemanticPhotoSearchCallback callback = realtimeCallback(deviceId, userId, dispatcher, embeddingService);
+        ObjectNode args = mapper.createObjectNode();
+        args.put("query", "cat");
+        args.put("limit", 1);
+        args.put("candidate_k", 7);
+
+        callback.executeJsonToolUse(args, userId, UUID.randomUUID(), null);
+
+        ArgumentCaptor<JsonNode> captor = ArgumentCaptor.forClass(JsonNode.class);
+        verify(dispatcher).dispatch(eq(deviceId), eq(userId), eq("photos.semantic_candidates"), captor.capture());
+        assertEquals(7, captor.getValue().path("limit").asInt());
     }
 
     @Test
@@ -373,6 +465,7 @@ class SemanticPhotoSearchFormattingTest {
                 "image",
                 true,
                 false,
+                false,
                 8,
                 0.2,
                 8,
@@ -398,6 +491,49 @@ class SemanticPhotoSearchFormattingTest {
                 chat,
                 null,
                 true,
+                props);
+    }
+
+    private SemanticPhotoSearchCallback realtimeCallback(UUID deviceId,
+                                                        UUID userId,
+                                                        DeviceToolDispatcher dispatcher,
+                                                        EmbeddingService embeddingService) {
+        AgentProperties.Photos photos = new AgentProperties.Photos(
+                "test-clip",
+                "http://127.0.0.1",
+                "",
+                2,
+                null,
+                null,
+                "image",
+                false,
+                true,
+                false,
+                8,
+                0.2,
+                8,
+                5);
+        AgentProperties.Agent agent = new AgentProperties.Agent(
+                0,
+                null,
+                4096,
+                24,
+                24,
+                10,
+                List.of(),
+                null,
+                photos);
+        AgentProperties props = new AgentProperties(new AgentProperties.Jwt("secret", "issuer"), agent);
+        return new SemanticPhotoSearchCallback(
+                deviceId,
+                userId,
+                dispatcher,
+                mapper,
+                embeddingService,
+                null,
+                null,
+                null,
+                false,
                 props);
     }
 }

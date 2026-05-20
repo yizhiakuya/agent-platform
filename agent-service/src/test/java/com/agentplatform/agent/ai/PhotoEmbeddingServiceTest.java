@@ -125,6 +125,7 @@ class PhotoEmbeddingServiceTest {
                 "image",
                 true,
                 true,
+                false,
                 8,
                 0.18,
                 25,

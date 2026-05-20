@@ -3,10 +3,10 @@
 # Quick start:
 #   1. cp .env.example .env       (and edit JWT_SECRET, ANTHROPIC_API_KEY, ...)
 #   2. docker compose up -d
-#   3. open http://localhost:3000
+#   3. open http://localhost
 #
 # Two profiles available:
-#   - default:    everything (infra + 5 spring services + web)
+#   - default:    everything (infra + Spring services + web + Caddy entry)
 #   - dev:        only postgres+nacos (use spring-boot:run from your IDE for code reload)
 
 name: agent-platform
@@ -93,7 +93,6 @@ services:
       dockerfile: Dockerfile.spring
       args:
         SERVICE: auth-service
-    container_name: agent-platform-auth
     restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
@@ -108,7 +107,7 @@ services:
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
-      SERVER_PUBLIC_URL: ${SERVER_PUBLIC_URL:-http://localhost:8080}
+      SERVER_PUBLIC_URL: ${SERVER_PUBLIC_URL:-http://localhost}
     expose: ["8081"]
 
   gateway:
@@ -118,7 +117,6 @@ services:
       dockerfile: Dockerfile.spring
       args:
         SERVICE: gateway
-    container_name: agent-platform-gateway
     restart: unless-stopped
     depends_on:
       nacos: { condition: service_healthy }
@@ -127,9 +125,14 @@ services:
       NACOS_ADDR: nacos:8848
       JWT_SECRET: ${JWT_SECRET}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
-      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:3000}
-    ports:
-      - "${GATEWAY_PORT:-8080}:8080"
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost}
+    expose: ["8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   device-hub-service:
     profiles: ["default"]
@@ -149,7 +152,7 @@ services:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-${JWT_SECRET}}
       # Default false — see device-hub application.yaml comment.
       HUB_MOCK_MODE: ${HUB_MOCK_MODE:-false}
-      HUB_WS_ALLOWED_ORIGINS: ${HUB_WS_ALLOWED_ORIGINS:-${WEB_PUBLIC_URL:-http://localhost:3000}}
+      HUB_WS_ALLOWED_ORIGINS: ${HUB_WS_ALLOWED_ORIGINS:-${WEB_PUBLIC_URL:-http://localhost}}
     expose: ["8083"]
     volumes:
       - photo-upload-data:/data/agent-platform/uploads/photos
@@ -161,7 +164,6 @@ services:
       dockerfile: Dockerfile.spring
       args:
         SERVICE: agent-service
-    container_name: agent-platform-agent
     restart: unless-stopped
     depends_on:
       nacos: { condition: service_healthy }
@@ -200,6 +202,7 @@ services:
       MEMORY_EMBEDDING_TASK: ${MEMORY_EMBEDDING_TASK:-retrieval.passage}
       PHOTO_INDEX_ENABLED: ${PHOTO_INDEX_ENABLED:-true}
       PHOTO_INDEX_FALLBACK_REALTIME: ${PHOTO_INDEX_FALLBACK_REALTIME:-true}
+      PHOTO_INDEX_WORKER_ENABLED: ${PHOTO_INDEX_WORKER_ENABLED:-false}
       PHOTO_EMBEDDING_BASE_URL: ${PHOTO_EMBEDDING_BASE_URL:-${MEMORY_EMBEDDING_BASE_URL:-}}
       PHOTO_EMBEDDING_API_KEY: ${PHOTO_EMBEDDING_API_KEY:-${MEMORY_EMBEDDING_API_KEY:-}}
       PHOTO_EMBEDDING_MODEL: ${PHOTO_EMBEDDING_MODEL:-clip-ViT-B-32-multilingual-v1}
@@ -220,7 +223,6 @@ services:
       dockerfile: Dockerfile.spring
       args:
         SERVICE: chat-service
-    container_name: agent-platform-chat
     restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
@@ -241,12 +243,10 @@ services:
     profiles: ["default"]
     build:
       context: ./web
-    container_name: agent-platform-web
     restart: unless-stopped
     depends_on:
       - gateway
-    ports:
-      - "${WEB_PORT:-3000}:80"
+    expose: ["80"]
 
   caddy:
     profiles: ["default"]

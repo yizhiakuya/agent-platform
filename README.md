@@ -108,13 +108,13 @@ docker compose --profile default ps
 Web UI：
 
 ```text
-http://localhost:3000
+http://localhost
 ```
 
-Gateway：
+API：
 
 ```text
-http://localhost:8080
+http://localhost/api
 ```
 
 启动本地照片 embedding sidecar：
@@ -224,29 +224,56 @@ docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr.ym
 docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr.yml up -d --no-build
 ```
 
-## 健康检查
+## 多实例
 
-Gateway：
+Compose 文件按多实例形态组织，默认每个服务启动一个副本：
 
 ```bash
-curl -fsS http://localhost:8080/actuator/health
+docker compose --profile default up -d
+```
+
+需要增加 HTTP 服务副本时，使用 `--scale`：
+
+```bash
+docker compose --profile default \
+  up -d \
+  --scale gateway=3 \
+  --scale auth-service=2 \
+  --scale agent-service=2 \
+  --scale chat-service=2
+```
+
+外部入口只暴露 Caddy 的 `80/443`。Caddy 通过 Docker DNS 动态解析 `gateway:8080` 的副本地址，按轮询转发，并对失败上游做临时剔除和重试。Gateway 到业务服务继续通过 Nacos 和 Spring Cloud LoadBalancer 转发。
+
+`agent-service` 默认关闭照片索引定时 worker，避免多个副本重复处理同一批照片。需要运行照片索引 worker 时，给一个明确的 agent-service 副本设置 `PHOTO_INDEX_WORKER_ENABLED=true`。
+
+`device-hub-service` 当前保持单实例。它维护 Android WebSocket 连接和在线设备状态，直接扩容会导致工具调用打到没有该设备连接的实例。要扩容该服务，需要先实现外部在线设备注册表、粘性路由或跨 hub 转发。
+
+## 健康检查
+
+入口：
+
+```bash
+curl -fsSI http://localhost/
 ```
 
 容器内服务：
 
 ```bash
-docker exec agent-platform-auth curl -fsS http://localhost:8081/actuator/health
-docker exec agent-platform-agent curl -fsS http://localhost:8082/actuator/health
-docker exec agent-platform-hub curl -fsS http://localhost:8083/actuator/health
-docker exec agent-platform-chat curl -fsS http://localhost:8084/actuator/health
+docker compose --profile default exec auth-service curl -fsS http://localhost:8081/actuator/health
+docker compose --profile default exec agent-service curl -fsS http://localhost:8082/actuator/health
+docker compose --profile default exec device-hub-service curl -fsS http://localhost:8083/actuator/health
+docker compose --profile default exec chat-service curl -fsS http://localhost:8084/actuator/health
 ```
 
 ## 服务端口
 
 | 服务 | 默认端口 |
 | --- | --- |
-| Web UI | `3000` |
-| Gateway | `8080` |
+| Caddy HTTP | `80` |
+| Caddy HTTPS | `443` |
+| Web UI | 容器内部 `80` |
+| Gateway | 容器内部 `8080` |
 | auth-service | `8081` |
 | agent-service | `8082` |
 | device-hub-service | `8083` |
@@ -266,7 +293,7 @@ docker exec agent-platform-chat curl -fsS http://localhost:8084/actuator/health
 
 | 项目 | 状态 |
 | --- | --- |
-| device hub 多实例 | 未实现 |
+| device hub 多实例 | 单实例运行；多实例需要外部在线设备注册表、粘性路由或跨 hub 转发 |
 | FCM push 唤醒 | 未实现 |
 | 设备 token 加密存储 | 当前使用 SharedPreferences |
 | Playwright + adb 端到端测试 | 部分覆盖 |

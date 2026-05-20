@@ -39,4 +39,5 @@ public class InternalDeviceController {
                 .map(s -> new OnlineDeviceDto(s.deviceId(), s.userId(), s.manifest(), s.connectedAt()))
                 .toList();
     }
+
 }

@@ -21,6 +21,8 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlin.coroutines.resume
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.suspendCoroutine
 
 data class UiTypeTextResult(
@@ -53,6 +55,7 @@ class UiAccessibilityService : AccessibilityService() {
         private const val TAG = "UiAccessibilityService"
         private const val MIN_LONG_PRESS_MS = 300L
         private const val MAX_LONG_PRESS_MS = 3_000L
+        private const val GESTURE_CALLBACK_TIMEOUT_MS = 5_000L
         private const val MEDIA_CONFIRM_AUTO_APPROVE_MS = 12_000L
 
         private val mediaStoreConfirmPackages = setOf(
@@ -65,6 +68,12 @@ class UiAccessibilityService : AccessibilityService() {
         )
 
         private val mediaStoreConfirmTextHints = listOf(
+            "修改这张照片",
+            "修改此照片",
+            "修改照片",
+            "允许 Agent Platform 修改",
+            "modify this photo",
+            "modify this image",
             "移至回收站",
             "移到回收站",
             "放入回收站",
@@ -78,11 +87,16 @@ class UiAccessibilityService : AccessibilityService() {
             "允许",
             "确定",
             "确认",
+            "修改",
+            "允许",
+            "确定",
+            "确认",
             "删除",
             "移至回收站",
             "移到回收站",
             "Allow",
             "OK",
+            "Modify",
             "Move to trash",
             "Trash"
         )
@@ -108,6 +122,23 @@ class UiAccessibilityService : AccessibilityService() {
 
         fun currentPackage(minUpdatedAtMs: Long = 0L): String =
             if (currentPackageUpdatedAtMs >= minUpdatedAtMs) currentPackageName else ""
+
+        fun currentPackageUpdatedAtMs(): Long = currentPackageUpdatedAtMs
+
+        fun activeWindowPackage(): String {
+            val s = instance ?: return ""
+            val root = runCatching { s.rootInActiveWindow }.getOrNull() ?: return ""
+            return try {
+                val packageName = root.packageName?.toString().orEmpty()
+                if (packageName.isNotBlank()) {
+                    currentPackageName = packageName
+                    currentPackageUpdatedAtMs = System.currentTimeMillis()
+                }
+                packageName
+            } finally {
+                root.recycle()
+            }
+        }
 
         fun armMediaStoreConfirmationAutoApprove() {
             mediaStoreConfirmAutoApproveUntilMs =
@@ -272,8 +303,15 @@ class UiAccessibilityService : AccessibilityService() {
                 currentPackageUpdatedAtMs = System.currentTimeMillis()
                 out.put("package", packageName)
                 val nodesArr = mapper.createArrayNode()
-                walk(root, "", maxDepth, mapper, nodesArr)
+                val stats = DumpTreeStats()
+                walk(root, "", maxDepth, mapper, nodesArr, stats)
                 out.set<JsonNode>("nodes", nodesArr)
+                out.set<ObjectNode>("node_filter", mapper.createObjectNode().apply {
+                    put("visible_screen_nodes_only", true)
+                    put("hidden_skipped", stats.hiddenSkipped)
+                    put("offscreen_or_empty_skipped", stats.offscreenOrEmptySkipped)
+                    put("semantic_skipped", stats.semanticSkipped)
+                })
             } finally {
                 root.recycle()
             }
@@ -306,9 +344,15 @@ class UiAccessibilityService : AccessibilityService() {
             path: String,
             depthLeft: Int,
             mapper: ObjectMapper,
-            out: ArrayNode
+            out: ArrayNode,
+            stats: DumpTreeStats
         ) {
             if (depthLeft <= 0) return
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val visible = node.isVisibleToUser
+            val onScreen = !rect.isEmpty && rect.right > 0 && rect.bottom > 0
+            val emitCandidate = visible && onScreen
             val text = node.text?.toString()?.takeIf { it.isNotBlank() }
             val desc = node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
             val rid = node.viewIdResourceName?.takeIf { it.isNotBlank() }
@@ -316,7 +360,7 @@ class UiAccessibilityService : AccessibilityService() {
             val editable = node.isEditable
             val scrollable = node.isScrollable
             // Only emit nodes the LLM can actually act on or learn from.
-            if (text != null || desc != null || rid != null || clickable || editable || scrollable) {
+            if (emitCandidate && (text != null || desc != null || rid != null || clickable || editable || scrollable)) {
                 val n = mapper.createObjectNode()
                 n.put("path", path)
                 if (text != null) n.put("text", text.take(200))
@@ -327,26 +371,36 @@ class UiAccessibilityService : AccessibilityService() {
                 if (clickable) n.put("clickable", true)
                 if (editable) n.put("editable", true)
                 if (scrollable) n.put("scrollable", true)
-                val rect = Rect()
-                node.getBoundsInScreen(rect)
-                if (!rect.isEmpty) {
-                    val b = mapper.createObjectNode()
-                    b.put("l", rect.left); b.put("t", rect.top)
-                    b.put("r", rect.right); b.put("b", rect.bottom)
-                    n.set<ObjectNode>("bounds", b)
-                }
+                val b = mapper.createObjectNode()
+                b.put("l", rect.left); b.put("t", rect.top)
+                b.put("r", rect.right); b.put("b", rect.bottom)
+                n.set<ObjectNode>("bounds", b)
                 out.add(n)
+            } else if (text != null || desc != null || rid != null || clickable || editable || scrollable) {
+                if (!visible) {
+                    stats.hiddenSkipped += 1
+                } else if (!onScreen) {
+                    stats.offscreenOrEmptySkipped += 1
+                } else {
+                    stats.semanticSkipped += 1
+                }
             }
             val n = node.childCount
             for (i in 0 until n) {
                 val child = node.getChild(i) ?: continue
                 try {
-                    walk(child, if (path.isEmpty()) "$i" else "$path.$i", depthLeft - 1, mapper, out)
+                    walk(child, if (path.isEmpty()) "$i" else "$path.$i", depthLeft - 1, mapper, out, stats)
                 } finally {
                     child.recycle()
                 }
             }
         }
+
+        private data class DumpTreeStats(
+            var hiddenSkipped: Int = 0,
+            var offscreenOrEmptySkipped: Int = 0,
+            var semanticSkipped: Int = 0
+        )
 
         private fun trySetText(node: AccessibilityNodeInfo, text: String): UiTypeTextResult? {
             val args = Bundle().apply {
@@ -523,14 +577,21 @@ class UiAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun dispatchGestureAwait(gesture: GestureDescription): Boolean =
-        suspendCoroutine { cont ->
-            val callback = object : GestureResultCallback() {
-                override fun onCompleted(g: GestureDescription) { cont.resume(true) }
-                override fun onCancelled(g: GestureDescription) { cont.resume(false) }
+        withTimeoutOrNull(GESTURE_CALLBACK_TIMEOUT_MS) {
+            suspendCancellableCoroutine { cont ->
+                val callback = object : GestureResultCallback() {
+                    override fun onCompleted(g: GestureDescription) {
+                        if (cont.isActive) cont.resume(true)
+                    }
+
+                    override fun onCancelled(g: GestureDescription) {
+                        if (cont.isActive) cont.resume(false)
+                    }
+                }
+                val ok = dispatchGesture(gesture, callback, null)
+                if (!ok && cont.isActive) cont.resume(false)
             }
-            val ok = dispatchGesture(gesture, callback, null)
-            if (!ok) cont.resume(false)
-        }
+        } ?: false
 
     override fun onServiceConnected() {
         super.onServiceConnected()

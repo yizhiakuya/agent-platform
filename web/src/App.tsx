@@ -44,7 +44,7 @@ function Shell() {
         <div className="rail-footer">
           <div className="rail-status">
             <span className="status-dot bg-emerald-400" />
-            <span>服务在线</span>
+            <span>平台在线</span>
           </div>
           <button
             className="rail-logout"

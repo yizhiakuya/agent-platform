@@ -82,5 +82,10 @@ dependencies {
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     implementation("com.google.mlkit:image-labeling:17.0.9")
 
+    // Optional high-privilege local bridge. The app only exposes whitelisted
+    // capability tools; no raw shell is surfaced to the agent.
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -7,7 +7,10 @@ import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ObjectNode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Execute a short ordered UI macro on-device.
@@ -225,15 +228,21 @@ class UiRunStepsTool(
         if (!sent) {
             sent = sendLaunchIntentFromAccessibility(intent, attempts)
         }
-        val waitMs = step.path("duration_ms").asLong(DEFAULT_OPEN_WAIT_MS)
-            .coerceIn(250L, MAX_WAIT_MS)
+        val requestedWaitMs = step.path("duration_ms").asLong(DEFAULT_OPEN_WAIT_MS)
+        val waitMs = if (requestedWaitMs <= 0L) {
+            DEFAULT_OPEN_WAIT_MS
+        } else {
+            requestedWaitMs.coerceIn(250L, MAX_WAIT_MS)
+        }
         delay(waitMs)
-        var foregroundPackage = foregroundPackage()
+        var foreground = foregroundPackage()
+        var foregroundPackage = foreground.packageName
         if (sent && foregroundPackage != packageName) {
             sent = sendLaunchIntentFromAccessibility(intent, attempts)
             if (sent) {
                 delay(waitMs)
-                foregroundPackage = foregroundPackage()
+                foreground = foregroundPackage()
+                foregroundPackage = foreground.packageName
             }
         }
 
@@ -241,10 +250,13 @@ class UiRunStepsTool(
             put("ok", sent && foregroundPackage == packageName)
             put("package", packageName)
             put("foregroundPackage", foregroundPackage)
+            put("verificationSource", foreground.source)
+            if (foreground.cachedPackage.isNotBlank()) put("cachedForegroundPackage", foreground.cachedPackage)
+            if (foreground.activeWindowPackage.isNotBlank()) put("activeWindowPackage", foreground.activeWindowPackage)
             put("wait_ms", waitMs)
             set<JsonNode>("launchAttempts", attempts)
             if (foregroundPackage != packageName) {
-                put("error", "launch intent sent but target app did not reach foreground")
+                put("error", "launch intent sent but target app foreground could not be verified")
             }
         }
     }
@@ -348,11 +360,28 @@ class UiRunStepsTool(
                 mapper.createObjectNode().apply { put("error", error.message ?: "dump_tree failed") }
             }
 
-    private fun foregroundPackage(): String =
-        UiAccessibilityService.currentPackage().ifBlank {
-            runCatching { UiAccessibilityService.dumpTree(mapper, 1).path("package").asText("") }
-                .getOrDefault("")
+    private suspend fun foregroundPackage(): ForegroundObservation {
+        val cached = UiAccessibilityService.currentPackage()
+        if (cached.isNotBlank()) {
+            return ForegroundObservation(
+                packageName = cached,
+                source = "cached_accessibility_event",
+                cachedPackage = cached,
+                activeWindowPackage = ""
+            )
         }
+        val activeWindow = withTimeoutOrNull(ACTIVE_WINDOW_PROBE_TIMEOUT_MS) {
+            withContext(Dispatchers.Main.immediate) {
+                UiAccessibilityService.activeWindowPackage()
+            }
+        }.orEmpty()
+        return ForegroundObservation(
+            packageName = activeWindow,
+            source = if (activeWindow.isBlank()) "unavailable" else "active_window",
+            cachedPackage = "",
+            activeWindowPackage = activeWindow
+        )
+    }
 
     private fun sendLaunchIntent(intent: Intent, source: String, attempts: com.fasterxml.jackson.databind.node.ArrayNode): Boolean =
         runCatching {
@@ -407,6 +436,13 @@ class UiRunStepsTool(
             else -> "final"
         }
 
+    private data class ForegroundObservation(
+        val packageName: String,
+        val source: String,
+        val cachedPackage: String,
+        val activeWindowPackage: String
+    )
+
     private fun errorStep(message: String): ObjectNode =
         mapper.createObjectNode().apply {
             put("ok", false)
@@ -424,6 +460,7 @@ class UiRunStepsTool(
         private const val MIN_LONG_PRESS_MS = 300L
         private const val MAX_LONG_PRESS_MS = 3_000L
         private const val MAX_WAIT_MS = 3_000L
+        private const val ACTIVE_WINDOW_PROBE_TIMEOUT_MS = 300L
         private const val DEFAULT_TREE_DEPTH = 12
         private const val MAX_TREE_DEPTH = 30
     }

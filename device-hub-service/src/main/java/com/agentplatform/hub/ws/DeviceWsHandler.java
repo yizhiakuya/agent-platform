@@ -1,5 +1,7 @@
 package com.agentplatform.hub.ws;
 
+import com.agentplatform.api.auth.DeviceSeenRequest;
+import com.agentplatform.hub.client.AuthInternalClient;
 import com.agentplatform.hub.call.PendingCallRegistry;
 import com.agentplatform.hub.registry.DeviceRegistry;
 import com.agentplatform.hub.registry.DeviceSession;
@@ -22,6 +24,7 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
@@ -52,15 +55,18 @@ public class DeviceWsHandler extends TextWebSocketHandler {
     private final PendingCallRegistry pendingCalls;
     private final JsonRpcCodec codec;
     private final ObjectMapper mapper;
+    private final AuthInternalClient authClient;
 
     public DeviceWsHandler(DeviceRegistry registry,
                            PendingCallRegistry pendingCalls,
                            JsonRpcCodec codec,
-                           ObjectMapper mapper) {
+                           ObjectMapper mapper,
+                           AuthInternalClient authClient) {
         this.registry = registry;
         this.pendingCalls = pendingCalls;
         this.codec = codec;
         this.mapper = mapper;
+        this.authClient = authClient;
     }
 
     @Override
@@ -76,6 +82,15 @@ public class DeviceWsHandler extends TextWebSocketHandler {
                 new ConcurrentWebSocketSessionDecorator(rawSession, SEND_TIMEOUT_MS, SEND_BUFFER_BYTES);
         WsDeviceSession deviceSession = new WsDeviceSession(deviceId, userId, decorated, codec);
         registry.online(deviceSession);
+        markDeviceSeen(deviceId, userId, deviceSession.connectedAt());
+    }
+
+    private void markDeviceSeen(UUID deviceId, UUID userId, OffsetDateTime seenAt) {
+        try {
+            authClient.markDeviceSeen(new DeviceSeenRequest(deviceId, userId, seenAt));
+        } catch (Exception e) {
+            log.warn("Failed to mark device {} seen: {}", deviceId, e.toString());
+        }
     }
 
     @Override
@@ -151,9 +166,13 @@ public class DeviceWsHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         UUID deviceId = (UUID) session.getAttributes().get(DeviceHandshakeInterceptor.ATTR_DEVICE_ID);
+        UUID userId = (UUID) session.getAttributes().get(DeviceHandshakeInterceptor.ATTR_USER_ID);
         log.info("WS closed device={} code={} reason='{}'",
                 deviceId, status.getCode(), status.getReason());
         if (deviceId != null) {
+            if (userId != null) {
+                markDeviceSeen(deviceId, userId, OffsetDateTime.now());
+            }
             registry.offline(deviceId);
         }
     }

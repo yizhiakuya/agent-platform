@@ -50,8 +50,14 @@ export const api = {
   listDevices: () =>
     request<DeviceDto[]>('/api/me/devices'),
 
+  listDeviceOnlineStatus: () =>
+    request<DeviceOnlineStatusDto[]>('/api/devices/online-status'),
+
   createEnrollment: () =>
     request<EnrollmentResponse>('/api/me/devices/enrollments', { method: 'POST' }),
+
+  revokeDevice: (deviceId: string) =>
+    request<void>(`/api/me/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }),
 
   listSessions: () =>
     request<SessionDto[]>('/api/sessions'),
@@ -105,6 +111,16 @@ export const api = {
       body: JSON.stringify(input)
     }),
 
+  listMemories: (input: { limit?: number; includeRaw?: boolean } = {}) => {
+    const params = new URLSearchParams();
+    params.set('limit', String(input.limit ?? 100));
+    params.set('includeRaw', String(input.includeRaw ?? true));
+    return request<MemoryFactDto[]>(`/api/memories?${params.toString()}`);
+  },
+
+  deleteMemory: (id: string) =>
+    request<void>(`/api/memories/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   uploadPhoto: async (file: File) => {
     const token = getToken();
     const headers = new Headers();
@@ -142,6 +158,13 @@ export interface DeviceDto {
   createdAt: string;
 }
 
+export interface DeviceOnlineStatusDto {
+  deviceId: string;
+  online: boolean;
+  connectedAt?: string;
+  toolCount: number;
+}
+
 export interface EnrollmentResponse {
   token: string;
   qrPayload: string;
@@ -174,6 +197,19 @@ export interface UserPreferenceDto {
 export interface UpdatePreferenceRequest {
   content?: string | null;
   autoMemoryEnabled?: boolean | null;
+}
+
+export interface MemoryFactDto {
+  id: string;
+  userId: string;
+  kind: 'fact' | 'preference' | 'rule' | 'lesson' | string;
+  content: string;
+  sourceMessageId?: string | null;
+  createdAt?: string | null;
+  isCurated?: boolean;
+  curated?: boolean;
+  accessCount: number;
+  curatedAt?: string | null;
 }
 
 export interface PhotoUploadResponse {

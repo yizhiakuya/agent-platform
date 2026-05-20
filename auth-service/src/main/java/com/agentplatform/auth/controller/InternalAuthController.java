@@ -1,8 +1,10 @@
 package com.agentplatform.auth.controller;
 
+import com.agentplatform.api.auth.DeviceSeenRequest;
 import com.agentplatform.auth.service.JwtService;
 import com.agentplatform.api.auth.VerifyRequest;
 import com.agentplatform.api.auth.VerifyResponse;
+import com.agentplatform.auth.service.DeviceService;
 import com.agentplatform.security.Principal;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,9 +24,11 @@ import org.springframework.web.server.ResponseStatusException;
 public class InternalAuthController {
 
     private final JwtService jwtService;
+    private final DeviceService deviceService;
 
-    public InternalAuthController(JwtService jwtService) {
+    public InternalAuthController(JwtService jwtService, DeviceService deviceService) {
         this.jwtService = jwtService;
+        this.deviceService = deviceService;
     }
 
     /**
@@ -42,6 +46,16 @@ public class InternalAuthController {
             return new VerifyResponse(true, p.type(), p.subject(), p.userId(), p.jti(), null);
         } catch (Exception e) {
             return new VerifyResponse(false, null, null, null, null, e.getMessage());
+        }
+    }
+
+    @PostMapping("/devices/seen")
+    public void markDeviceSeen(@RequestBody DeviceSeenRequest req) {
+        if (req == null || req.deviceId() == null || req.userId() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "deviceId and userId required");
+        }
+        if (!deviceService.markSeen(req.userId(), req.deviceId(), req.seenAt())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Device not found");
         }
     }
 }

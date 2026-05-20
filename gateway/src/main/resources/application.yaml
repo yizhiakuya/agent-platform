@@ -27,7 +27,7 @@ spring:
             - id: device-hub-rest
               uri: lb://device-hub-service
               predicates:
-                - Path=/api/uploads/**
+                - Path=/api/uploads/**,/api/devices/**
             - id: agent-service
               uri: lb://agent-service
               predicates:
@@ -35,7 +35,7 @@ spring:
             - id: chat-service
               uri: lb://chat-service
               predicates:
-                - Path=/api/sessions/**,/api/photos/**
+                - Path=/api/sessions/**,/api/photos/**,/api/memories/**
           globalcors:
             cors-configurations:
               '[/**]':
@@ -60,7 +60,9 @@ agent-platform:
     - /api/chat
     - /api/sessions
     - /api/photos
+    - /api/memories
     - /api/uploads
+    - /api/devices
 
 logging:
   level:

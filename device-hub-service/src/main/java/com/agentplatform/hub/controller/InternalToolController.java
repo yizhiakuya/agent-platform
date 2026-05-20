@@ -1,6 +1,8 @@
 package com.agentplatform.hub.controller;
 
+import com.agentplatform.api.auth.DeviceSeenRequest;
 import com.agentplatform.hub.call.PendingCallRegistry;
+import com.agentplatform.hub.client.AuthInternalClient;
 import com.agentplatform.hub.config.HubProperties;
 import com.agentplatform.api.hub.InternalCallRequest;
 import com.agentplatform.hub.registry.DeviceProvisioner;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.async.DeferredResult;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
@@ -40,17 +43,20 @@ public class InternalToolController {
     private final PendingCallRegistry pendingCalls;
     private final HubProperties props;
     private final ObjectMapper mapper;
+    private final AuthInternalClient authClient;
 
     public InternalToolController(DeviceRegistry registry,
                                   DeviceProvisioner provisioner,
                                   PendingCallRegistry pendingCalls,
                                   HubProperties props,
-                                  ObjectMapper mapper) {
+                                  ObjectMapper mapper,
+                                  AuthInternalClient authClient) {
         this.registry = registry;
         this.provisioner = provisioner;
         this.pendingCalls = pendingCalls;
         this.props = props;
         this.mapper = mapper;
+        this.authClient = authClient;
     }
 
     @PostMapping("/call")
@@ -75,6 +81,15 @@ public class InternalToolController {
             log.info("Auto-provisioned session for device {} ({})", req.deviceId(),
                     provisioned.getClass().getSimpleName());
         }
+        if (req.userId() != null && !session.userId().equals(req.userId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Device " + req.deviceId() + " does not belong to this user");
+        }
+        if (!isDeviceStillActive(session)) {
+            registry.offline(session.deviceId());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Device " + req.deviceId() + " is no longer active");
+        }
 
         UUID callId = UUID.randomUUID();
         long timeoutMs = req.timeoutMs() != null && req.timeoutMs() > 0
@@ -97,5 +112,16 @@ public class InternalToolController {
         session.send(new JsonRpcRequest(callId.toString(), JsonRpcMethods.TOOL_CALL, params));
 
         return dr;
+    }
+
+    private boolean isDeviceStillActive(DeviceSession session) {
+        try {
+            authClient.markDeviceSeen(new DeviceSeenRequest(
+                    session.deviceId(), session.userId(), OffsetDateTime.now()));
+            return true;
+        } catch (Exception e) {
+            log.warn("Device {} failed active check before tool call: {}", session.deviceId(), e.toString());
+            return false;
+        }
     }
 }

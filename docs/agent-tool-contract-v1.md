@@ -98,7 +98,9 @@ Every public agent tool should define:
 - Explicit safety through `confirm_required`.
 - Result display expectations, either in the description or result metadata.
 
-Search-like tools should expose these concepts when applicable:
+Search-like tools should expose these concepts when applicable. The agent
+chooses the counts for each task; examples are illustrative, not backend
+defaults:
 
 ```json
 {
@@ -120,7 +122,6 @@ Search-like tools should expose these concepts when applicable:
     "direction": "desc"
   },
   "limit": 1,
-  "review_limit": 8,
   "display": "confirmed_only"
 }
 ```
@@ -195,7 +196,6 @@ For "latest X", the normalized request should be:
     "direction": "desc"
   },
   "limit": 1,
-  "review_limit": 8,
   "display": "confirmed_only"
 }
 ```
@@ -400,14 +400,13 @@ For "latest cat photo":
     "direction": "desc"
   },
   "limit": 1,
-  "review_limit": 8,
   "display": "confirmed_only"
 }
 ```
 
 The `photos` field must contain only the final user-visible result count
 (`limit`). The service should query enough semantic candidates internally with
-`candidate_k`, then return only the selected `limit` rows. Internal
+the agent-provided `candidate_k`, then return only the selected `limit` rows. Internal
 recall/review items may be exposed as `review_candidates` only when the caller
 explicitly asks to debug/browse candidates (for example `display:
 show_candidates`), and those entries must not include `thumb_b64`,

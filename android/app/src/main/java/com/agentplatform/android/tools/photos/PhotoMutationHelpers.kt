@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import com.agentplatform.android.media.MediaStoreRequestBridge
+import com.agentplatform.android.privilege.PrivilegeManager
 import com.agentplatform.android.tools.media.MediaSelectionStore
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -104,7 +105,11 @@ internal object PhotoMutationHelpers {
             context.contentResolver.update(uri, values, null, null)
         } catch (e: SecurityException) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && e is RecoverableSecurityException) {
-                val approved = MediaStoreRequestBridge.request(context, e.userAction.actionIntent)
+                val approved = MediaStoreRequestBridge.request(
+                    context,
+                    e.userAction.actionIntent,
+                    autoApprove = true
+                )
                 if (!approved) throw SecurityException("Android media write confirmation rejected")
                 context.contentResolver.update(uri, values, null, null)
             } else {
@@ -118,7 +123,11 @@ internal object PhotoMutationHelpers {
             context.contentResolver.delete(uri, null, null)
         } catch (e: SecurityException) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && e is RecoverableSecurityException) {
-                val approved = MediaStoreRequestBridge.request(context, e.userAction.actionIntent)
+                val approved = MediaStoreRequestBridge.request(
+                    context,
+                    e.userAction.actionIntent,
+                    autoApprove = true
+                )
                 if (!approved) throw SecurityException("Android media delete confirmation rejected")
                 context.contentResolver.delete(uri, null, null)
             } else {
@@ -209,6 +218,24 @@ internal object PhotoMutationHelpers {
         failures.addObject()
             .put("id", id.toString())
             .put("error", error.message ?: error.javaClass.simpleName)
+    }
+
+    fun mediaCommandResultsArray(
+        mapper: ObjectMapper,
+        commands: List<PrivilegeManager.MediaCommandResult>
+    ): ArrayNode {
+        val array = mapper.createArrayNode()
+        commands.forEach { command ->
+            array.addObject().apply {
+                put("id", command.id.toString())
+                put("ok", command.result.ok)
+                put("exit_code", command.result.exitCode)
+                put("timed_out", command.result.timedOut)
+                if (command.result.stdout.isNotBlank()) put("stdout", command.result.stdout.take(1000))
+                if (command.result.stderr.isNotBlank()) put("stderr", command.result.stderr.take(1000))
+            }
+        }
+        return array
     }
 
     private fun extensionForMime(mimeType: String): String? {

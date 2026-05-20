@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **agent-platform** (6025 symbols, 14945 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **agent-platform** (6220 symbols, 15571 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -64,3 +64,14 @@ This project is indexed by GitNexus as **agent-platform** (6025 symbols, 14945 r
   the actual business workflow and expected standard: complete controls and
   states, durable contracts, sensible edge-case handling, verification, and an
   experience that feels fit for real use rather than a thin demo.
+
+## Runtime / Deployment Location
+
+- The live service stack is deployed only on Megumin (`root@192.168.0.109`,
+  `/opt/agent-platform`). For live sessions, service logs, Postgres data,
+  container status, health checks, and deployment verification, inspect the
+  Megumin compose stack over SSH.
+- Do not look for backend/server containers on the local workstation unless the
+  user explicitly says a local dev stack is running. Local work is for source
+  edits, local builds/tests, Android APK builds, and packaging/publishing
+  deployment artifacts.

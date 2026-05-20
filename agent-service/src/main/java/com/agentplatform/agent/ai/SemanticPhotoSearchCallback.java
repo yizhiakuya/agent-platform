@@ -48,7 +48,6 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
     private final PhotoEmbeddingService photoEmbeddingService;
     private final InternalChatFeignClient internalChatClient;
     private final boolean visionEnabled;
-    private final int indexTopK;
     private final double indexMinScore;
     private final boolean photoIndexEnabled;
     private final boolean fallbackRealtime;
@@ -73,7 +72,6 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         this.internalChatClient = internalChatClient;
         this.visionEnabled = visionEnabled;
         AgentProperties.Photos photos = props == null || props.agent() == null ? null : props.agent().photos();
-        this.indexTopK = photos == null ? 8 : photos.searchTopK();
         this.indexMinScore = photos == null ? 0.20d : photos.minScore();
         this.photoIndexEnabled = photos == null || Boolean.TRUE.equals(photos.enabled());
         this.fallbackRealtime = photos == null || Boolean.TRUE.equals(photos.fallbackRealtime());
@@ -89,7 +87,6 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         this.photoEmbeddingService = null;
         this.internalChatClient = null;
         this.visionEnabled = visionEnabled;
-        this.indexTopK = 8;
         this.indexMinScore = 0.20d;
         this.photoIndexEnabled = false;
         this.fallbackRealtime = true;
@@ -110,9 +107,14 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
             return ExecutionResult.error("query is required");
         }
         int limit = clamp(args.path("limit").asInt(3), 1, 12);
-        int reviewLimit = clamp(args.path("review_limit").asInt(Math.max(8, limit * 3)), limit, 12);
-        int scanLimit = clamp(args.path("scan_limit").asInt(Math.max(60, reviewLimit * 8)), reviewLimit, 200);
+        int reviewLimit = args.has("review_limit")
+                ? clamp(args.path("review_limit").asInt(limit), limit, 12)
+                : limit;
         SearchContract contract = searchContract(args, query, limit, reviewLimit);
+        int scanLimit = clamp(
+                args.path("scan_limit").asInt(Math.max(60, contract.candidateK() * 4)),
+                contract.candidateK(),
+                200);
 
         if (sink != null) {
             sink.emit(SseEvent.toolCallStarted(mapper, deviceId, TOOL_NAME, args));
@@ -134,7 +136,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         }
 
         ObjectNode candidateArgs = mapper.createObjectNode();
-        int candidateLimit = Math.min(20, Math.min(scanLimit, Math.max(reviewLimit * 2, limit * 4)));
+        int candidateLimit = Math.min(20, Math.min(scanLimit, Math.max(contract.candidateK(), contract.reviewLimit())));
         candidateArgs.put("query", query);
         candidateArgs.put("limit", candidateLimit);
         candidateArgs.put("scan_limit", scanLimit);
@@ -294,6 +296,9 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         }
         try {
             int topK = contract.candidateK();
+            int requestedRows = shouldExposeReviewCandidates(contract)
+                    ? contract.reviewLimit()
+                    : contract.resultLimit();
             List<PhotoAssetSearchResult> hits = internalChatClient.searchPhotos(new PhotoAssetSearchRequest(
                     userId,
                     queryEmbedding,
@@ -303,7 +308,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
                     longFilter(args, "date_after"),
                     longFilter(args, "date_before"),
                     contract.minScore(),
-                    contract.resultLimit(),
+                    requestedRows,
                     contract.rankingMode(),
                     contract.sortBy(),
                     contract.sortDirection()));
@@ -323,7 +328,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
                                      SearchContract contract) {
         ArrayNode outPhotos = mapper.createArrayNode();
         ArrayNode reviewCandidates = mapper.createArrayNode();
-        int take = Math.min(contract.resultLimit(), hits == null ? 0 : hits.size());
+        int take = Math.min(contract.reviewLimit(), hits == null ? 0 : hits.size());
         int finalTake = Math.min(contract.resultLimit(), hits == null ? 0 : hits.size());
         for (int i = 0; i < take; i++) {
             PhotoAssetSearchResult hit = hits.get(i);
@@ -697,11 +702,8 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
             normalizedRanking = "semantic_then_sort";
         }
         String normalizedDirection = normalizeSortDirection(sortDirection);
-        int defaultCandidateK = "semantic_then_sort".equals(normalizedRanking) && !"relevance".equals(normalizedSortBy)
-                ? 50
-                : Math.max(Math.max(reviewLimit, indexTopK), limit);
         int minCandidateK = Math.max(limit, reviewLimit);
-        int candidateK = clamp(args.path("candidate_k").asInt(defaultCandidateK), minCandidateK, 50);
+        int candidateK = clamp(args.path("candidate_k").asInt(minCandidateK), minCandidateK, 50);
         double minScore = args.path("min_score").isNumber()
                 ? clampScore(args.path("min_score").asDouble())
                 : indexMinScore;
@@ -1015,7 +1017,9 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
             documents, or "the picture where ...". This is a search tool:
             the photos array contains only the final selected result count,
             while internal recall candidates stay hidden unless explicitly
-            requested for debugging. Use ranking_mode=semantic_then_sort and
+            requested for debugging. Choose limit and candidate_k explicitly
+            for the task; choose review_limit only when debugging or browsing
+            extra candidates. Use ranking_mode=semantic_then_sort and
             sort_by=date_taken/sort_direction=desc for "latest/recent X".
             Use limit=1 when the user asks for one image; use 3-5 for
             ambiguous searches; only use larger limits when the user asks to
@@ -1035,20 +1039,19 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
                   "minimum": 1,
                   "maximum": 12,
                   "default": 3,
-                  "description": "Max final matches the user wants. Use 1 for a single/latest/recent image request; use 3-5 for ambiguous searches; use higher values only when the user asks for several. The photos array must not exceed this count."
+                  "description": "Final user-visible matches the agent wants. Use 1 for a single/latest/recent image request; use 3-5 for ambiguous searches; use higher values only when the user asks for several. The photos array must not exceed this count."
                 },
                 "review_limit": {
                   "type": "integer",
                   "minimum": 1,
                   "maximum": 12,
-                  "default": 8,
-                  "description": "Internal audit/debug candidate count. Normal confirmed_only results do not expose these candidates, and review candidates must not include image binaries."
+                  "description": "Internal audit/debug candidate count chosen by the agent. Normal confirmed_only results do not expose these candidates, and review candidates must not include image binaries."
                 },
                 "candidate_k": {
                   "type": "integer",
                   "minimum": 1,
                   "maximum": 50,
-                  "description": "Internal semantic recall size before final sorting. Use more than review_limit when sorting by metadata, for example latest/recent requests."
+                  "description": "Internal semantic recall size before final sorting. The agent should choose this explicitly for the task, especially when metadata sorting needs broader recall."
                 },
                 "min_score": {
                   "type": "number",
@@ -1109,7 +1112,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
                   "description": "Run on-device OCR before semantic ranking."
                 }
               },
-              "required": ["query"]
+              "required": ["query", "limit", "candidate_k"]
             }
             """;
 

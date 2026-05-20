@@ -1,5 +1,6 @@
 package com.agentplatform.hub.client;
 
+import com.agentplatform.api.auth.DeviceSeenRequest;
 import com.agentplatform.api.auth.VerifyRequest;
 import com.agentplatform.api.auth.VerifyResponse;
 import org.springframework.cloud.openfeign.FeignClient;
@@ -11,4 +12,7 @@ public interface AuthInternalClient {
 
     @PostMapping("/verify")
     VerifyResponse verify(@RequestBody VerifyRequest req);
+
+    @PostMapping("/devices/seen")
+    void markDeviceSeen(@RequestBody DeviceSeenRequest req);
 }

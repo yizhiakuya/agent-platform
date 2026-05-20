@@ -39,6 +39,15 @@ public class DeviceService {
         }
     }
 
+    @Transactional
+    public boolean markSeen(UUID userId, UUID deviceId, OffsetDateTime seenAt) {
+        if (userId == null || deviceId == null) {
+            return false;
+        }
+        OffsetDateTime effectiveSeenAt = seenAt == null ? OffsetDateTime.now() : seenAt;
+        return devices.markSeen(deviceId, userId, effectiveSeenAt) > 0;
+    }
+
     private DeviceDto toDto(Device d) {
         return new DeviceDto(d.getId(), d.getName(), d.getModel(), d.getOsVersion(),
                 d.getLastSeenAt(), d.getCreatedAt());

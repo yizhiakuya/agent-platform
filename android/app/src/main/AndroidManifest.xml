@@ -21,6 +21,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Shizuku client authorization permission. Shizuku grants this when the
+         user authorizes Agent Platform in the Shizuku app/dialog. -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
     <!-- QR scanning during enrollment -->
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Photo access — Android 13+ scoped media -->
@@ -32,6 +35,11 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <!-- Android 14 partial photo/video access state. -->
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <!-- Optional Android 11+ media-management privilege. When the user grants
+         it in Settings, MediaStore write/trash/delete requests can skip the
+         second system confirmation dialog. This does not grant media read
+         access by itself. -->
+    <uses-permission android:name="android.permission.MANAGE_MEDIA" />
     <!-- Battery whitelist prompt redirect (XXPermissions / vendor-specific) -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
@@ -79,6 +87,14 @@
         <receiver
             android:name=".confirm.ToolConfirmationReceiver"
             android:exported="false" />
+
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
         <service
             android:name=".service.AgentForegroundService"

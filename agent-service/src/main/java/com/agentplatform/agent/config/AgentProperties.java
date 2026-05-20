@@ -52,7 +52,7 @@ public record AgentProperties(
                         null, 0, 0, 0, 0, null);
             }
             if (photos == null) {
-                photos = new Photos(null, null, null, 0, null, null, null, true, true, 50, 0.20d, 8, 180);
+                photos = new Photos(null, null, null, 0, null, null, null, true, true, false, 50, 0.20d, 8, 180);
             }
         }
     }
@@ -187,6 +187,7 @@ public record AgentProperties(
             String inputImageField,
             Boolean enabled,
             Boolean fallbackRealtime,
+            Boolean indexWorkerEnabled,
             int searchTopK,
             double minScore,
             int indexBatchSize,
@@ -213,6 +214,9 @@ public record AgentProperties(
             }
             if (fallbackRealtime == null) {
                 fallbackRealtime = Boolean.TRUE;
+            }
+            if (indexWorkerEnabled == null) {
+                indexWorkerEnabled = Boolean.FALSE;
             }
             if (searchTopK <= 0) {
                 searchTopK = 8;

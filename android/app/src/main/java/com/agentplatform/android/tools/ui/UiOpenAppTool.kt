@@ -8,7 +8,10 @@ import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ObjectNode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Bring an installed app to the foreground by package name. This is a small
@@ -107,24 +110,32 @@ class UiOpenAppTool(
             }, ok = false, request = args)
         }
 
-        val waitMs = 2500L
-        var foregroundPackage = waitForForegroundPackage(packageName, waitMs, launchStartedAtMs)
-        if (foregroundPackage != packageName && launchResult.source == "application" && UiAccessibilityService.isAvailable()) {
+        val waitMs = DEFAULT_VERIFY_WAIT_MS
+        var observation = waitForForegroundPackage(packageName, waitMs, launchStartedAtMs)
+        if (observation.packageName != packageName && launchResult.source == "application" && UiAccessibilityService.isAvailable()) {
             val accessibilityResult = sendLaunchIntentFromAccessibility(intent)
             launchResults += accessibilityResult
             if (accessibilityResult.sent) {
-                foregroundPackage = waitForForegroundPackage(packageName, waitMs, System.currentTimeMillis())
+                observation = waitForForegroundPackage(packageName, waitMs, System.currentTimeMillis())
             }
         }
+        val foregroundPackage = observation.packageName
         val opened = foregroundPackage == packageName
+        val intentSentButUnverified = !opened && foregroundPackage.isBlank()
         val result = mapper.createObjectNode().apply {
-            put("opened", foregroundPackage == packageName)
+            put("opened", opened)
             put("intentSent", true)
             put("launchedFrom", launchResults.lastOrNull { it.sent }?.source ?: launchResult.source)
             put("package", packageName)
             put("foregroundPackage", foregroundPackage)
-            put("verified", foregroundPackage == packageName)
+            put("verified", opened)
+            put("verificationSource", observation.source)
+            put("intentSentButUnverified", intentSentButUnverified)
+            put("blockedBySystem", false)
             put("waitMs", waitMs)
+            if (observation.cachedPackage.isNotBlank()) put("cachedForegroundPackage", observation.cachedPackage)
+            if (observation.activeWindowPackage.isNotBlank()) put("activeWindowPackage", observation.activeWindowPackage)
+            if (observation.cachedPackageAgeMs != null) put("cachedForegroundPackageAgeMs", observation.cachedPackageAgeMs)
             val attempts = mapper.createArrayNode()
             launchResults.forEach { result ->
                 attempts.add(mapper.createObjectNode().apply {
@@ -134,22 +145,37 @@ class UiOpenAppTool(
                 })
             }
             set<JsonNode>("launchAttempts", attempts)
-            if (foregroundPackage != packageName) {
-                put("blockedBySystem", true)
-                put("error", "launch intent sent but target app did not reach foreground")
-                put(
-                    "hint",
-                    "MIUI/HyperOS may require enabling background popup/background launch permission for Agent Platform"
-                )
-                set<ObjectNode>("error_detail", mapper.createObjectNode().apply {
-                    put("code", "foreground_verification_failed")
-                    put("message", "launch intent sent but target app did not reach foreground")
-                    put("retryable", true)
-                    put("hint", "MIUI/HyperOS may require enabling background popup/background launch permission for Agent Platform")
-                })
+            if (!opened) {
+                if (intentSentButUnverified) {
+                    put(
+                        "warning",
+                        "launch intent was sent, but Accessibility did not provide a fresh foreground package"
+                    )
+                    set<ObjectNode>("next", mapper.createObjectNode().apply {
+                        put("tool", "ui.dump_tree")
+                        put("reason", "verify the current foreground screen after launch")
+                    })
+                } else {
+                    val message =
+                        "launch intent was sent, but another foreground package was observed"
+                    put("error", message)
+                    put("hint", "Call ui.dump_tree or ui.screen_capture to verify the current screen before deciding recovery.")
+                    set<ObjectNode>("error_detail", mapper.createObjectNode().apply {
+                        put("code", "foreground_verification_mismatch")
+                        put("message", message)
+                        put("retryable", true)
+                        put("hint", "Call ui.dump_tree or ui.screen_capture to verify the current screen before deciding recovery.")
+                    })
+                }
             }
         }
-        return ToolResultEnvelope.applyStandardFields(mapper, this, result, ok = opened, request = args)
+        return ToolResultEnvelope.applyStandardFields(
+            mapper,
+            this,
+            result,
+            ok = opened || intentSentButUnverified,
+            request = args
+        )
     }
 
     private fun sendLaunchIntent(intent: Intent): LaunchResult {
@@ -173,23 +199,53 @@ class UiOpenAppTool(
         }
     }
 
-    private suspend fun waitForForegroundPackage(packageName: String, waitMs: Long, minUpdatedAtMs: Long): String {
+    private suspend fun waitForForegroundPackage(packageName: String, waitMs: Long, minUpdatedAtMs: Long): ForegroundObservation {
         val deadline = System.currentTimeMillis() + waitMs
-        var lastPackage = ""
+        var lastObservation = foregroundPackage(packageName, minUpdatedAtMs)
         while (System.currentTimeMillis() < deadline) {
-            lastPackage = foregroundPackage(packageName, minUpdatedAtMs)
-            if (lastPackage == packageName) return lastPackage
+            lastObservation = foregroundPackage(packageName, minUpdatedAtMs)
+            if (lastObservation.packageName == packageName) return lastObservation
             delay(250L)
         }
-        return foregroundPackage(packageName, minUpdatedAtMs).ifBlank { lastPackage }
+        val finalObservation = foregroundPackage(packageName, minUpdatedAtMs)
+        return if (finalObservation.packageName.isNotBlank()) finalObservation else lastObservation
     }
 
-    private fun foregroundPackage(expectedPackage: String, minUpdatedAtMs: Long): String {
+    private suspend fun foregroundPackage(expectedPackage: String, minUpdatedAtMs: Long): ForegroundObservation {
         val cached = UiAccessibilityService.currentPackage(minUpdatedAtMs)
-        if (cached == expectedPackage) return cached
-        return runCatching {
-            UiAccessibilityService.dumpTree(mapper, 1).path("package").asText("")
-        }.getOrDefault("").ifBlank { cached }
+        val cachedUpdatedAt = UiAccessibilityService.currentPackageUpdatedAtMs()
+        val cachedAgeMs = if (cachedUpdatedAt > 0L) System.currentTimeMillis() - cachedUpdatedAt else null
+        if (cached == expectedPackage) {
+            return ForegroundObservation(
+                packageName = cached,
+                source = "cached_accessibility_event",
+                cachedPackage = cached,
+                activeWindowPackage = "",
+                cachedPackageAgeMs = cachedAgeMs
+            )
+        }
+        val activeWindow = withTimeoutOrNull(ACTIVE_WINDOW_PROBE_TIMEOUT_MS) {
+            withContext(Dispatchers.Main.immediate) {
+                UiAccessibilityService.activeWindowPackage()
+            }
+        }.orEmpty()
+        val packageName = when {
+            activeWindow.isNotBlank() -> activeWindow
+            cached.isNotBlank() -> cached
+            else -> ""
+        }
+        val source = when {
+            activeWindow.isNotBlank() -> "active_window"
+            cached.isNotBlank() -> "cached_accessibility_event"
+            else -> "unavailable"
+        }
+        return ForegroundObservation(
+            packageName = packageName,
+            source = source,
+            cachedPackage = cached,
+            activeWindowPackage = activeWindow,
+            cachedPackageAgeMs = cachedAgeMs
+        )
     }
 
     private fun knownLaunchIntent(packageName: String): Intent? =
@@ -209,4 +265,17 @@ class UiOpenAppTool(
         val source: String,
         val error: String? = null
     )
+
+    private data class ForegroundObservation(
+        val packageName: String,
+        val source: String,
+        val cachedPackage: String,
+        val activeWindowPackage: String,
+        val cachedPackageAgeMs: Long?
+    )
+
+    private companion object {
+        private const val DEFAULT_VERIFY_WAIT_MS = 1_500L
+        private const val ACTIVE_WINDOW_PROBE_TIMEOUT_MS = 300L
+    }
 }

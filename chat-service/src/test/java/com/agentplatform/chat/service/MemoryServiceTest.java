@@ -1,10 +1,13 @@
 package com.agentplatform.chat.service;
 
+import com.agentplatform.api.chat.MemoryFactDto;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.Timestamp;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -14,6 +17,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 class MemoryServiceTest {
 
@@ -60,5 +64,22 @@ class MemoryServiceTest {
                 .hasMessageContaining("max 4000 chars");
 
         verifyNoInteractions(jdbc);
+    }
+
+    @Test
+    void listFactsKeepsWhitespaceBetweenWhereAndOrderBy() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        MemoryService service = new MemoryService(jdbc);
+        UUID userId = UUID.randomUUID();
+        when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<MemoryFactDto>>any(), eq(userId), eq(20)))
+                .thenReturn(List.of());
+
+        service.listFacts(userId, 20, true);
+
+        verify(jdbc).query(org.mockito.ArgumentMatchers.argThat(sql ->
+                        sql.contains("WHERE user_id = ?\nORDER BY")),
+                org.mockito.ArgumentMatchers.<RowMapper<MemoryFactDto>>any(),
+                eq(userId),
+                eq(20));
     }
 }

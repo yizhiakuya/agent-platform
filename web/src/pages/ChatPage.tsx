@@ -66,7 +66,7 @@ export default function ChatPage() {
       const rows = await api.listMessages(id);
       const loaded = rows.map(messageToEvent).filter((ev): ev is ChatEvent => ev !== null);
       const cached = eventsByKey[id] ?? eventCacheRef.current[id];
-      const nextEvents = cached && hasRicherToolHistory(cached, loaded) ? cached : loaded;
+      const nextEvents = preferredSessionEvents(cached, loaded);
       eventCacheRef.current[id] = nextEvents;
       setEventsForKey(id, nextEvents);
       setEvents(nextEvents);
@@ -286,6 +286,28 @@ export default function ChatPage() {
     setEventsForKey(key, next);
     eventCacheRef.current[key] = next;
     if (key === activeDraftKeyRef.current) setEvents(next);
+  }
+
+  async function syncSessionMessages(id: string, key: string) {
+    const rows = await api.listMessages(id);
+    const loaded = rows.map(messageToEvent).filter((ev): ev is ChatEvent => ev !== null);
+    const cached = eventCacheRef.current[key] ?? eventsByKey[key];
+    const nextEvents = preferredSessionEvents(cached, loaded);
+    setEventsForDraftKey(key, nextEvents);
+    return loaded;
+  }
+
+  async function recoverSessionMessages(id: string, key: string) {
+    const expectedUsers = countEventsOfType(eventCacheRef.current[key] ?? eventsByKey[key] ?? [], 'user_message');
+    let loaded: ChatEvent[] = [];
+    for (let attempt = 0; attempt < 7; attempt += 1) {
+      if (attempt > 0) await delay(1200);
+      loaded = await syncSessionMessages(id, key);
+      if (countEventsOfType(loaded, 'user_message') >= expectedUsers && latestTurnIsComplete(loaded)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function appendCancelEventToKey(key: string, sentEventsIndex: number) {
@@ -547,7 +569,6 @@ export default function ChatPage() {
               return copy;
             });
           } else {
-            assistantBuf = '';
             setEventsForDraftKey(targetKey, prev => [
               ...prev,
               { type: name, data: { ...data, createdAt: new Date().toISOString() } }
@@ -564,6 +585,9 @@ export default function ChatPage() {
           });
         }
       });
+      if (targetSessionId) {
+        await syncSessionMessages(targetSessionId, targetKey).catch(() => undefined);
+      }
       await refreshSessions();
     } catch {
       attachmentsToSend.forEach(img => URL.revokeObjectURL(img.previewUrl));
@@ -575,8 +599,13 @@ export default function ChatPage() {
         }
         setEventsForDraftKey(targetKey, prev => markLatestAssistantDuration(prev, Date.now() - startedAt));
       } else {
-        if (attachmentsToSend.length > 0) restorePendingImages(originalKey, attachmentsToSend);
-        setComposerError('图片上传或发送失败，请重试');
+        const recovered = turnStarted && targetSessionId
+          ? await recoverSessionMessages(targetSessionId, targetKey).catch(() => false)
+          : false;
+        if (!recovered) {
+          if (attachmentsToSend.length > 0) restorePendingImages(originalKey, attachmentsToSend);
+          setComposerError('图片上传或发送失败，或连接中断后暂未补全，请稍后刷新重试。');
+        }
       }
     } finally {
       setRunsByKey(prev => {
@@ -597,7 +626,7 @@ export default function ChatPage() {
   }
 
   const activeSession = sessionId ? sessions.find(s => s.id === sessionId) : null;
-  const timelineItems = useMemo(() => buildTimelineItems(events), [events]);
+  const timelineItems = useMemo(() => buildTimelineItems(events, busy), [events, busy]);
   const toolCallCount = events.filter(ev => ev.type === 'tool_call_started').length;
   const toolResultCount = events.filter(ev => ev.type === 'tool_call_result').length;
   const lastActivity = activeSession?.lastMessageAt ?? activeSession?.createdAt;
@@ -1035,9 +1064,19 @@ type TimelineItem =
 
 type StandardToolMedia =
   | { mode: 'primary'; primary: any }
-  | { mode: 'grid'; items: any[] }
+  | { mode: 'grid'; items: any[]; page?: ToolResultPageInfo | null }
   | { mode: 'collapsed'; items: any[]; summary: string }
   | { mode: 'details'; result: any; summary: string };
+
+interface ToolResultPageInfo {
+  start?: number;
+  end?: number;
+  count: number;
+  limit?: number;
+  offset?: number;
+  hasMore: boolean;
+  nextOffset?: number;
+}
 
 async function uploadPendingImages(items: PendingImage[]): Promise<UploadedChatImage[]> {
   const out: UploadedChatImage[] = [];
@@ -1086,7 +1125,7 @@ function readImageDimensions(file: File): Promise<{ width?: number; height?: num
   });
 }
 
-function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
+function buildTimelineItems(events: ChatEvent[], runActive = false): TimelineItem[] {
   const items: TimelineItem[] = [];
   let i = 0;
   while (i < events.length) {
@@ -1111,7 +1150,7 @@ function buildTimelineItems(events: ChatEvent[]): TimelineItem[] {
       continue;
     }
 
-    const finalAssistantOffset = finalAssistantIndex(segment);
+    const finalAssistantOffset = finalAssistantIndex(segment, runActive);
     if (finalAssistantOffset < 0) {
       items.push({
         kind: 'process',
@@ -1171,14 +1210,24 @@ function isToolActivityEvent(ev: ChatEvent | undefined) {
   return ev?.type === 'tool_call_started' || ev?.type === 'tool_call_result';
 }
 
-function finalAssistantIndex(events: ChatEvent[]) {
+function finalAssistantIndex(events: ChatEvent[], runActive = false) {
   let lastToolOffset = -1;
   let lastAssistantOffset = -1;
+  let lastVisibleToolResultOffset = -1;
   events.forEach((ev, index) => {
     if (isToolActivityEvent(ev)) lastToolOffset = index;
+    if (shouldShowToolResultOutsideProcess(ev)) lastVisibleToolResultOffset = index;
     if (ev.type === 'assistant_message') lastAssistantOffset = index;
   });
-  return lastAssistantOffset > lastToolOffset ? lastAssistantOffset : -1;
+  if (lastAssistantOffset <= lastToolOffset) return -1;
+  if (!runActive) return lastAssistantOffset;
+
+  // During a live tool-using turn, text before the visible result is only a
+  // progress note. Keep it inside the process panel so it cannot look like the
+  // final assistant reply before image/media results arrive.
+  return lastVisibleToolResultOffset >= 0 && lastAssistantOffset > lastVisibleToolResultOffset
+    ? lastAssistantOffset
+    : -1;
 }
 
 function messageToEvent(m: MessageDto): ChatEvent | null {
@@ -1292,6 +1341,46 @@ function appendCancelEvent(
       }
     }
   ];
+}
+
+function preferredSessionEvents(cached: ChatEvent[] | undefined, loaded: ChatEvent[]) {
+  if (!cached || cached.length === 0) return loaded;
+  if (isStrictlyRicherSessionHistory(loaded, cached)) return loaded;
+  if (hasRicherToolHistory(cached, loaded)) return cached;
+  return loaded.length >= cached.length ? loaded : cached;
+}
+
+function isStrictlyRicherSessionHistory(candidate: ChatEvent[], current: ChatEvent[]) {
+  if (candidate.length < current.length) return false;
+  const candidateUsers = countEventsOfType(candidate, 'user_message');
+  const currentUsers = countEventsOfType(current, 'user_message');
+  if (candidateUsers < currentUsers) return false;
+  const candidateTools = countEventsOfType(candidate, 'tool_call_result');
+  const currentTools = countEventsOfType(current, 'tool_call_result');
+  if (candidateTools > currentTools) return true;
+  const candidateAssistants = countEventsOfType(candidate, 'assistant_message');
+  const currentAssistants = countEventsOfType(current, 'assistant_message');
+  if (candidateAssistants > currentAssistants) return true;
+  const candidateRenderable = candidate.some(ev => ev.type === 'tool_call_result' && isRenderableToolResult(ev));
+  const currentRenderable = current.some(ev => ev.type === 'tool_call_result' && isRenderableToolResult(ev));
+  return candidateRenderable && !currentRenderable;
+}
+
+function countEventsOfType(events: ChatEvent[], type: string) {
+  return events.filter(ev => ev.type === type).length;
+}
+
+function latestTurnIsComplete(events: ChatEvent[]) {
+  let lastUserIndex = -1;
+  events.forEach((ev, index) => {
+    if (ev.type === 'user_message') lastUserIndex = index;
+  });
+  if (lastUserIndex < 0) return true;
+  return events.slice(lastUserIndex + 1).some(ev => ev.type === 'assistant_message');
+}
+
+function delay(ms: number) {
+  return new Promise(resolve => window.setTimeout(resolve, ms));
 }
 
 function hasRicherToolHistory(cached: ChatEvent[], loaded: ChatEvent[]) {
@@ -1933,7 +2022,12 @@ function ToolResult({ tool, result, onOpenImage }: {
 
   if (Array.isArray(result?.photos) &&
       isPhotoListTool(tool)) {
-    return <ThumbGrid items={result.photos} onOpenImage={onOpenImage} />;
+    return (
+      <div className="space-y-2">
+        <ThumbGrid items={result.photos} onOpenImage={onOpenImage} />
+        <ToolResultPageNote page={toolResultPageInfo(result, result.photos.length)} />
+      </div>
+    );
   }
 
   if (tool === 'photos.semantic_search') {
@@ -2068,7 +2162,28 @@ function StandardToolMediaResult({
     );
   }
 
-  return <ThumbGrid items={media.items} onOpenImage={onOpenImage} />;
+  return (
+    <div className="space-y-2">
+      <ThumbGrid items={media.items} onOpenImage={onOpenImage} />
+      <ToolResultPageNote page={media.page} />
+    </div>
+  );
+}
+
+function ToolResultPageNote({ page }: { page?: ToolResultPageInfo | null }) {
+  if (!page) return null;
+  const range = page.count > 0 && page.start && page.end
+    ? `第 ${page.start}-${page.end} 张`
+    : `本页 ${page.count} 张`;
+  const limitPart = page.limit ? `，每页 ${page.limit} 张` : '';
+  const nextPart = page.hasMore
+    ? `，还有更多，可继续请求 next_offset=${page.nextOffset ?? page.end ?? page.count}`
+    : '，没有检测到下一页';
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+      {range}{limitPart}{nextPart}
+    </div>
+  );
 }
 
 function PrimaryPhotoCard({ photo, onOpenImage }: { photo: any; onOpenImage: OpenImage }) {
@@ -2109,6 +2224,7 @@ function SemanticPhotoResult({ result, onOpenImage }: { result: any; onOpenImage
   }
 
   const photos = Array.isArray(result?.photos) ? result.photos : [];
+  const page = toolResultPageInfo(result, photos.length);
   const displayPolicy = result?.display_policy ?? result?.display?.policy;
   const requestedLimitValue = Number(result?.requested_limit ?? result?.limit ?? result?.display?.requested_limit ?? 1);
   const requestedLimit = Number.isFinite(requestedLimitValue) && requestedLimitValue > 0
@@ -2159,10 +2275,11 @@ function SemanticPhotoResult({ result, onOpenImage }: { result: any; onOpenImage
   const shown = photos.slice(0, Math.min(photos.length, 3));
   const hidden = Math.max(0, photos.length - shown.length);
 
-  return (
-    <div className="space-y-2">
-      <ThumbGrid items={shown} onOpenImage={onOpenImage} />
-      {hidden > 0 && (
+    return (
+      <div className="space-y-2">
+        <ThumbGrid items={shown} onOpenImage={onOpenImage} />
+        <ToolResultPageNote page={page} />
+        {hidden > 0 && (
         <details className="text-xs text-slate-500">
           <summary className="cursor-pointer">还有 {hidden} 张候选图</summary>
           <div className="mt-2">
@@ -2316,7 +2433,7 @@ function standardToolMedia(result: unknown): StandardToolMedia | null {
   const imageItems = items.filter(item => hasPhotoImage(item));
 
   if ((policy === 'show_grid' || (policy === 'show_primary' && imageItems.length > 1)) && imageItems.length > 0) {
-    return { mode: 'grid', items: imageItems };
+    return { mode: 'grid', items: imageItems, page: toolResultPageInfo(result, imageItems.length) };
   }
 
   if (policy === 'show_primary' && primary) {
@@ -2342,10 +2459,37 @@ function standardToolMedia(result: unknown): StandardToolMedia | null {
   }
 
   if (hasAnyPhotoImage(items) && isStandardDisplayableToolResult(result)) {
-    return { mode: 'grid', items };
+    return { mode: 'grid', items, page: toolResultPageInfo(result, items.length) };
   }
 
   return null;
+}
+
+function toolResultPageInfo(result: unknown, fallbackCount: number): ToolResultPageInfo | null {
+  const r = asRecord(result);
+  if (!r) return null;
+  const pagination = asRecord(r.pagination);
+  const display = asRecord(r.display);
+  const offset = numberOrUndefined(pagination?.offset ?? r.offset);
+  const limit = numberOrUndefined(pagination?.limit ?? r.limit ?? display?.limit);
+  const returnedCount = numberOrUndefined(pagination?.returned_count ?? pagination?.returnedCount ?? r.count) ?? fallbackCount;
+  const hasMoreValue = pagination?.has_more ?? pagination?.hasMore ?? r.has_more ?? r.hasMore ?? display?.has_more ?? display?.hasMore;
+  const nextOffset = numberOrUndefined(
+    pagination?.next_offset ?? pagination?.nextOffset ?? r.next_offset ?? r.nextOffset ?? display?.next_offset ?? display?.nextOffset
+  );
+  const start = numberOrUndefined(pagination?.start_index ?? pagination?.startIndex) ??
+    (typeof offset === 'number' && returnedCount > 0 ? offset + 1 : undefined);
+  const end = numberOrUndefined(pagination?.end_index ?? pagination?.endIndex) ??
+    (typeof offset === 'number' && returnedCount > 0 ? offset + returnedCount : undefined);
+  const hasMore = hasMoreValue === true || hasMoreValue === 'true' || typeof nextOffset === 'number';
+  const hasPageFields = typeof offset === 'number' || typeof limit === 'number' || hasMore || typeof start === 'number' || typeof end === 'number';
+  if (!hasPageFields) return null;
+  return { start, end, count: returnedCount, limit, offset, hasMore, nextOffset };
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function primaryToolImage(result: unknown): any | null {

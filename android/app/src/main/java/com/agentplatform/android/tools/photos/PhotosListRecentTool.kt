@@ -35,8 +35,11 @@ class PhotosListRecentTool(
         JPEG asset URLs (up to 2048px long edge). Returns the most-recent
         matching photos first.
 
-        Always pass the narrowest filter you can — pulling 20+ unfiltered photos
-        wastes the user's mobile upload bandwidth. In particular:
+        Choose `limit` from the user's actual request: ask for 8, 30, 100,
+        etc. in one call when that is what you need. Use narrow filters when
+        possible because every returned item is uploaded as a display image.
+        Use smaller `max_dim` (512-768) when browsing many photos, and larger
+        `max_dim` (1024-2048) only when detail matters. In particular:
 
         - For "photos from app X" / "screenshots of X": pass `name_contains` with
           a substring of X (Android screenshots include the source package in
@@ -46,7 +49,9 @@ class PhotosListRecentTool(
         - Only use a bare `limit` with no filters when the user explicitly asks
           for "recent photos" with no qualifier.
 
-        `limit` caps the result count regardless of filters; cap is 50.
+        `limit` is the number of photos you want back in this call. If you are
+        continuing after a previous result, reuse `next_args` or pass `offset`
+        so you do not repeat the same first page.
     """.trimIndent()
 
     override val schema: JsonNode = mapper.readTree(
@@ -57,9 +62,21 @@ class PhotosListRecentTool(
             "limit": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 50,
-              "default": 6,
-              "description": "Max photos to return."
+              "default": 12,
+              "description": "Number of photos the agent wants in this call. Choose the count that matches the task."
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "description": "Number of matching photos to skip. Use next_args.offset from a previous result to fetch the next page."
+            },
+            "max_dim": {
+              "type": "integer",
+              "minimum": 512,
+              "maximum": 2048,
+              "default": 1024,
+              "description": "Long-edge size for returned display images. Use 512-768 for many photos; use 1024-2048 for detail."
             },
             "name_contains": {
               "type": "string",
@@ -83,10 +100,14 @@ class PhotosListRecentTool(
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
         val uploader = PhotoAssetUploader(context, mapper)
-        val limit = (args.path("limit").asInt(6)).coerceIn(1, 50)
+        val requestedLimit = args.path("limit").asInt(DEFAULT_LIMIT).coerceAtLeast(1)
+        val limit = requestedLimit.coerceAtMost(MAX_RESULTS_PER_CALL)
+        val offset = args.path("offset").asInt(0).coerceAtLeast(0)
+        val maxDim = args.path("max_dim").asInt(DEFAULT_MAX_DIM).coerceIn(MIN_MAX_DIM, MAX_MAX_DIM)
         val nameContains = args.path("name_contains").asText("").trim().takeIf { it.isNotEmpty() }
         val dateAfter = args.path("date_after").let { if (it.isNumber) it.asLong() else null }
         val dateBefore = args.path("date_before").let { if (it.isNumber) it.asLong() else null }
+        val queryLimit = (limit + 1).coerceAtMost(MAX_RESULTS_PER_CALL + 1)
 
         // Build SQL-like selection from the optional filters.
         val clauses = mutableListOf<String>()
@@ -125,7 +146,8 @@ class PhotosListRecentTool(
                     android.content.ContentResolver.QUERY_ARG_SORT_DIRECTION,
                     android.content.ContentResolver.QUERY_SORT_DIRECTION_DESCENDING
                 )
-                putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, limit)
+                putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, queryLimit)
+                putInt(android.content.ContentResolver.QUERY_ARG_OFFSET, offset)
                 if (selection != null) {
                     putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
                     putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
@@ -139,17 +161,24 @@ class PhotosListRecentTool(
             context.contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 projection, selection, selectionArgs,
-                "${MediaStore.Images.Media.DATE_TAKEN} DESC"
+                "${MediaStore.Images.Media.DATE_TAKEN} DESC LIMIT $queryLimit OFFSET $offset"
             )
         }
 
+        var matchedCount = 0
+        var hasMore = false
         cursor?.use { c ->
             val idIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
             val nameIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
             val dateIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
             val modifiedIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
             val sizeIdx = c.getColumnIndex(MediaStore.Images.Media.SIZE)
-            while (c.moveToNext() && photos.size() < limit) {
+            while (c.moveToNext()) {
+                matchedCount += 1
+                if (photos.size() >= limit) {
+                    hasMore = true
+                    break
+                }
                 val id = c.getLong(idIdx)
                 val name = c.getString(nameIdx) ?: "image_$id"
                 val date = if (dateIdx >= 0 && !c.isNull(dateIdx)) c.getLong(dateIdx) else 0L
@@ -160,7 +189,7 @@ class PhotosListRecentTool(
                     PhotoToolUtils.encodedDisplayPhoto(
                         context = context,
                         id = id,
-                        maxDim = 2048,
+                        maxDim = maxDim,
                         quality = 85,
                         sourceModifiedSec = modified,
                         sourceSizeBytes = size
@@ -187,9 +216,50 @@ class PhotosListRecentTool(
         val result: ObjectNode = mapper.createObjectNode()
         result.set<JsonNode>("photos", photos)
         result.put("count", photos.size())
+        result.put("requested_limit", requestedLimit)
+        result.put("limit", limit)
+        result.put("offset", offset)
+        result.put("max_dim", maxDim)
+        result.put("has_more", hasMore)
+        result.put("truncated_by_safety_cap", requestedLimit > limit)
+        if (requestedLimit > limit) result.put("safety_cap", MAX_RESULTS_PER_CALL)
+        result.put("matched_count_in_window", matchedCount)
+        if (hasMore) {
+            result.put("next_offset", offset + photos.size())
+            result.set<ObjectNode>("next_args", nextArgs(limit, offset + photos.size(), maxDim, nameContains, dateAfter, dateBefore))
+        }
+        result.set<ObjectNode>("pagination", mapper.createObjectNode().apply {
+            put("offset", offset)
+            put("requested_limit", requestedLimit)
+            put("limit", limit)
+            put("max_dim", maxDim)
+            put("returned_count", photos.size())
+            put("start_index", if (photos.size() == 0) 0 else offset + 1)
+            put("end_index", offset + photos.size())
+            put("has_more", hasMore)
+            put("truncated_by_safety_cap", requestedLimit > limit)
+            if (requestedLimit > limit) put("safety_cap", MAX_RESULTS_PER_CALL)
+            if (hasMore) {
+                put("next_offset", offset + photos.size())
+                set<ObjectNode>("next_args", nextArgs(limit, offset + photos.size(), maxDim, nameContains, dateAfter, dateBefore))
+            }
+        })
+        result.set<ObjectNode>("display", mapper.createObjectNode().apply {
+            put("policy", "show_grid")
+            put("page", if (photos.size() == 0) "0" else "${offset + 1}-${offset + photos.size()}")
+            put("has_more", hasMore)
+            if (hasMore) put("next_offset", offset + photos.size())
+        })
         result.set<ObjectNode>("summary", mapper.createObjectNode().apply {
             put("count", photos.size())
+            put("requested_limit", requestedLimit)
             put("limit", limit)
+            put("max_dim", maxDim)
+            put("offset", offset)
+            put("has_more", hasMore)
+            put("truncated_by_safety_cap", requestedLimit > limit)
+            if (requestedLimit > limit) put("safety_cap", MAX_RESULTS_PER_CALL)
+            if (hasMore) put("next_offset", offset + photos.size())
             if (nameContains != null) put("name_contains", nameContains)
             if (dateAfter != null) put("date_after", dateAfter)
             if (dateBefore != null) put("date_before", dateBefore)
@@ -205,7 +275,30 @@ class PhotosListRecentTool(
         )
     }
 
+    private fun nextArgs(
+        limit: Int,
+        offset: Int,
+        maxDim: Int,
+        nameContains: String?,
+        dateAfter: Long?,
+        dateBefore: Long?
+    ): ObjectNode {
+        return mapper.createObjectNode().apply {
+            put("limit", limit)
+            put("offset", offset)
+            put("max_dim", maxDim)
+            if (nameContains != null) put("name_contains", nameContains)
+            if (dateAfter != null) put("date_after", dateAfter)
+            if (dateBefore != null) put("date_before", dateBefore)
+        }
+    }
+
     companion object {
         private const val TAG = "PhotosListRecentTool"
+        private const val DEFAULT_LIMIT = 12
+        private const val MAX_RESULTS_PER_CALL = 200
+        private const val DEFAULT_MAX_DIM = 1024
+        private const val MIN_MAX_DIM = 512
+        private const val MAX_MAX_DIM = 2048
     }
 }

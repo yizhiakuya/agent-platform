@@ -108,6 +108,7 @@ agent-platform:
       # but image embedding will only work if that endpoint accepts image input.
       enabled: ${PHOTO_INDEX_ENABLED:true}
       fallbackRealtime: ${PHOTO_INDEX_FALLBACK_REALTIME:true}
+      indexWorkerEnabled: ${PHOTO_INDEX_WORKER_ENABLED:false}
       embeddingModel: ${PHOTO_EMBEDDING_MODEL:clip-ViT-B-32-multilingual-v1}
       embeddingBaseUrl: ${PHOTO_EMBEDDING_BASE_URL:${MEMORY_EMBEDDING_BASE_URL:}}
       embeddingApiKey: ${PHOTO_EMBEDDING_API_KEY:${MEMORY_EMBEDDING_API_KEY:}}

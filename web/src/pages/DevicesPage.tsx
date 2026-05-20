@@ -6,7 +6,13 @@ import { api, EnrollmentResponse } from '../api/client';
 export default function DevicesPage() {
   const qc = useQueryClient();
   const devices = useQuery({ queryKey: ['devices'], queryFn: api.listDevices });
+  const onlineStatus = useQuery({
+    queryKey: ['device-online-status'],
+    queryFn: api.listDeviceOnlineStatus,
+    refetchInterval: 15_000
+  });
   const [enrollment, setEnrollment] = useState<EnrollmentResponse | null>(null);
+  const [confirmingDeviceId, setConfirmingDeviceId] = useState<string | null>(null);
 
   const create = useMutation({
     mutationFn: api.createEnrollment,
@@ -16,7 +22,29 @@ export default function DevicesPage() {
     }
   });
 
-  const onlineCount = devices.data?.filter(d => d.lastSeenAt && Date.now() - new Date(d.lastSeenAt).getTime() < 5 * 60 * 1000).length ?? 0;
+  const revoke = useMutation({
+    mutationFn: api.revokeDevice,
+    onSuccess: () => {
+      setConfirmingDeviceId(null);
+      qc.invalidateQueries({ queryKey: ['devices'] });
+      qc.invalidateQueries({ queryKey: ['device-online-status'] });
+    }
+  });
+
+  const statusByDeviceId = new Map((onlineStatus.data ?? []).map(s => [s.deviceId, s]));
+  const deviceRows = (devices.data ?? []).map(device => {
+    const live = statusByDeviceId.get(device.id);
+    const lastSeenAt = live?.connectedAt ?? device.lastSeenAt;
+    return {
+      ...device,
+      online: live?.online === true,
+      connectedAt: live?.connectedAt,
+      lastSeenAt,
+      toolCount: live?.toolCount ?? 0
+    };
+  });
+  const onlineCount = deviceRows.filter(d => d.online).length;
+  const neverConnectedCount = deviceRows.filter(d => !d.lastSeenAt).length;
 
   return (
     <div className="workbench grid lg:grid-cols-[minmax(0,1fr)_22rem]">
@@ -39,14 +67,15 @@ export default function DevicesPage() {
         </div>
 
         <div className="grid gap-3 border-b border-slate-200 bg-slate-50/80 p-4 sm:grid-cols-3">
-          <StatCard label="已绑定" value={String(devices.data?.length ?? 0)} />
-          <StatCard label="最近在线" value={String(onlineCount)} accent="text-emerald-600" />
-          <StatCard label="绑定状态" value={enrollment ? '待扫码' : '正常'} />
+          <StatCard label="已绑定" value={String(deviceRows.length)} />
+          <StatCard label="当前在线" value={String(onlineCount)} accent="text-emerald-600" />
+          <StatCard label="待连接" value={String(neverConnectedCount)} accent={neverConnectedCount > 0 ? 'text-amber-600' : 'text-slate-950'} />
         </div>
 
         <div className="p-4">
           {devices.isLoading && <div className="status-muted">加载中...</div>}
           {devices.error && <div className="status-error">错误: {String(devices.error)}</div>}
+          {onlineStatus.error && <div className="mb-3 status-error">实时在线状态加载失败: {String(onlineStatus.error)}</div>}
           {devices.data && devices.data.length === 0 && (
             <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
               <div className="text-lg font-semibold text-slate-950">还没有设备</div>
@@ -57,23 +86,67 @@ export default function DevicesPage() {
           )}
           {devices.data && devices.data.length > 0 && (
             <ul className="grid gap-3">
-              {devices.data.map(d => {
+              {deviceRows.map(d => {
                 const seenAt = d.lastSeenAt ? new Date(d.lastSeenAt) : null;
-                const online = seenAt ? Date.now() - seenAt.getTime() < 5 * 60 * 1000 : false;
+                const isConfirming = confirmingDeviceId === d.id;
+                const isRevoking = revoke.isPending && revoke.variables === d.id;
                 return (
-                  <li key={d.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <li key={d.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300">
+                    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className={['h-2 w-2 rounded-full', online ? 'bg-emerald-500' : 'bg-slate-300'].join(' ')} />
+                          <span className={['h-2.5 w-2.5 rounded-full', d.online ? 'bg-emerald-500' : 'bg-slate-300'].join(' ')} />
                           <div className="truncate text-base font-semibold text-slate-950">{d.name}</div>
+                          <span className={[
+                            'rounded px-1.5 py-0.5 text-[11px] font-semibold',
+                            d.online ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                          ].join(' ')}>
+                            {d.online ? '在线' : '离线'}
+                          </span>
                         </div>
                         <div className="mt-1 text-sm text-slate-500">
                           {d.model || '未知型号'} · {d.osVersion ? `Android ${d.osVersion}` : '未知系统'}
                         </div>
+                        <div className="mt-1 font-mono text-[11px] text-slate-400">{d.id}</div>
                       </div>
-                      <div className="text-sm text-slate-500">
-                        {seenAt ? `最近在线 ${seenAt.toLocaleString()}` : '从未连接'}
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center xl:justify-end">
+                        <div className="text-sm text-slate-500 sm:min-w-48 sm:text-right">
+                          {d.online && d.connectedAt
+                            ? `当前连接 ${new Date(d.connectedAt).toLocaleString()}`
+                            : seenAt
+                              ? `最后连接 ${seenAt.toLocaleString()}`
+                              : '从未连接'}
+                          {d.online && <div className="mt-0.5 text-xs text-slate-400">已上报 {d.toolCount} 个工具</div>}
+                        </div>
+                        {isConfirming ? (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="btn-danger min-h-9 px-3 py-1.5 text-xs"
+                              disabled={isRevoking}
+                              onClick={() => revoke.mutate(d.id)}
+                            >
+                              {isRevoking ? '删除中...' : '确认删除'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-secondary min-h-9 px-3 py-1.5 text-xs"
+                              disabled={isRevoking}
+                              onClick={() => setConfirmingDeviceId(null)}
+                            >
+                              取消
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn-ghost min-h-9 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 hover:text-red-700"
+                            disabled={revoke.isPending}
+                            onClick={() => setConfirmingDeviceId(d.id)}
+                          >
+                            删除记录
+                          </button>
+                        )}
                       </div>
                     </div>
                   </li>

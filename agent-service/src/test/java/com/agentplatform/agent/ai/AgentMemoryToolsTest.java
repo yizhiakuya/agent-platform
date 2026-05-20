@@ -1,12 +1,15 @@
 package com.agentplatform.agent.ai;
 
 import com.agentplatform.agent.client.InternalChatFeignClient;
+import com.agentplatform.api.chat.MemoryFactDto;
 import com.agentplatform.api.chat.SaveFactRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -14,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -43,6 +47,36 @@ class AgentMemoryToolsTest {
         assertThat(captor.getValue().kind()).isEqualTo("preference");
         assertThat(captor.getValue().content()).isEqualTo("likes concise updates");
         assertThat(captor.getValue().curated()).isTrue();
+    }
+
+    @Test
+    void addSkipsDuplicateMemoryBeforeEmbedding() {
+        InternalChatFeignClient chat = mock(InternalChatFeignClient.class);
+        EmbeddingService embedding = mock(EmbeddingService.class);
+        UUID userId = UUID.randomUUID();
+        UUID existingId = UUID.randomUUID();
+        when(chat.listFacts(org.mockito.ArgumentMatchers.anyMap())).thenReturn(List.of(new MemoryFactDto(
+                existingId,
+                userId,
+                "preference",
+                "处理相册清理时必须先展示候选图片给用户核对。",
+                null,
+                OffsetDateTime.now(),
+                true,
+                0,
+                OffsetDateTime.now()
+        )));
+        AgentMemoryTools.Add tool = new AgentMemoryTools.Add(chat, embedding, mapper);
+        ObjectNode args = mapper.createObjectNode()
+                .put("kind", "preference")
+                .put("content", "相册清理时，必须先展示候选图片。");
+
+        ExecutionResult result = tool.executeJsonToolUse(args, userId, UUID.randomUUID(), null);
+
+        assertThat(result.jsonText()).contains("\"duplicate\":true");
+        assertThat(result.jsonText()).contains(existingId.toString());
+        verify(embedding, never()).embed(org.mockito.ArgumentMatchers.anyString());
+        verify(chat, never()).saveFact(org.mockito.ArgumentMatchers.any());
     }
 
     @Test

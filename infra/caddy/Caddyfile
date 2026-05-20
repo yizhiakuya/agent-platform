@@ -2,49 +2,79 @@
 # via acme.sh DNS-01 (Cloudflare). Auto-https is OFF because the home router
 # does not forward 80/443 inbound, so HTTP-01 / TLS-ALPN-01 challenges would fail.
 {
-    auto_https off
-    email 2488309724@qq.com
+	auto_https off
+	email 2488309724@qq.com
+}
+
+(app_routes) {
+	encode zstd gzip
+
+	# SSE — never buffer the chat stream
+	@sse path /api/chat/stream
+	handle @sse {
+		reverse_proxy {
+			dynamic a gateway 8080 {
+				refresh 10s
+				resolvers 127.0.0.11
+				versions ipv4
+			}
+			flush_interval -1
+			lb_policy round_robin
+			lb_try_duration 5s
+			fail_duration 30s
+			max_fails 2
+			unhealthy_status 502 503 504
+			transport http {
+				response_header_timeout 1h
+			}
+		}
+	}
+
+	# WebSocket upgrade for /ws/device — bypass web/nginx + Spring Cloud Gateway,
+	# whose server→client WS frame forwarding has a known issue (frames written
+	# by device-hub never reach the Android client). Talk straight to the hub.
+	@ws path /ws/*
+	handle @ws {
+		reverse_proxy device-hub-service:8083
+	}
+
+	# REST API goes to Spring Cloud Gateway. Keep this out of web/nginx so new
+	# backend routes such as /api/photos don't need web image changes.
+	@api path /api/*
+	handle @api {
+		reverse_proxy {
+			dynamic a gateway 8080 {
+				refresh 10s
+				resolvers 127.0.0.11
+				versions ipv4
+			}
+			lb_policy round_robin
+			lb_try_duration 5s
+			fail_duration 30s
+			max_fails 2
+			unhealthy_status 502 503 504
+		}
+	}
+
+	# SPA shell
+	handle {
+		reverse_proxy web:80
+	}
+}
+
+# Local HTTP entrypoint used by the default compose stack.
+http://localhost, http://127.0.0.1 {
+	import app_routes
 }
 
 # HTTP → HTTPS redirect (still works because docker exposes :80)
 http://agent.rainaki.top {
-    redir https://{host}{uri} permanent
+	redir https://{host}{uri} permanent
 }
 
 # Main TLS site
 agent.rainaki.top:443 {
-    tls /etc/caddy/certs/agent.cert.pem /etc/caddy/certs/agent.key.pem
+	tls /etc/caddy/certs/agent.cert.pem /etc/caddy/certs/agent.key.pem
 
-    encode zstd gzip
-
-    # SSE — never buffer the chat stream
-    @sse path /api/chat/stream
-    handle @sse {
-        reverse_proxy gateway:8080 {
-            flush_interval -1
-            transport http {
-                response_header_timeout 1h
-            }
-        }
-    }
-
-    # WebSocket upgrade for /ws/device — bypass web/nginx + Spring Cloud Gateway,
-    # whose server→client WS frame forwarding has a known issue (frames written
-    # by device-hub never reach the Android client). Talk straight to the hub.
-    @ws path /ws/*
-    handle @ws {
-        reverse_proxy device-hub-service:8083
-    }
-
-    # REST API goes to Spring Cloud Gateway. Keep this out of web/nginx so new
-    # backend routes such as /api/photos don't need web image changes.
-    @api path /api/*
-    handle @api {
-        reverse_proxy gateway:8080
-    }
-
-    # SPA shell
-    handle {
-        reverse_proxy web:80
-    }
+	import app_routes
 }

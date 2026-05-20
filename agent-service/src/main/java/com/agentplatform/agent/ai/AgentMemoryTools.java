@@ -16,6 +16,7 @@ import java.util.UUID;
 public final class AgentMemoryTools {
 
     private static final int MAX_MEMORY_CONTENT_CHARS = 4_000;
+    private static final int DEDUPE_SCAN_LIMIT = 100;
 
     private AgentMemoryTools() {}
 
@@ -52,8 +53,10 @@ public final class AgentMemoryTools {
 
         @Override
         public String description() {
-            return "Persist a durable memory about the user or project. Use for stable facts, preferences, rules, "
-                    + "or repeated operational lessons that should be recalled in future turns. Do not store secrets.";
+            return "Persist one durable memory about the user or project. Use only when the user explicitly asks you "
+                    + "to remember a stable preference/rule/fact/lesson, or when a correction clearly changes future "
+                    + "behavior. Do not save ordinary confirmations, transient task state, duplicate memories, "
+                    + "conversation summaries, or secrets.";
         }
 
         @Override
@@ -78,6 +81,17 @@ public final class AgentMemoryTools {
             if (content.length() > MAX_MEMORY_CONTENT_CHARS) {
                 return ExecutionResult.error("content too long; max " + MAX_MEMORY_CONTENT_CHARS + " chars");
             }
+            MemoryFactDto duplicate = findDuplicate(userId, kind, content);
+            if (duplicate != null) {
+                ObjectNode out = mapper.createObjectNode();
+                out.put("ok", true);
+                out.put("duplicate", true);
+                out.put("id", String.valueOf(duplicate.id()));
+                out.put("kind", duplicate.kind());
+                out.put("content", duplicate.content());
+                out.put("message", "A matching memory already exists; no new memory was saved.");
+                return ExecutionResult.text(out.toString());
+            }
             float[] embedding = embeddingService.embed(content);
             Map<String, UUID> saved = chatClient.saveFact(
                     new SaveFactRequest(userId, kind, content, null, embedding, true));
@@ -87,6 +101,24 @@ public final class AgentMemoryTools {
             out.put("kind", kind);
             out.put("content", content);
             return ExecutionResult.text(out.toString());
+        }
+
+        private MemoryFactDto findDuplicate(UUID userId, String kind, String content) {
+            List<MemoryFactDto> rows = chatClient.listFacts(Map.of(
+                    "userId", userId.toString(),
+                    "limit", DEDUPE_SCAN_LIMIT,
+                    "includeRaw", true));
+            if (rows == null || rows.isEmpty()) return null;
+            String normalizedContent = normalizeForDuplicate(content);
+            for (MemoryFactDto row : rows) {
+                if (row == null || row.content() == null || row.content().isBlank()) continue;
+                String existing = normalizeForDuplicate(row.content());
+                if (existing.equals(normalizedContent)
+                        || isLongContainmentDuplicate(existing, normalizedContent)) {
+                    return row;
+                }
+            }
+            return null;
         }
     }
 
@@ -192,5 +224,23 @@ public final class AgentMemoryTools {
             case "fact", "preference", "rule", "lesson" -> kind.trim().toLowerCase();
             default -> null;
         };
+    }
+
+    private static String normalizeForDuplicate(String value) {
+        if (value == null) return "";
+        StringBuilder sb = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char c = Character.toLowerCase(value.charAt(i));
+            if (Character.isLetterOrDigit(c)) {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    private static boolean isLongContainmentDuplicate(String existing, String incoming) {
+        int shorter = Math.min(existing.length(), incoming.length());
+        if (shorter < 12) return false;
+        return existing.contains(incoming) || incoming.contains(existing);
     }
 }
