@@ -27,6 +27,36 @@ Use the broader `agent-platform` skill for architecture and service ownership. U
 
 ## Standard Workflow
 
+Preferred one-command path:
+
+```powershell
+python .agents\skills\agent-platform-deploy\scripts\deploy-agent-platform.py `
+  --services web `
+  --tag-prefix live-reply-cleanup
+```
+
+Common variants:
+
+```powershell
+# Show planned image tags and target without building or touching Megumin.
+python .agents\skills\agent-platform-deploy\scripts\deploy-agent-platform.py `
+  --services web,agent-service `
+  --tag-prefix release-check `
+  --plan-only `
+  --allow-dirty
+
+# Deploy an already pushed image without rebuilding.
+python .agents\skills\agent-platform-deploy\scripts\deploy-agent-platform.py `
+  --deploy-only `
+  --web-image ghcr.io/yizhiakuya/agent-platform-web:<tag> `
+  --label rollback-or-hotfix
+```
+
+The Python entrypoint is the stable deploy wrapper. It runs git/GitNexus checks,
+local builds, GHCR packaging, LF-only SSH deployment, compose backup, exact image
+grep, targeted compose pull/up, and live URL/asset verification. Use the lower
+level PowerShell scripts only for focused debugging.
+
 1. Inspect state:
 
 ```powershell
@@ -95,6 +125,19 @@ Use `-PlanOnly` first to print the target host, services, images, and public URL
 If a jar or `web/dist` is missing, run the local Maven/npm build first.
 
 ## Deploy Script Notes
+
+`scripts/deploy-agent-platform.py`:
+
+- Default service is `web`; pass `--services web,agent-service` for both.
+- Runs local builds unless `--skip-local-build` is passed.
+- Refuses tracked dirty worktrees unless `--allow-dirty` is passed; untracked
+  files such as `APP.txt` are reported but not deployed.
+- Calls `build-ghcr-images.ps1` for image packaging, then deploys via SSH with
+  an LF-normalized base64 bash script sent over stdin. This avoids PowerShell
+  CRLF/quoting corruption in remote `set -euo pipefail` scripts.
+- Supports `--plan-only`, `--build-only`, and `--deploy-only`.
+- Prints `AGENT_IMAGE=...`, `WEB_IMAGE=...`, `COMPOSE_BACKUP=...`, live asset
+  hashes, and `DEPLOY_OK=1` when successful.
 
 `scripts/deploy-megumin.ps1`:
 

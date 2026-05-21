@@ -114,5 +114,6 @@ $remote = $remote.Replace('__LABEL__', $Label)
 $remote = $remote.Replace('__SERVICES__', $serviceList)
 $remote = $remote.Replace('__PUBLIC_URL__', $PublicUrl)
 
+$remote = $remote -replace "`r`n", "`n"
 $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remote))
 ssh $HostName "echo $b64 | base64 -d | bash"
