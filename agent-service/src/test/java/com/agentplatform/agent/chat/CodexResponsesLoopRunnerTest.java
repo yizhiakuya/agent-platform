@@ -185,6 +185,58 @@ class CodexResponsesLoopRunnerTest {
     }
 
     @Test
+    void runReturnsOnlyPostToolAssistantText() throws Exception {
+        ObjectNode first = mapper.createObjectNode();
+        first.put("id", "resp_1");
+        first.put("status", "completed");
+        ArrayNode firstOutput = mapper.createArrayNode();
+        firstOutput.add(completedMessageItem("我先确认小黑盒。"));
+        ObjectNode call = mapper.createObjectNode();
+        call.put("type", "function_call");
+        call.put("name", "ok_tool");
+        call.put("call_id", "call_1");
+        call.put("arguments", "{}");
+        firstOutput.add(call);
+        first.set("output", firstOutput);
+
+        ObjectNode second = completedTextResponse("已从最近任务关闭小黑盒。");
+
+        try (ResponsesStubServer server = ResponsesStubServer.fromStreams(mapper, List.of(
+                List.of(
+                        streamEvent("response.output_text.delta", "delta", "我先确认小黑盒。"),
+                        streamEvent("response.completed", "response", first)
+                ),
+                List.of(
+                        streamEvent("response.output_text.delta", "delta", "已从最近任务关闭小黑盒。"),
+                        streamEvent("response.completed", "response", second)
+                )
+        ))) {
+            CodexResponsesLoopRunner runner = runner(
+                    memory(false),
+                    new ServerToolRegistry(List.of(new OkTool()), mapper),
+                    WebClient.builder());
+            List<SseEvent> events = new ArrayList<>();
+
+            RunResult result = runner.run(
+                    new ConfiguredProvider("test", "codex-responses", null, server.baseUrl(), "token", "model"),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new ResolvedTools(List.of(), Map.of()),
+                    "system",
+                    List.of(),
+                    "close app",
+                    events::add,
+                    new SseEmitter());
+
+            assertThat(result.assistantText()).isEqualTo("已从最近任务关闭小黑盒。");
+            assertThat(events)
+                    .filteredOn(event -> "assistant_message".equals(event.type()))
+                    .extracting(event -> event.data().path("content").asText())
+                    .containsExactly("我先确认小黑盒。", "已从最近任务关闭小黑盒。");
+        }
+    }
+
+    @Test
     void runAcceptsResponseDoneAsTerminalStreamEvent() throws Exception {
         ObjectNode completed = completedTextResponse("done text");
         List<List<JsonNode>> streams = List.of(List.of(
@@ -370,6 +422,33 @@ class CodexResponsesLoopRunnerTest {
         @Override
         public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
             throw new AssertionError("unexpected boom");
+        }
+    }
+
+    private static class OkTool implements ServerToolCallback {
+        private static final ObjectMapper MAPPER = new ObjectMapper();
+
+        @Override
+        public String name() {
+            return "ok_tool";
+        }
+
+        @Override
+        public String description() {
+            return "Succeeds for test";
+        }
+
+        @Override
+        public JsonNode schema() {
+            ObjectNode schema = MAPPER.createObjectNode();
+            schema.put("type", "object");
+            schema.set("properties", MAPPER.createObjectNode());
+            return schema;
+        }
+
+        @Override
+        public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
+            return ExecutionResult.text("{\"ok\":true}");
         }
     }
 

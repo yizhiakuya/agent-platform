@@ -1,7 +1,8 @@
-import { Navigate, NavLink, Route, Routes, Outlet } from 'react-router-dom';
+import { Navigate, NavLink, Outlet, Route, Routes } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
 import DevicesPage from './pages/DevicesPage';
 import ChatPage from './pages/ChatPage';
+import VisualChatPage from './pages/VisualChatPage';
 import SettingsPage from './pages/SettingsPage';
 import { ChatStoreProvider } from './lib/chatStore';
 import { isAuthed, setToken } from './lib/auth';
@@ -12,7 +13,8 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 function Shell() {
   const navItems = [
-    { to: '/chat', label: '聊天', mark: 'C' },
+    { to: '/chat', label: '视觉会话', mark: 'V' },
+    { to: '/chat/classic', label: '经典聊天', mark: 'C' },
     { to: '/devices', label: '设备', mark: 'D' },
     { to: '/settings', label: '设置', mark: 'S' }
   ];
@@ -48,7 +50,10 @@ function Shell() {
           </div>
           <button
             className="rail-logout"
-            onClick={() => { setToken(null); window.location.assign('/login'); }}
+            onClick={() => {
+              setToken(null);
+              window.location.assign('/login');
+            }}
           >
             退出登录
           </button>
@@ -66,15 +71,25 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route element={
-        <RequireAuth>
+      <Route
+        path="/chat"
+        element={
           <ChatStoreProvider>
-            <Shell />
+            <VisualChatPage />
           </ChatStoreProvider>
-        </RequireAuth>
-      }>
+        }
+      />
+      <Route
+        element={
+          <RequireAuth>
+            <ChatStoreProvider>
+              <Shell />
+            </ChatStoreProvider>
+          </RequireAuth>
+        }
+      >
         <Route path="/devices" element={<DevicesPage />} />
-        <Route path="/chat" element={<ChatPage />} />
+        <Route path="/chat/classic" element={<ChatPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route index element={<Navigate to="/chat" replace />} />
       </Route>

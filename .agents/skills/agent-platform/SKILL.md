@@ -52,7 +52,7 @@ builds/tests, Android APK builds, and packaging/publishing deploy artifacts.
 | Semantic photo search noisy or wrong | `PhotosSemanticCandidatesTool.kt` + `SemanticPhotoSearchCallback.java` + `skills/photos-search/SKILL.md` + `ChatPage.tsx` |
 | Provider/model routing | `AgentBeans`, `CodexResponsesLoopRunner`, `.env`, `docker compose logs agent-service` |
 | Background LLM / LangChain4j | `LangChain4jModelFactory`, `RoutingBackgroundChatModel`, `BackgroundFactExtractor`, `SessionSummarizer`, `BackgroundLlmClient`, `EmbeddingService` |
-| GHCR / megumin deploy | build locally first, package the already-built artifact into GHCR, then `ssh root@192.168.0.109` and `/opt/agent-platform` |
+| GHCR / megumin deploy | Use the `agent-platform-deploy` skill; it packages already-built artifacts into GHCR images, updates Megumin compose, and verifies health/assets |
 
 ## Adding a new device tool (the canonical workflow)
 
@@ -349,106 +349,16 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 - Treat `Dockerfile.spring` and `web/Dockerfile` as container packaging references, not the canonical build path. They run Maven/pnpm inside Docker and can re-download dependencies or fail on image/network issues. For normal work, build locally first.
 - `git diff --check` is useful, but CRLF warnings in unrelated files may be pre-existing. Fix only files touched for the current task.
 
-## Preferred local-build deploy flow
+## Deployment
 
-Always build/test locally first. If deployment needs GHCR, package already-built `target/*.jar` or `web/dist` artifacts into an image. Do not use Docker as the dependency-resolving build environment.
+Use the local `agent-platform-deploy` skill for production deployment. It is the source of truth for:
 
-```powershell
-$env:JAVA_HOME = 'D:\Apps\Temurin\jdk-21'
-$env:Path = "$env:JAVA_HOME\bin;$env:Path"
-.\mvnw.cmd "-pl" "common,auth-service,agent-service,chat-service,gateway,device-hub-service" "-am" -DskipTests package
-Push-Location web
-npm run build
-Pop-Location
-```
-
-### Web-only deploy from local `dist`
-
-Use this when only React/web changed. This avoids the old `web/Dockerfile` path, so Docker does not run `pnpm install` or `pnpm build` again. `web/.dockerignore` excludes `dist`, so build from a temporary context that contains only `dist`, `nginx.conf`, and a tiny Dockerfile.
-
-```powershell
-$tag = "web-$(Get-Date -Format yyyyMMdd-HHmm)-$(git rev-parse --short HEAD)"
-Push-Location web
-npm run build
-Pop-Location
-
-$ctx = Join-Path $env:TEMP "agent-platform-web-dist-$tag"
-if (Test-Path $ctx) { Remove-Item -LiteralPath $ctx -Recurse -Force }
-New-Item -ItemType Directory -Path $ctx | Out-Null
-Copy-Item -Path 'D:\agent-platform\web\dist' -Destination (Join-Path $ctx 'dist') -Recurse
-Copy-Item -Path 'D:\agent-platform\web\nginx.conf' -Destination (Join-Path $ctx 'nginx.conf')
-@'
-FROM nginx:alpine
-COPY dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
-'@ | Set-Content -Path (Join-Path $ctx 'Dockerfile') -Encoding ASCII
-
-$image = "ghcr.io/yizhiakuya/agent-platform-web:$tag"
-docker build -t $image $ctx
-docker push $image
-```
-
-Then update Megumin and verify. Use `--profile default`; without it, compose may report `no such service: web`.
-
-```powershell
-$image = 'ghcr.io/yizhiakuya/agent-platform-web:<tag>'
-$remote = @'
-set -eu
-cd /opt/agent-platform
-new_image='__IMAGE__'
-cp docker-compose.ghcr-photo.yml "docker-compose.ghcr-photo.yml.bak-web-$(date +%Y%m%d-%H%M%S)"
-python3 - <<'PY'
-from pathlib import Path
-p = Path('docker-compose.ghcr-photo.yml')
-text = p.read_text()
-new = '__IMAGE__'
-out = []
-in_web = False
-for line in text.splitlines():
-    stripped = line.strip()
-    if line.startswith('  ') and not line.startswith('    ') and stripped.endswith(':'):
-        in_web = stripped == 'web:'
-    if in_web and stripped.startswith('image:'):
-        indent = line[:len(line) - len(line.lstrip())]
-        out.append(f'{indent}image: {new}')
-    else:
-        out.append(line)
-p.write_text('\n'.join(out) + '\n')
-PY
-grep -n "$new_image" docker-compose.ghcr-photo.yml
-docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull web
-docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml up -d --no-build --force-recreate web
-curl -fsSI http://localhost/ | sed -n '1,10p'
-docker compose --profile default ps web
-'@
-$remote = $remote.Replace('__IMAGE__', $image)
-$b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remote))
-ssh root@192.168.0.109 "echo $b64 | base64 -d | bash"
-```
-
-Megumin deploy shortcut when remote compose has only local image names:
-
-```bash
-cd /opt/agent-platform
-docker pull ghcr.io/yizhiakuya/agent-platform-agent-service:<tag>
-docker pull ghcr.io/yizhiakuya/agent-platform-web:<tag>
-docker tag ghcr.io/yizhiakuya/agent-platform-agent-service:<tag> agent-platform-agent-service:latest
-docker tag ghcr.io/yizhiakuya/agent-platform-web:<tag> agent-platform-web:latest
-docker compose --profile default up -d --no-build --force-recreate agent-service web
-docker compose --profile default exec agent-service curl -fsS http://localhost:8082/actuator/health
-curl -fsSI http://localhost/ | head
-```
-
-Megumin deploy shortcut when using `/opt/agent-platform/docker-compose.ghcr-photo.yml`:
-
-```powershell
-$old = 'ghcr.io/yizhiakuya/agent-platform-agent-service:old-tag'
-$new = 'ghcr.io/yizhiakuya/agent-platform-agent-service:new-tag'
-ssh root@192.168.0.109 "cd /opt/agent-platform && set -e && sed -i 's#$old#$new#g' docker-compose.ghcr-photo.yml && grep -n '$new' docker-compose.ghcr-photo.yml && docker compose -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull agent-service && docker compose -f docker-compose.yml -f docker-compose.ghcr-photo.yml up -d --no-build --force-recreate agent-service && docker compose exec agent-service curl -fsS http://localhost:8082/actuator/health"
-```
-
-If the remote command needs `$(...)`, `$VAR`, heredocs, or embedded quotes, avoid inline SSH strings. Base64-encode a small remote script or upload a temp script, run it with `set -e`, and verify the compose file before restarting.
+- starting Docker Desktop when the Docker server is unavailable
+- packaging already-built Maven/Web artifacts into tiny GHCR image contexts
+- updating `/opt/agent-platform/docker-compose.ghcr-photo.yml` on Megumin with a backup
+- using remote base64 scripts to avoid PowerShell/SSH quoting corruption
+- readiness retries and public asset verification
+- rollback from the compose backup named during deploy
 
 ## Stage 2 / 3 roadmap (not yet done)
 

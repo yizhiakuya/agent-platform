@@ -133,6 +133,7 @@ public class CodexResponsesLoopRunner {
             if (cancellation.isCancelled()) {
                 return new RunResult(textBuf.toString(), lastUsage, true);
             }
+            textBuf.setLength(0);
 
             ObjectNode request = mapper.createObjectNode();
             request.put("model", provider.model());

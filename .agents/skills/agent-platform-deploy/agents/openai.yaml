@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agent Platform Deploy"
+  short_description: "Deploy Agent Platform to Megumin"
+  default_prompt: "Use $agent-platform-deploy to package local artifacts, publish GHCR images, and deploy Agent Platform to Megumin."
+policy:
+  allow_implicit_invocation: true

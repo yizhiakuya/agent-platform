@@ -141,6 +141,7 @@ public class AgentLoopRunner {
             if (cancellation.isCancelled()) {
                 return new RunResult(textBuf.toString(), lastUsage, true);
             }
+            textBuf.setLength(0);
 
             MessageCreateParams.Builder pb = MessageCreateParams.builder()
                     .model(provider.model())

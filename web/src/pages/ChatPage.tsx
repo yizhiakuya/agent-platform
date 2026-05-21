@@ -484,7 +484,6 @@ export default function ChatPage() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    let assistantBuf = '';
     let uploadedAttachments: UploadedChatImage[] = [];
     let turnStarted = false;
     let sentEventsIndex = -1;
@@ -551,7 +550,8 @@ export default function ChatPage() {
             return;
           }
           if (name === 'assistant_message') {
-            assistantBuf += data?.content ?? '';
+            const chunk = data?.content ?? '';
+            if (!chunk) return;
             setEventsForDraftKey(targetKey, prev => {
               const copy = [...prev];
               const last = copy[copy.length - 1];
@@ -561,10 +561,10 @@ export default function ChatPage() {
               if (last?.type === 'assistant_message') {
                 copy[copy.length - 1] = {
                   type: 'assistant_message',
-                  data: { ...last.data, content: assistantBuf, createdAt }
+                  data: { ...last.data, content: `${last.data?.content ?? ''}${chunk}`, createdAt }
                 };
               } else {
-                copy.push({ type: 'assistant_message', data: { content: assistantBuf, createdAt } });
+                copy.push({ type: 'assistant_message', data: { content: chunk, createdAt } });
               }
               return copy;
             });
@@ -1174,7 +1174,7 @@ function buildTimelineItems(events: ChatEvent[], runActive = false): TimelineIte
     pushVisibleToolResults(items, processEvents, segmentStart);
     items.push({
       kind: 'event',
-      event: segment[finalAssistantOffset],
+      event: finalAssistantDisplayEvent(segment[finalAssistantOffset], processEvents),
       index: segmentStart + finalAssistantOffset
     });
 
@@ -1208,6 +1208,45 @@ function pushVisibleToolResults(items: TimelineItem[], events: ChatEvent[], star
 
 function isToolActivityEvent(ev: ChatEvent | undefined) {
   return ev?.type === 'tool_call_started' || ev?.type === 'tool_call_result';
+}
+
+function finalAssistantDisplayEvent(event: ChatEvent, processEvents: ChatEvent[]) {
+  if (event.type !== 'assistant_message' || !processEvents.some(isToolActivityEvent)) return event;
+  const content = String(event.data?.content ?? '');
+  const cleaned = stripProcessLeadIn(content, processEvents);
+  if (cleaned === content) return event;
+  return { ...event, data: { ...event.data, content: cleaned } };
+}
+
+function stripProcessLeadIn(content: string, processEvents: ChatEvent[]) {
+  let cleaned = content.trim();
+  const notes = processEvents
+    .filter(ev => ev.type === 'assistant_message')
+    .map(ev => String(ev.data?.content ?? '').trim())
+    .filter(Boolean);
+  notes.forEach(note => {
+    if (cleaned.startsWith(note)) cleaned = cleaned.slice(note.length).trimStart();
+  });
+  if (cleaned !== content.trim()) return cleaned;
+  return stripLikelyProgressSentences(cleaned);
+}
+
+function stripLikelyProgressSentences(content: string) {
+  const sentences = content.match(/[^。！？!?]+[。！？!?]?/g)?.map(s => s.trim()).filter(Boolean) ?? [];
+  if (sentences.length < 2) return content;
+  let finalIndex = -1;
+  for (let i = sentences.length - 1; i >= 0; i -= 1) {
+    if (/^(已|已经|完成|好了|Done\b|Finished\b|Success\b|I've\b|I have\b)/i.test(sentences[i])) {
+      finalIndex = i;
+      break;
+    }
+  }
+  if (finalIndex <= 0) return content;
+  const lead = sentences.slice(0, finalIndex);
+  if (!lead.some(sentence => /(我先|我会|先确认|确认|检查|调用|最近任务|划掉|准备|正在|接下来|I'll|I will|Let me|I'm going)/i.test(sentence))) {
+    return content;
+  }
+  return sentences.slice(finalIndex).join('').trim();
 }
 
 function finalAssistantIndex(events: ChatEvent[], runActive = false) {
