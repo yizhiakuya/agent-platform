@@ -1611,7 +1611,7 @@ function SessionsOverlay({
   toggleSessionSelected: (id: string) => void;
 }) {
   const [previewBySessionId, setPreviewBySessionId] = useState<Record<string, SessionPreviewState>>({});
-  const [openPreviewSessionId, setOpenPreviewSessionId] = useState<string | null>(null);
+  const [openPreview, setOpenPreview] = useState<{ id: string; index: number } | null>(null);
 
   function ensureSessionPreview(id: string) {
     const current = previewBySessionId[id];
@@ -1632,7 +1632,7 @@ function SessionsOverlay({
 
   if (!authenticated) return <AuthGate />;
   return (
-    <div className="flex-1 overflow-y-auto bg-[#FAFAFC]/50 p-10 max-sm:p-5">
+    <div className="session-star-body">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={startNewSession} className="rounded-full bg-gray-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-black">
@@ -1668,25 +1668,25 @@ function SessionsOverlay({
           暂无历史会话。
         </div>
       )}
-      <div className="relative grid gap-3 lg:max-w-[27.5rem]">
-        {sessions.map(session => {
+      <div className="session-star-stage">
+        <div className="session-star-list">
+        {sessions.map((session, index) => {
           const active = session.id === sessionId;
           const selected = selectedSessionIds.has(session.id);
-          const preview = previewBySessionId[session.id];
           return (
             <div
               key={session.id}
               className={[
-                'group/session relative z-0 min-h-[5.25rem] rounded-[1.45rem] border p-3.5 shadow-sm transition hover:z-30 focus-within:z-30',
+                'session-star-row group/session border',
                 active ? 'border-gray-900 bg-gray-900 text-white' : selected ? 'border-blue-200 bg-blue-50/70 text-gray-900' : 'border-white bg-white/60 text-gray-900 hover:bg-white'
               ].join(' ')}
               onMouseEnter={() => {
-                setOpenPreviewSessionId(session.id);
+                setOpenPreview({ id: session.id, index });
                 ensureSessionPreview(session.id);
               }}
-              onMouseLeave={() => setOpenPreviewSessionId(current => current === session.id ? null : current)}
+              onMouseLeave={() => setOpenPreview(current => current?.id === session.id ? null : current)}
             >
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 items-center gap-3 overflow-hidden">
                 {selectionMode && (
                   <input
                     type="checkbox"
@@ -1702,10 +1702,10 @@ function SessionsOverlay({
                   className="min-w-0 flex-1 text-left"
                   aria-describedby={`session-preview-${session.id}`}
                   onFocus={() => {
-                    setOpenPreviewSessionId(session.id);
+                    setOpenPreview({ id: session.id, index });
                     ensureSessionPreview(session.id);
                   }}
-                  onBlur={() => setOpenPreviewSessionId(current => current === session.id ? null : current)}
+                  onBlur={() => setOpenPreview(current => current?.id === session.id ? null : current)}
                 >
                   <div className="truncate text-sm font-bold">
                     {sessionTitle(session)}
@@ -1732,15 +1732,23 @@ function SessionsOverlay({
                   </button>
                 </div>
               </div>
-              <SessionPreviewPopover
-                active={active}
-                open={openPreviewSessionId === session.id}
-                preview={preview}
-                session={session}
-              />
             </div>
           );
         })}
+        </div>
+        {openPreview && (() => {
+          const previewSession = sessions.find(session => session.id === openPreview.id);
+          if (!previewSession) return null;
+          return (
+            <SessionPreviewPopover
+              active={previewSession.id === sessionId}
+              open
+              preview={previewBySessionId[previewSession.id]}
+              rowIndex={openPreview.index}
+              session={previewSession}
+            />
+          );
+        })()}
       </div>
     </div>
   );
@@ -1750,21 +1758,22 @@ function SessionPreviewPopover({
   active,
   open,
   preview,
+  rowIndex,
   session
 }: {
   active: boolean;
   open: boolean;
   preview?: SessionPreviewState;
+  rowIndex: number;
   session: SessionDto;
 }) {
   const entries = preview?.status === 'ready' ? sessionPreviewEntries(preview.events) : [];
   return (
     <div
       id={`session-preview-${session.id}`}
-      className={[
-        "pointer-events-none absolute left-4 right-4 top-[calc(100%-0.35rem)] z-30 transition duration-200 lg:left-[calc(100%+0.85rem)] lg:right-auto lg:top-0 lg:w-[25rem] lg:before:absolute lg:before:-left-2 lg:before:top-6 lg:before:h-4 lg:before:w-4 lg:before:rotate-45 lg:before:rounded-[0.35rem] lg:before:bg-slate-200/80 lg:before:shadow-[inset_1px_1px_0_rgba(255,255,255,0.85)] lg:before:content-['']",
-        open ? 'visible translate-x-0 translate-y-0 opacity-100' : 'invisible translate-y-2 opacity-0 lg:translate-x-2 lg:translate-y-0'
-      ].join(' ')}
+      className="session-star-preview"
+      data-open={open ? 'true' : 'false'}
+      style={{ top: `clamp(0rem, ${rowIndex * 6}rem, calc(100% - 13.5rem))` }}
       role="status"
       aria-hidden={!open}
     >

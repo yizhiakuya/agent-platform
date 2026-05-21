@@ -100,6 +100,72 @@ test.describe('Spatial canvas chat shell', () => {
     await expect(page.getByText('打开小黑盒')).toBeVisible();
   });
 
+  test('keeps the session list narrow and shows the preview on the right', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 920 });
+    await page.addInitScript(() => {
+      window.localStorage.setItem('agent.token', 'test-token');
+      window.localStorage.setItem('agent-platform.activeSessionId', 'wide-1');
+    });
+
+    await page.route('**/api/sessions', async route => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'wide-1',
+            userId: 'u1',
+            title: 'Open app and then inspect the foreground package with a very long title that must truncate',
+            createdAt: '2026-05-21T06:42:00.000Z',
+            lastMessageAt: '2026-05-21T06:42:00.000Z'
+          },
+          {
+            id: 'wide-2',
+            userId: 'u1',
+            title: 'Another long historical session title that previously stretched the entire modal row',
+            createdAt: '2026-05-21T05:50:00.000Z',
+            lastMessageAt: '2026-05-21T05:50:00.000Z'
+          }
+        ])
+      });
+    });
+
+    await page.route('**/api/me/devices', async route => {
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    await page.route('**/api/devices/online-status', async route => {
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    await page.route('**/api/sessions/wide-1/messages', async route => {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          { id: 'm1', sessionId: 'wide-1', role: 'USER', content: 'Open the app', createdAt: '2026-05-21T06:42:01.000Z' },
+          { id: 'm2', sessionId: 'wide-1', role: 'ASSISTANT', content: 'Done.', createdAt: '2026-05-21T06:42:09.000Z' }
+        ])
+      });
+    });
+
+    await page.goto('/chat');
+
+    await page.getByRole('button', { name: /Open app/ }).click();
+    const sessionButton = page.locator('button[aria-describedby="session-preview-wide-1"]');
+    await expect(sessionButton).toBeVisible();
+    await sessionButton.hover();
+    const preview = page.locator('#session-preview-wide-1');
+    await expect(preview).toBeVisible();
+
+    const rowBox = await sessionButton.locator('xpath=ancestor::div[contains(@class,"session-star-row")]').boundingBox();
+    const listBox = await page.locator('.session-star-list').boundingBox();
+    const previewBox = await preview.boundingBox();
+    if (!rowBox || !listBox || !previewBox) throw new Error('Session preview layout boxes were unavailable');
+    expect(listBox.width).toBeLessThanOrEqual(500);
+    expect(rowBox.width).toBeLessThanOrEqual(500);
+    expect(rowBox.width / rowBox.height).toBeLessThan(6);
+    expect(previewBox.x).toBeGreaterThan(rowBox.x + rowBox.width);
+    await expect(preview.locator('> div')).toHaveCSS('background-image', /linear-gradient/);
+  });
+
   test('keeps tool progress out of the final assistant bubble', async ({ page }) => {
     await page.addInitScript(() => {
       window.localStorage.setItem('agent.token', 'test-token');
