@@ -1,4 +1,5 @@
 import { expect, test } from './fixtures';
+import type { Route } from '@playwright/test';
 
 test.describe('Chat composer', () => {
   test('keeps input usable and queues the next turn while a session is streaming', async ({ page }) => {
@@ -147,5 +148,96 @@ test.describe('Chat composer', () => {
 
     await expect(page.getByText(final)).toBeVisible();
     await expect(page.getByText(`${progress}${final}`)).not.toBeVisible();
+  });
+
+  test('removes short duplicated action text from final tool reply', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem('agent.token', 'test-token');
+      window.localStorage.setItem('agent-platform.activeSessionId', 's3');
+    });
+
+    await page.route('**/api/sessions', async route => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([{
+          id: 's3',
+          userId: 'u1',
+          title: '打开小黑盒',
+          createdAt: '2026-05-21T05:50:38.000Z',
+          lastMessageAt: '2026-05-21T05:50:52.000Z'
+        }])
+      });
+    });
+
+    let streamCompleted = false;
+    let heldMessagesRoute: Route | null = null;
+    const duplicated = '打开小黑盒。 已打开小黑盒。';
+    const final = '已打开小黑盒。';
+    const persistedMessages = JSON.stringify([
+      { id: 'm1', sessionId: 's3', role: 'USER', content: '打开小黑盒', createdAt: '2026-05-21T05:50:38.000Z' },
+      {
+        id: 'm2',
+        sessionId: 's3',
+        role: 'TOOL_CALL',
+        content: 'calling ui.open_app',
+        metadata: { tool: 'ui.open_app', args: { package: 'com.max.xiaoheihe' } },
+        createdAt: '2026-05-21T05:50:48.000Z'
+      },
+      {
+        id: 'm3',
+        sessionId: 's3',
+        role: 'TOOL_RESULT',
+        content: 'tool ui.open_app returned',
+        metadata: { tool: 'ui.open_app', result: { ok: true, opened: true, display_policy: 'debug_only' } },
+        createdAt: '2026-05-21T05:50:50.000Z'
+      },
+      {
+        id: 'm4',
+        sessionId: 's3',
+        role: 'ASSISTANT',
+        content: final,
+        metadata: { durationMs: 13178 },
+        createdAt: '2026-05-21T05:50:52.000Z'
+      }
+    ]);
+
+    await page.route('**/api/sessions/s3/messages', async route => {
+      if (streamCompleted) {
+        heldMessagesRoute = route;
+        return;
+      }
+      await route.fulfill({
+        contentType: 'application/json',
+        body: '[]'
+      });
+    });
+
+    await page.route('**/api/chat/stream', async route => {
+      streamCompleted = true;
+      await route.fulfill({
+        contentType: 'text/event-stream',
+        body: [
+          `event: tool_call_started\ndata: ${JSON.stringify({ tool: 'ui.open_app', args: { package: 'com.max.xiaoheihe' } })}\n\n`,
+          `event: tool_call_result\ndata: ${JSON.stringify({ tool: 'ui.open_app', result: { ok: true, opened: true, display_policy: 'debug_only' } })}\n\n`,
+          `event: assistant_message\ndata: ${JSON.stringify({ content: duplicated })}\n\n`
+        ].join('')
+      });
+    });
+
+    await page.goto('/chat/classic');
+
+    await page.getByRole('textbox').fill('打开小黑盒');
+    const sendButton = page.getByRole('button', { name: '发送' });
+    await expect(sendButton).toBeEnabled();
+    await sendButton.click();
+
+    await expect.poll(() => Boolean(heldMessagesRoute)).toBe(true);
+    await expect(page.getByText(final)).toBeVisible();
+    await expect(page.getByText(duplicated)).not.toBeVisible();
+    await heldMessagesRoute?.fulfill({
+      contentType: 'application/json',
+      body: persistedMessages
+    });
   });
 });

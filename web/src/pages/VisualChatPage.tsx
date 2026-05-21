@@ -1689,6 +1689,11 @@ function SessionsOverlay({
                 'group/session relative rounded-[1.75rem] border p-4 shadow-sm transition',
                 active ? 'border-gray-900 bg-gray-900 text-white' : selected ? 'border-blue-200 bg-blue-50/70 text-gray-900' : 'border-white bg-white/60 text-gray-900 hover:bg-white'
               ].join(' ')}
+              onMouseEnter={() => {
+                setOpenPreviewSessionId(session.id);
+                ensureSessionPreview(session.id);
+              }}
+              onMouseLeave={() => setOpenPreviewSessionId(current => current === session.id ? null : current)}
             >
               <div className="flex items-center gap-3">
                 {selectionMode && (
@@ -1711,14 +1716,7 @@ function SessionsOverlay({
                   }}
                   onBlur={() => setOpenPreviewSessionId(current => current === session.id ? null : current)}
                 >
-                  <div
-                    className="truncate text-sm font-bold"
-                    onMouseEnter={() => {
-                      setOpenPreviewSessionId(session.id);
-                      ensureSessionPreview(session.id);
-                    }}
-                    onMouseLeave={() => setOpenPreviewSessionId(current => current === session.id ? null : current)}
-                  >
+                  <div className="truncate text-sm font-bold">
                     {sessionTitle(session)}
                   </div>
                   <div className={`mt-1 flex items-center gap-2 text-xs ${active ? 'text-gray-300' : 'text-gray-500'}`}>
@@ -2725,10 +2723,31 @@ function stripLikelyProgressSentences(content: string) {
   }
   if (finalIndex <= 0) return content;
   const lead = sentences.slice(0, finalIndex);
-  if (!lead.some(sentence => /(我先|我会|先确认|确认|检查|调用|最近任务|划掉|准备|正在|接下来|I'll|I will|Let me|I'm going)/i.test(sentence))) {
+  const finalSentence = sentences[finalIndex];
+  if (!lead.some(sentence => isLikelyProgressSentence(sentence) || isLikelyCompletedDuplicate(sentence, finalSentence))) {
     return content;
   }
   return sentences.slice(finalIndex).join('').trim();
+}
+
+function isLikelyProgressSentence(sentence: string) {
+  return /(我先|我会|先确认|确认|检查|调用|最近任务|划掉|准备|正在|接下来|I'll|I will|Let me|I'm going)/i.test(sentence);
+}
+
+function isLikelyCompletedDuplicate(progressSentence: string, finalSentence: string) {
+  const progress = normalizeCompletionSentence(progressSentence);
+  const final = normalizeCompletionSentence(finalSentence);
+  if (progress.length < 4 || final.length < 4) return false;
+  return progress === final || final.endsWith(progress) || progress.endsWith(final);
+}
+
+function normalizeCompletionSentence(sentence: string) {
+  return sentence
+    .replace(/^[\s"'“”‘’`]+|[\s"'“”‘’`]+$/g, '')
+    .replace(/^(我已经|我已|已经|已|完成|好了|成功|已成功|Done|Finished|Success|I've|I have)\s*/i, '')
+    .replace(/^(我会|我先|先|正在|准备|开始|执行|调用|Let me|I'm going to|I will)\s*/i, '')
+    .replace(/[。！？!?.,，、:：;\s"'“”‘’`]/g, '')
+    .toLowerCase();
 }
 
 function finalAssistantIndex(events: ChatEvent[], runActive = false) {
@@ -2742,7 +2761,30 @@ function finalAssistantIndex(events: ChatEvent[], runActive = false) {
   });
   if (lastAssistantOffset <= lastToolOffset) return -1;
   if (!runActive) return lastAssistantOffset;
-  return lastVisibleToolResultOffset >= 0 && lastAssistantOffset > lastVisibleToolResultOffset ? lastAssistantOffset : -1;
+  if (lastVisibleToolResultOffset >= 0) return lastAssistantOffset > lastVisibleToolResultOffset ? lastAssistantOffset : -1;
+  return hasPendingToolCallBefore(events, lastAssistantOffset) ? -1 : lastAssistantOffset;
+}
+
+function hasPendingToolCallBefore(events: ChatEvent[], beforeOffset: number) {
+  for (let i = 0; i < beforeOffset; i += 1) {
+    const ev = events[i];
+    if (ev.type !== 'tool_call_started') continue;
+    let resolved = false;
+    for (let j = i + 1; j < beforeOffset; j += 1) {
+      const next = events[j];
+      if (next.type === 'tool_call_started') break;
+      if (next.type === 'tool_call_result' && next.data?.tool === ev.data?.tool) {
+        resolved = true;
+        break;
+      }
+      if (next.type === 'error') {
+        resolved = true;
+        break;
+      }
+    }
+    if (!resolved) return true;
+  }
+  return false;
 }
 
 function messageToEvent(m: MessageDto): ChatEvent | null {
