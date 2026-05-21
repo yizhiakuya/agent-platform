@@ -862,7 +862,6 @@ export default function VisualChatPage() {
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         onFileChange={handleFileChange}
-        onOpenSessions={() => setOverlay('sessions')}
         onPaste={handlePaste}
         onRemoveImage={removePendingImage}
         onSend={() => void send()}
@@ -1001,15 +1000,6 @@ function TopHUD({
           <button
             type="button"
             className="rounded-full p-2 transition hover:bg-white/60 hover:text-gray-900"
-            onClick={() => setOverlay('sessions')}
-            title="会话历史"
-            aria-label="会话历史"
-          >
-            <History size={16} />
-          </button>
-          <button
-            type="button"
-            className="rounded-full p-2 transition hover:bg-white/60 hover:text-gray-900"
             onClick={() => setOverlay('settings')}
             title="设置"
             aria-label="设置"
@@ -1109,7 +1099,6 @@ function OmniBar({
   onDragOver,
   onDrop,
   onFileChange,
-  onOpenSessions,
   onPaste,
   onRemoveImage,
   onSend,
@@ -1126,7 +1115,6 @@ function OmniBar({
   onDragOver: (e: DragEvent<HTMLFormElement>) => void;
   onDrop: (e: DragEvent<HTMLFormElement>) => void;
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onOpenSessions: () => void;
   onPaste: (e: ClipboardEvent<HTMLTextAreaElement>) => void;
   onRemoveImage: (id: string) => void;
   onSend: () => void;
@@ -1175,16 +1163,6 @@ function OmniBar({
             title="添加图片"
           >
             <Paperclip size={20} />
-          </button>
-
-          <button
-            type="button"
-            className="hidden shrink-0 rounded-2xl p-4 text-gray-400 transition-colors hover:bg-gray-50/50 hover:text-gray-900 sm:block"
-            onClick={onOpenSessions}
-            aria-label="会话历史"
-            title="会话历史"
-          >
-            <History size={20} />
           </button>
 
           <label className="sr-only" htmlFor="visual-omnibar">
