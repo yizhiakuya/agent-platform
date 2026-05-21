@@ -204,8 +204,6 @@ export default function VisualChatPage() {
   const activeDevice = deviceRows.find(d => d.online) ?? deviceRows[0] ?? null;
   const toolCallCount = renderedEvents.filter(ev => ev.type === 'tool_call_started').length;
   const toolResultCount = renderedEvents.filter(ev => ev.type === 'tool_call_result').length;
-  const messageCount = renderedEvents.filter(ev => ev.type === 'user_message' || ev.type === 'assistant_message').length;
-  const sessionCount = sessions.length;
 
   async function refreshSessions() {
     if (!isAuthenticated) {
@@ -771,8 +769,6 @@ export default function VisualChatPage() {
         activeSession={activeSession}
         authenticated={isAuthenticated}
         busy={busy}
-        messageCount={messageCount}
-        sessionsCount={sessionCount}
         setOverlay={setOverlay}
         startNewSession={startNewSession}
       />
@@ -922,8 +918,6 @@ function TopHUD({
   activeSession,
   authenticated,
   busy,
-  messageCount,
-  sessionsCount,
   setOverlay,
   startNewSession
 }: {
@@ -931,11 +925,10 @@ function TopHUD({
   activeSession: SessionDto | null;
   authenticated: boolean;
   busy: boolean;
-  messageCount: number;
-  sessionsCount: number;
   setOverlay: (overlay: Overlay) => void;
   startNewSession: () => void;
 }) {
+  const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null);
   const deviceLabel = activeDevice
     ? activeDevice.name
     : authenticated
@@ -946,6 +939,19 @@ function TopHUD({
     : authenticated
       ? 'Open device pool'
       : 'Login to sync';
+  const sessionIdText = activeSession?.id ?? 'pending';
+  const canCopySessionId = Boolean(activeSession?.id);
+
+  async function copySessionId() {
+    if (!activeSession?.id) return;
+    try {
+      await copyText(activeSession.id);
+      setCopiedSessionId(activeSession.id);
+      window.setTimeout(() => setCopiedSessionId(current => current === activeSession.id ? null : current), 1400);
+    } catch {
+      setCopiedSessionId(null);
+    }
+  }
 
   return (
     <div className="pointer-events-none fixed left-0 top-8 z-40 flex w-full justify-center px-4">
@@ -968,22 +974,29 @@ function TopHUD({
 
         <span className="hidden h-6 w-px bg-gray-200/70 sm:block" />
 
-        <button
-          type="button"
-          className="hidden min-w-0 items-center gap-2 rounded-full px-3 py-2 text-left transition hover:bg-white/50 sm:flex"
-          onClick={() => setOverlay('sessions')}
-          title="会话"
-        >
+        <div className="hidden min-w-0 items-center gap-2 rounded-full px-3 py-1.5 text-left transition hover:bg-white/50 sm:flex">
           <History size={16} className="shrink-0 text-gray-400" />
-          <span className="min-w-0">
-            <span className="block max-w-48 truncate text-[13px] font-semibold text-gray-800">
+          <span className="min-w-0 leading-none">
+            <button
+              type="button"
+              className="block max-w-48 truncate text-left text-[13px] font-semibold text-gray-800 outline-none hover:text-gray-950 focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-blue-400/60"
+              onClick={() => setOverlay('sessions')}
+              title="会话"
+            >
               {activeSession ? sessionTitle(activeSession) : 'New session'}
-            </span>
-            <span className="block text-[10px] font-medium uppercase tracking-widest text-gray-400">
-              {sessionsCount} sessions · {messageCount} events
-            </span>
+            </button>
+            <button
+              type="button"
+              className="mt-1 block max-w-48 truncate font-mono text-[10px] font-semibold uppercase tracking-wider text-gray-400 outline-none transition hover:text-gray-700 focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-blue-400/60 disabled:cursor-default disabled:hover:text-gray-400"
+              onClick={copySessionId}
+              disabled={!canCopySessionId}
+              title={canCopySessionId ? `复制会话 ID: ${activeSession?.id}` : '会话尚未保存'}
+              aria-label={canCopySessionId ? `复制会话 ID ${activeSession?.id}` : '会话尚未保存'}
+            >
+              {copiedSessionId === activeSession?.id ? 'copied' : sessionIdText}
+            </button>
           </span>
-        </button>
+        </div>
 
         <span className="hidden h-6 w-px bg-gray-200/70 sm:block" />
 
@@ -3284,6 +3297,22 @@ function sessionTime(s: SessionDto) {
 function sessionTitle(s: SessionDto) {
   const title = s.title?.trim();
   return title || '未命名会话';
+}
+
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  textarea.remove();
 }
 
 function formatSessionTime(s: SessionDto) {
