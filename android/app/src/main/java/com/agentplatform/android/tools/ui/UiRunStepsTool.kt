@@ -7,10 +7,7 @@ import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ObjectNode
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Execute a short ordered UI macro on-device.
@@ -355,7 +352,7 @@ class UiRunStepsTool(
     }
 
     private fun safeDumpTree(maxDepth: Int): ObjectNode =
-        runCatching { UiAccessibilityService.dumpTree(mapper, maxDepth) }
+        runCatching { UiAccessibilityService.dumpTreeWithTimeout(mapper, maxDepth, DUMP_TREE_TIMEOUT_MS) }
             .getOrElse { error ->
                 mapper.createObjectNode().apply { put("error", error.message ?: "dump_tree failed") }
             }
@@ -370,11 +367,9 @@ class UiRunStepsTool(
                 activeWindowPackage = ""
             )
         }
-        val activeWindow = withTimeoutOrNull(ACTIVE_WINDOW_PROBE_TIMEOUT_MS) {
-            withContext(Dispatchers.Main.immediate) {
-                UiAccessibilityService.activeWindowPackage()
-            }
-        }.orEmpty()
+        val activeWindow = UiAccessibilityService
+            .activeWindowPackageWithTimeout(ACTIVE_WINDOW_PROBE_TIMEOUT_MS)
+            .packageName
         return ForegroundObservation(
             packageName = activeWindow,
             source = if (activeWindow.isBlank()) "unavailable" else "active_window",
@@ -461,6 +456,7 @@ class UiRunStepsTool(
         private const val MAX_LONG_PRESS_MS = 3_000L
         private const val MAX_WAIT_MS = 3_000L
         private const val ACTIVE_WINDOW_PROBE_TIMEOUT_MS = 300L
+        private const val DUMP_TREE_TIMEOUT_MS = 2_500L
         private const val DEFAULT_TREE_DEPTH = 12
         private const val MAX_TREE_DEPTH = 30
     }

@@ -8,10 +8,7 @@ import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ObjectNode
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Bring an installed app to the foreground by package name. This is a small
@@ -121,7 +118,12 @@ class UiOpenAppTool(
         }
         val foregroundPackage = observation.packageName
         val opened = foregroundPackage == packageName
-        val intentSentButUnverified = !opened && foregroundPackage.isBlank()
+        val intentSentButUnverified = !opened && (
+            foregroundPackage.isBlank() ||
+            foregroundPackage == "com.agentplatform.android" ||
+            foregroundPackage.contains("launcher") ||
+            foregroundPackage.contains("home")
+        )
         val result = mapper.createObjectNode().apply {
             put("opened", opened)
             put("intentSent", true)
@@ -224,11 +226,8 @@ class UiOpenAppTool(
                 cachedPackageAgeMs = cachedAgeMs
             )
         }
-        val activeWindow = withTimeoutOrNull(ACTIVE_WINDOW_PROBE_TIMEOUT_MS) {
-            withContext(Dispatchers.Main.immediate) {
-                UiAccessibilityService.activeWindowPackage()
-            }
-        }.orEmpty()
+        val activeWindowResult = UiAccessibilityService.activeWindowPackageWithTimeout(ACTIVE_WINDOW_PROBE_TIMEOUT_MS)
+        val activeWindow = activeWindowResult.packageName
         val packageName = when {
             activeWindow.isNotBlank() -> activeWindow
             cached.isNotBlank() -> cached

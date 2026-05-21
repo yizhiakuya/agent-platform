@@ -62,16 +62,20 @@ class UiDumpTreeTool(private val mapper: ObjectMapper) : Tool {
                 request = args
             )
         }
-        val tree = UiAccessibilityService.dumpTree(mapper, maxDepth)
+        val tree = UiAccessibilityService.dumpTreeWithTimeout(mapper, maxDepth, DUMP_TREE_TIMEOUT_MS)
         if (tree.has("error")) {
             ToolResultEnvelope.applyStandardFields(mapper, this, tree, ok = false, request = args)
             tree.set<ObjectNode>("error_detail", mapper.createObjectNode().apply {
-                put("code", "dump_tree_failed")
+                put("code", if (tree.path("timed_out").asBoolean(false)) "dump_tree_timeout" else "dump_tree_failed")
                 put("message", tree.path("error").asText())
                 put("retryable", true)
             })
             return tree
         }
         return ToolResultEnvelope.applyStandardFields(mapper, this, tree, ok = true, request = args)
+    }
+
+    private companion object {
+        private const val DUMP_TREE_TIMEOUT_MS = 2_500L
     }
 }

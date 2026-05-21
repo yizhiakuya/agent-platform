@@ -24,6 +24,10 @@ import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.suspendCoroutine
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 data class UiTypeTextResult(
     val typed: Boolean,
@@ -138,6 +142,17 @@ class UiAccessibilityService : AccessibilityService() {
             } finally {
                 root.recycle()
             }
+        }
+
+        fun activeWindowPackageWithTimeout(timeoutMs: Long): ActiveWindowPackageResult {
+            val result = runAccessibilityProbe("active-window-package", timeoutMs) {
+                activeWindowPackage()
+            }
+            return ActiveWindowPackageResult(
+                packageName = result.value.orEmpty(),
+                timedOut = result.timedOut,
+                error = result.error
+            )
         }
 
         fun armMediaStoreConfirmationAutoApprove() {
@@ -318,6 +333,24 @@ class UiAccessibilityService : AccessibilityService() {
             return out
         }
 
+        fun dumpTreeWithTimeout(mapper: ObjectMapper, maxDepth: Int, timeoutMs: Long): ObjectNode {
+            val result = runAccessibilityProbe("dump-tree", timeoutMs) {
+                dumpTree(mapper, maxDepth)
+            }
+            if (result.value != null) return result.value
+            return mapper.createObjectNode().apply {
+                put(
+                    "error",
+                    if (result.timedOut) {
+                        "accessibility tree read timed out after ${timeoutMs}ms"
+                    } else {
+                        result.error ?: "accessibility tree read failed"
+                    }
+                )
+                put("timed_out", result.timedOut)
+            }
+        }
+
         suspend fun screenshot(): Bitmap? {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
             val s = require()
@@ -401,6 +434,35 @@ class UiAccessibilityService : AccessibilityService() {
             var offscreenOrEmptySkipped: Int = 0,
             var semanticSkipped: Int = 0
         )
+
+        data class ActiveWindowPackageResult(
+            val packageName: String,
+            val timedOut: Boolean,
+            val error: String?
+        )
+
+        private data class ProbeResult<T>(
+            val value: T?,
+            val timedOut: Boolean,
+            val error: String?
+        )
+
+        private fun <T> runAccessibilityProbe(name: String, timeoutMs: Long, block: () -> T): ProbeResult<T> {
+            val executor = Executors.newSingleThreadExecutor { runnable ->
+                Thread(runnable, "AgentA11y-$name").apply { isDaemon = true }
+            }
+            val future = executor.submit(Callable { block() })
+            return try {
+                ProbeResult(future.get(timeoutMs, TimeUnit.MILLISECONDS), timedOut = false, error = null)
+            } catch (_: TimeoutException) {
+                future.cancel(true)
+                ProbeResult(value = null, timedOut = true, error = null)
+            } catch (error: Exception) {
+                ProbeResult(value = null, timedOut = false, error = error.message ?: error.javaClass.simpleName)
+            } finally {
+                executor.shutdownNow()
+            }
+        }
 
         private fun trySetText(node: AccessibilityNodeInfo, text: String): UiTypeTextResult? {
             val args = Bundle().apply {

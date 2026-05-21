@@ -94,10 +94,12 @@ class AgentForegroundService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val inFlightToolJobs = ConcurrentHashMap<String, Job>()
     private val uiToolMutex = Mutex()
+    private var serviceWakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
         startForeground(NOTI_ID, buildNotification(getString(android.R.string.dialog_alert_title)))
+        acquireServiceWakeLock()
 
         // Register the device tools exposed to the server-side agent.
         toolRegistry.register(PhotosListRecentTool(applicationContext, mapper))
@@ -176,11 +178,16 @@ class AgentForegroundService : Service() {
 
     private fun onWsMessage(text: String) {
         val receivedAtMs = System.currentTimeMillis()
+        val messageWakeLock = acquireShortWakeLock("ws-message", WS_MESSAGE_WAKE_LOCK_MS)
         lastRecvSummary = "${text.length}b ${text.take(60).replace('\n', ' ')}"
         Log.d(TAG, "WS recv $lastRecvSummary")
 
         scope.launch {
-            handleWsMessage(text, receivedAtMs)
+            try {
+                handleWsMessage(text, receivedAtMs)
+            } finally {
+                releaseWakeLock(messageWakeLock)
+            }
         }
     }
 
@@ -333,6 +340,47 @@ class AgentForegroundService : Service() {
         }
     }
 
+    private fun acquireServiceWakeLock() {
+        runCatching {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            serviceWakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$packageName:service-wakelock"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+                Log.d(TAG, "Acquired service-level wake lock")
+            }
+        }.onFailure {
+            Log.w(TAG, "Failed to acquire service-level wake lock: ${it.message}")
+        }
+    }
+
+    private fun acquireShortWakeLock(tag: String, timeoutMs: Long): PowerManager.WakeLock? {
+        return runCatching {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$packageName:short-$tag"
+            ).apply {
+                setReferenceCounted(false)
+                acquire(timeoutMs)
+                Log.d(TAG, "Acquired short wake lock tag=$tag duration=${timeoutMs}ms")
+            }
+        }.onFailure {
+            Log.w(TAG, "Failed to acquire short wake lock tag=$tag: ${it.message}")
+        }.getOrNull()
+    }
+
+    private fun releaseWakeLock(wakeLock: PowerManager.WakeLock?) {
+        if (wakeLock == null) return
+        runCatching {
+            if (wakeLock.isHeld) wakeLock.release()
+        }.onFailure {
+            Log.w(TAG, "Failed to release short wake lock: ${it.message}")
+        }
+    }
+
     private fun startPhotoIndexSync() {
         scope.launch {
             val uploader = PhotoIndexUploader(applicationContext, mapper)
@@ -357,6 +405,11 @@ class AgentForegroundService : Service() {
     override fun onDestroy() {
         if (::wsClient.isInitialized) wsClient.close("service destroyed")
         scope.cancel()
+        runCatching {
+            serviceWakeLock?.let {
+                if (it.isHeld) it.release()
+            }
+        }
         _status.value = "已停止"
         super.onDestroy()
     }
@@ -391,6 +444,7 @@ class AgentForegroundService : Service() {
         private const val NOTI_ID = 1001
         private const val DEVICE_TOOL_TIMEOUT_MS = 28_000L
         private const val TOOL_WAKE_LOCK_MS = DEVICE_TOOL_TIMEOUT_MS + 7_000L
+        private const val WS_MESSAGE_WAKE_LOCK_MS = 10_000L
         private const val PHOTO_INDEX_ACTIVE_DELAY_MS = 5_000L
         private const val PHOTO_INDEX_IDLE_DELAY_MS = 15 * 60_000L
         private const val PHOTO_INDEX_ERROR_DELAY_MS = 60_000L
