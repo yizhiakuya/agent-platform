@@ -99,6 +99,10 @@ test.describe('Spatial canvas chat shell', () => {
     await expect(preview.locator('.session-map-preview-frame')).toHaveCSS('background-image', /linear-gradient/);
     await expect(page.getByText('预览记录')).toBeVisible();
     await expect(page.getByText('打开小黑盒')).toBeVisible();
+    await page.locator('.session-map-id-copy', { hasText: 's1' }).click();
+    await expect(page.locator('.session-map-id-copy', { hasText: '已复制' })).toBeVisible();
+    await preview.locator('.session-map-preview-id-copy').click();
+    await expect(preview.locator('.session-map-preview-id-copy')).toContainText('已复制');
   });
 
   test('keeps the session list narrow and shows the preview on the right', async ({ page }) => {
@@ -164,6 +168,8 @@ test.describe('Spatial canvas chat shell', () => {
     expect(listBox.width).toBeLessThanOrEqual(430);
     expect(rowBox.width).toBeLessThanOrEqual(500);
     expect(rowBox.width / rowBox.height).toBeLessThan(6);
+    expect(rowBox.x).toBeGreaterThanOrEqual(listBox.x);
+    expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(listBox.x + listBox.width);
     expect(previewBox.x).toBeGreaterThan(rowBox.x + rowBox.width);
     await expect(preview.locator('.session-map-preview-frame')).toHaveCSS('background-image', /linear-gradient/);
   });

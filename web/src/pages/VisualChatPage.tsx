@@ -1621,6 +1621,7 @@ function SessionsOverlay({
   const [previewBySessionId, setPreviewBySessionId] = useState<Record<string, SessionPreviewState>>({});
   const [hoveredPreviewId, setHoveredPreviewId] = useState<string | null>(null);
   const [displayPreviewId, setDisplayPreviewId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const displaySession = displayPreviewId ? sessions.find(session => session.id === displayPreviewId) ?? null : null;
   const previewOpen = Boolean(hoveredPreviewId);
 
@@ -1649,6 +1650,16 @@ function SessionsOverlay({
 
   function closeSessionPreview() {
     setHoveredPreviewId(null);
+  }
+
+  async function copySessionId(id: string) {
+    try {
+      await copyText(id);
+      setCopiedId(id);
+      window.setTimeout(() => setCopiedId(current => current === id ? null : current), 1400);
+    } catch {
+      setCopiedId(null);
+    }
   }
 
   if (!authenticated) return <AuthGate />;
@@ -1762,11 +1773,12 @@ function SessionsOverlay({
                   <button
                     type="button"
                     className="session-map-id-copy"
-                    onClick={() => void copyText(session.id)}
-                    title={`复制会话 ID: ${session.id}`}
-                    aria-label={`复制会话 ID ${session.id}`}
+                    data-copied={copiedId === session.id ? 'true' : 'false'}
+                    onClick={() => void copySessionId(session.id)}
+                    title={copiedId === session.id ? '已复制会话 ID' : `复制会话 ID: ${session.id}`}
+                    aria-label={copiedId === session.id ? `已复制会话 ID ${session.id}` : `复制会话 ID ${session.id}`}
                   >
-                    {session.id.slice(0, 8)}
+                    {copiedId === session.id ? '已复制' : session.id.slice(0, 8)}
                   </button>
                 </div>
               </div>
@@ -1781,6 +1793,8 @@ function SessionsOverlay({
         open={previewOpen}
         preview={displaySession ? previewBySessionId[displaySession.id] : undefined}
         session={displaySession}
+        copiedId={copiedId}
+        onCopySessionId={copySessionId}
       />
     </div>
   );
@@ -1788,12 +1802,16 @@ function SessionsOverlay({
 
 function SessionPreviewPopover({
   active,
+  copiedId,
+  onCopySessionId,
   onClose,
   open,
   preview,
   session
 }: {
   active?: boolean;
+  copiedId: string | null;
+  onCopySessionId: (id: string) => Promise<void>;
   onClose: () => void;
   open: boolean;
   preview?: SessionPreviewState;
@@ -1826,11 +1844,14 @@ function SessionPreviewPopover({
                 </div>
                 <button
                   type="button"
-                  className="mt-2 font-mono text-[11px] font-semibold uppercase tracking-wide text-slate-400 transition hover:text-slate-700"
-                  onClick={() => void copyText(session.id)}
-                  title={`复制会话 ID: ${session.id}`}
+                  className="session-map-preview-id-copy"
+                  data-copied={copiedId === session.id ? 'true' : 'false'}
+                  onClick={() => void onCopySessionId(session.id)}
+                  title={copiedId === session.id ? '已复制会话 ID' : `复制会话 ID: ${session.id}`}
+                  aria-label={copiedId === session.id ? `已复制会话 ID ${session.id}` : `复制会话 ID ${session.id}`}
                 >
-                  {session.id}
+                  <span>{session.id}</span>
+                  <span>{copiedId === session.id ? '已复制' : '复制'}</span>
                 </button>
               </div>
               <div className={`session-map-status-pill ${active ? 'session-map-status-pill-active' : ''}`}>
@@ -3361,8 +3382,12 @@ function sessionTitle(s: SessionDto) {
 
 async function copyText(value: string) {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall back for insecure origins or test browsers without clipboard grants.
+    }
   }
   const textarea = document.createElement('textarea');
   textarea.value = value;
