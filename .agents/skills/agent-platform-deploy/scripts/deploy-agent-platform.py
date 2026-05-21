@@ -266,8 +266,23 @@ def ensure_docker(timeout_seconds: int) -> None:
     if docker_server_available(docker):
         return
 
-    docker_desktop = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Docker" / "Docker" / "Docker Desktop.exe"
-    if docker_desktop.exists():
+    started = start_docker_desktop(docker)
+    if not started:
+        candidates = "; ".join(str(path) for path in docker_desktop_candidates(docker))
+        log(f"DOCKER_DESKTOP_EXE_NOT_FOUND={candidates or 'none'}")
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if docker_server_available(docker):
+            return
+        time.sleep(3)
+    raise SystemExit(f"Docker server is not available after {timeout_seconds} seconds.")
+
+
+def start_docker_desktop(docker: str) -> Path | None:
+    for docker_desktop in docker_desktop_candidates(docker):
+        if not docker_desktop.exists():
+            continue
         log(f"$ start {docker_desktop}")
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         subprocess.Popen(
@@ -276,13 +291,45 @@ def ensure_docker(timeout_seconds: int) -> None:
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
         )
+        return docker_desktop
+    return None
 
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        if docker_server_available(docker):
+
+def docker_desktop_candidates(docker: str | None = None) -> list[Path]:
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def add(path: str | Path | None) -> None:
+        if not path:
             return
-        time.sleep(3)
-    raise SystemExit(f"Docker server is not available after {timeout_seconds} seconds.")
+        candidate = Path(os.path.expandvars(str(path))).expanduser()
+        key = os.path.normcase(os.path.abspath(str(candidate)))
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(candidate)
+
+    add(os.environ.get("DOCKER_DESKTOP_EXE"))
+
+    if docker:
+        docker_path = Path(docker)
+        if docker_path.parent.name.lower() == "bin" and docker_path.parent.parent.name.lower() == "resources":
+            add(docker_path.parent.parent.parent / "Docker Desktop.exe")
+        for parent in docker_path.parents:
+            add(parent / "Docker Desktop.exe")
+            add(parent / "Docker desktop.exe")
+
+    for name in ("Docker Desktop.exe", "Docker desktop.exe"):
+        add(shutil.which(name))
+
+    for env_name in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        base = os.environ.get(env_name)
+        if not base:
+            continue
+        add(Path(base) / "Docker" / "Docker" / "Docker Desktop.exe")
+        add(Path(base) / "Docker" / "Docker Desktop.exe")
+
+    return candidates
 
 
 def docker_server_available(docker: str) -> bool:

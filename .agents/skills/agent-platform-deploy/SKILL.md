@@ -119,6 +119,9 @@ and public URL without SSH or remote mutation.
 - Refuses tracked dirty worktrees unless `--allow-dirty` is passed; untracked
   files such as `APP.txt` are reported but not deployed.
 - Starts Docker Desktop if the Docker server is unavailable.
+- Finds Docker Desktop from `DOCKER_DESKTOP_EXE`, standard Windows install
+  locations, or by walking up from the resolved `docker.exe` path. This covers
+  custom installs such as `D:\Apps\Docker\Docker\Docker Desktop.exe`.
 - Packages `agent-service` from `agent-service/target/agent-service-0.0.1-SNAPSHOT.jar`.
 - Packages `web` from `web/dist` plus `web/nginx.conf`.
 - Uses tiny temporary Docker contexts under `%TEMP%`.
