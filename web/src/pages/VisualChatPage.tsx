@@ -1668,7 +1668,7 @@ function SessionsOverlay({
           暂无历史会话。
         </div>
       )}
-      <div className="grid gap-3">
+      <div className="relative grid gap-3 lg:max-w-[27.5rem]">
         {sessions.map(session => {
           const active = session.id === sessionId;
           const selected = selectedSessionIds.has(session.id);
@@ -1677,7 +1677,7 @@ function SessionsOverlay({
             <div
               key={session.id}
               className={[
-                'group/session relative rounded-[1.75rem] border p-4 shadow-sm transition',
+                'group/session relative z-0 min-h-[5.25rem] rounded-[1.45rem] border p-3.5 shadow-sm transition hover:z-30 focus-within:z-30',
                 active ? 'border-gray-900 bg-gray-900 text-white' : selected ? 'border-blue-200 bg-blue-50/70 text-gray-900' : 'border-white bg-white/60 text-gray-900 hover:bg-white'
               ].join(' ')}
               onMouseEnter={() => {
@@ -1762,13 +1762,14 @@ function SessionPreviewPopover({
     <div
       id={`session-preview-${session.id}`}
       className={[
-        'pointer-events-none absolute left-8 right-8 top-[calc(100%-0.35rem)] z-20 transition duration-200 max-md:left-4 max-md:right-4',
-        open ? 'visible translate-y-0 opacity-100' : 'invisible translate-y-2 opacity-0'
+        "pointer-events-none absolute left-4 right-4 top-[calc(100%-0.35rem)] z-30 transition duration-200 lg:left-[calc(100%+0.85rem)] lg:right-auto lg:top-0 lg:w-[25rem] lg:before:absolute lg:before:-left-2 lg:before:top-6 lg:before:h-4 lg:before:w-4 lg:before:rotate-45 lg:before:rounded-[0.35rem] lg:before:bg-slate-200/80 lg:before:shadow-[inset_1px_1px_0_rgba(255,255,255,0.85)] lg:before:content-['']",
+        open ? 'visible translate-x-0 translate-y-0 opacity-100' : 'invisible translate-y-2 opacity-0 lg:translate-x-2 lg:translate-y-0'
       ].join(' ')}
       role="status"
       aria-hidden={!open}
     >
-      <div className="rounded-[1.6rem] border border-white/80 bg-white/90 p-4 text-gray-900 shadow-[0_24px_70px_rgba(15,23,42,0.18)] backdrop-blur-2xl">
+      <div className="rounded-[1.8rem] bg-[linear-gradient(145deg,rgba(255,255,255,0.96),rgba(226,232,240,0.92)_38%,rgba(148,163,184,0.72))] p-px text-gray-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_24px_70px_rgba(15,23,42,0.18)]">
+        <div className="rounded-[1.72rem] bg-white/[0.92] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),inset_0_0_0_1px_rgba(148,163,184,0.24)] ring-1 ring-inset ring-gray-200/70 backdrop-blur-2xl">
         <div className="mb-3 flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="truncate text-sm font-black">{sessionTitle(session)}</div>
@@ -1821,6 +1822,7 @@ function SessionPreviewPopover({
             ))}
           </div>
         )}
+        </div>
       </div>
     </div>
   );
