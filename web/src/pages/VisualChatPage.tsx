@@ -7,15 +7,18 @@ import {
   ArrowRight,
   Battery,
   CheckCircle2,
+  CheckSquare,
   ChevronRight,
   Clock,
   Download,
+  FileText,
   History,
   Image as ImageIcon,
   Loader2,
   LogIn,
   Maximize2,
   MessageSquarePlus,
+  MoreHorizontal,
   Paperclip,
   Plus,
   RefreshCw,
@@ -1527,15 +1530,17 @@ function OverlayManager({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-8 max-sm:p-3">
       <button type="button" className="absolute inset-0 bg-gray-900/10 backdrop-blur-md transition-opacity" onClick={() => setOverlay(null)} aria-label="关闭弹层" />
 
-      <div className="animate-float-up relative z-10 flex h-[80vh] w-full max-w-5xl flex-col overflow-hidden rounded-[3rem] border border-white bg-white/80 shadow-[0_0_100px_rgba(0,0,0,0.1)] backdrop-blur-3xl max-sm:h-[88vh] max-sm:rounded-[2rem]">
+      <div className={overlay === 'sessions' ? 'session-map-modal animate-float-up' : 'animate-float-up relative z-10 flex h-[80vh] w-full max-w-5xl flex-col overflow-hidden rounded-[3rem] border border-white bg-white/80 shadow-[0_0_100px_rgba(0,0,0,0.1)] backdrop-blur-3xl max-sm:h-[88vh] max-sm:rounded-[2rem]'}>
+        {overlay !== 'sessions' && (
         <div className="flex h-24 items-center justify-between border-b border-gray-100/50 px-12 max-sm:h-20 max-sm:px-6">
           <h2 className="text-2xl font-bold tracking-tight text-gray-900 max-sm:text-xl">
-            {overlay === 'sessions' ? '会话星图' : overlay === 'devices' ? '终端与连接池' : 'Agent 配置中心'}
+            {overlay === 'devices' ? '终端与连接池' : 'Agent 配置中心'}
           </h2>
           <button type="button" onClick={() => setOverlay(null)} className="rounded-full bg-gray-50 p-3 text-gray-500 transition-colors hover:bg-gray-100" aria-label="关闭">
             <X size={20} />
           </button>
         </div>
+        )}
 
         {overlay === 'sessions' && (
           <SessionsOverlay
@@ -1553,6 +1558,7 @@ function OverlayManager({
             sessions={sessions}
             sessionsError={sessionsError}
             sessionsLoading={sessionsLoading}
+            setOverlay={setOverlay}
             startNewSession={startNewSession}
             toggleSelectionMode={toggleSelectionMode}
             toggleSessionSelected={toggleSessionSelected}
@@ -1588,6 +1594,7 @@ function SessionsOverlay({
   sessions,
   sessionsError,
   sessionsLoading,
+  setOverlay,
   startNewSession,
   toggleSelectionMode,
   toggleSessionSelected
@@ -1606,12 +1613,16 @@ function SessionsOverlay({
   sessions: SessionDto[];
   sessionsError: string | null;
   sessionsLoading: boolean;
+  setOverlay: (overlay: Overlay) => void;
   startNewSession: () => void;
   toggleSelectionMode: () => void;
   toggleSessionSelected: (id: string) => void;
 }) {
   const [previewBySessionId, setPreviewBySessionId] = useState<Record<string, SessionPreviewState>>({});
-  const [openPreview, setOpenPreview] = useState<{ id: string; index: number } | null>(null);
+  const [hoveredPreviewId, setHoveredPreviewId] = useState<string | null>(null);
+  const [displayPreviewId, setDisplayPreviewId] = useState<string | null>(null);
+  const displaySession = displayPreviewId ? sessions.find(session => session.id === displayPreviewId) ?? null : null;
+  const previewOpen = Boolean(hoveredPreviewId);
 
   function ensureSessionPreview(id: string) {
     const current = previewBySessionId[id];
@@ -1630,208 +1641,246 @@ function SessionsOverlay({
       });
   }
 
+  function openSessionPreview(id: string) {
+    setHoveredPreviewId(id);
+    setDisplayPreviewId(id);
+    ensureSessionPreview(id);
+  }
+
+  function closeSessionPreview() {
+    setHoveredPreviewId(null);
+  }
+
   if (!authenticated) return <AuthGate />;
   return (
-    <div className="session-star-body">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={startNewSession} className="rounded-full bg-gray-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-black">
-            <Plus size={16} className="mr-1 inline" />
+    <div className="session-map-shell" data-preview-open={previewOpen ? 'true' : 'false'} onMouseLeave={closeSessionPreview}>
+      <div className="session-map-list-pane" data-preview-open={previewOpen ? 'true' : 'false'}>
+        <div className="session-map-header">
+          <h2 className="text-[22px] font-bold tracking-tight text-slate-900">会话星图</h2>
+          <button type="button" onClick={() => setOverlay(null)} className="session-map-icon-button md:hidden" aria-label="关闭">
+            <X size={18} strokeWidth={2.5} />
+          </button>
+        </div>
+
+        <div className="session-map-actions">
+          <button type="button" onClick={startNewSession} className="session-map-primary-button">
+            <Plus size={16} strokeWidth={2.5} />
             新会话
           </button>
-          <button type="button" onClick={refreshSessions} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50">
-            <RefreshCw size={16} className="mr-1 inline" />
-            刷新
+          <button type="button" onClick={refreshSessions} className="session-map-action-button" aria-label="刷新会话">
+            <RefreshCw size={14} strokeWidth={2.5} />
+            <span>刷新</span>
           </button>
           {sessions.length > 0 && (
-            <button type="button" onClick={toggleSelectionMode} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50">
-              {selectionMode ? '完成多选' : '多选'}
+            <button
+              type="button"
+              onClick={toggleSelectionMode}
+              className="session-map-icon-button"
+              title={selectionMode ? '完成多选' : '多选'}
+              aria-label={selectionMode ? '完成多选' : '多选'}
+              aria-pressed={selectionMode}
+            >
+              <CheckSquare size={15} strokeWidth={2.5} />
+            </button>
+          )}
+          {selectionMode && (
+            <button
+              type="button"
+              onClick={deleteSelectedSessions}
+              disabled={bulkDeleting || selectedSessionIds.size === 0}
+              className="session-map-delete-button"
+            >
+              删除 {selectedSessionIds.size}
             </button>
           )}
         </div>
-        {selectionMode && (
-          <button
-            type="button"
-            onClick={deleteSelectedSessions}
-            disabled={bulkDeleting || selectedSessionIds.size === 0}
-            className="rounded-full bg-red-50 px-4 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-100 disabled:opacity-40"
-          >
-            删除选中 {selectedSessionIds.size}
-          </button>
-        )}
-      </div>
 
-      {sessionsLoading && <SoftStatus>加载会话中...</SoftStatus>}
-      {sessionsError && <ErrorStatus>{sessionsError}</ErrorStatus>}
-      {!sessionsLoading && !sessionsError && sessions.length === 0 && (
-        <div className="rounded-[2rem] border border-dashed border-gray-200 bg-white/50 p-10 text-center text-sm text-gray-500">
-          暂无历史会话。
-        </div>
-      )}
-      <div className="session-star-stage">
-        <div className="session-star-list">
-        {sessions.map((session, index) => {
-          const active = session.id === sessionId;
-          const selected = selectedSessionIds.has(session.id);
-          return (
-            <div
-              key={session.id}
-              className={[
-                'session-star-row group/session border',
-                active ? 'border-gray-900 bg-gray-900 text-white' : selected ? 'border-blue-200 bg-blue-50/70 text-gray-900' : 'border-white bg-white/60 text-gray-900 hover:bg-white'
-              ].join(' ')}
-              onMouseEnter={() => {
-                setOpenPreview({ id: session.id, index });
-                ensureSessionPreview(session.id);
-              }}
-              onMouseLeave={() => setOpenPreview(current => current?.id === session.id ? null : current)}
-            >
-              <div className="flex min-w-0 items-center gap-3 overflow-hidden">
-                {selectionMode && (
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    onChange={() => toggleSessionSelected(session.id)}
-                    className="h-4 w-4 rounded border-gray-300 text-blue-600"
-                    aria-label={`选择 ${sessionTitle(session)}`}
-                  />
-                )}
-                <button
-                  type="button"
-                  onClick={() => selectionMode ? toggleSessionSelected(session.id) : loadSession(session.id)}
-                  className="min-w-0 flex-1 text-left"
-                  aria-describedby={`session-preview-${session.id}`}
-                  onFocus={() => {
-                    setOpenPreview({ id: session.id, index });
-                    ensureSessionPreview(session.id);
-                  }}
-                  onBlur={() => setOpenPreview(current => current?.id === session.id ? null : current)}
-                >
-                  <div className="truncate text-sm font-bold">
-                    {sessionTitle(session)}
-                  </div>
-                  <div className={`mt-1 flex items-center gap-2 text-xs ${active ? 'text-gray-300' : 'text-gray-500'}`}>
-                    <Clock size={12} />
-                    <span>{formatSessionTime(session)}</span>
-                    <span className="font-mono">{session.id.slice(0, 8)}</span>
-                  </div>
-                </button>
-                <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
-                  <button type="button" onClick={() => exportSession(session.id)} className={`rounded-full p-2 ${active ? 'text-gray-300 hover:bg-white/10 hover:text-white' : 'text-gray-400 hover:bg-gray-100 hover:text-gray-900'}`} title="导出" aria-label="导出">
-                    <Download size={16} />
-                  </button>
+        <div className="session-map-list-scroll">
+          {sessionsLoading && <SoftStatus>加载会话中...</SoftStatus>}
+          {sessionsError && <ErrorStatus>{sessionsError}</ErrorStatus>}
+          {!sessionsLoading && !sessionsError && sessions.length === 0 && (
+            <div className="session-map-empty">暂无历史会话。</div>
+          )}
+          {!sessionsLoading && !sessionsError && sessions.map(session => {
+            const active = session.id === sessionId;
+            const selected = selectedSessionIds.has(session.id);
+            const hovered = hoveredPreviewId === session.id;
+            const highlighted = hovered || active || selected;
+            return (
+              <div
+                key={session.id}
+                className="session-map-row group/session"
+                data-hovered={hovered ? 'true' : 'false'}
+                data-active={active ? 'true' : 'false'}
+                data-selected={selected ? 'true' : 'false'}
+                onMouseEnter={() => openSessionPreview(session.id)}
+                onFocus={() => openSessionPreview(session.id)}
+              >
+                <div className="session-map-row-top">
+                  {selectionMode && (
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() => toggleSessionSelected(session.id)}
+                      className="h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600"
+                      aria-label={`选择 ${sessionTitle(session)}`}
+                    />
+                  )}
                   <button
                     type="button"
-                    onClick={() => deleteSession(session.id)}
-                    disabled={deleteBusyId === session.id}
-                    className={`rounded-full p-2 ${active ? 'text-gray-300 hover:bg-white/10 hover:text-white' : 'text-gray-400 hover:bg-red-50 hover:text-red-600'} disabled:opacity-40`}
-                    title="删除"
-                    aria-label="删除"
+                    onClick={() => selectionMode ? toggleSessionSelected(session.id) : loadSession(session.id)}
+                    className="session-map-title-button"
+                    aria-describedby={`session-preview-${session.id}`}
                   >
-                    <Trash2 size={16} />
+                    {sessionTitle(session)}
+                  </button>
+                  <div className="session-map-row-tools">
+                    <button type="button" onClick={() => exportSession(session.id)} className="session-map-row-tool" title="导出" aria-label="导出">
+                      <Download size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteSession(session.id)}
+                      disabled={deleteBusyId === session.id}
+                      className="session-map-row-tool session-map-row-tool-danger"
+                      title="删除"
+                      aria-label="删除"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                  <MoreHorizontal
+                    size={20}
+                    className={highlighted ? 'session-map-more opacity-0' : 'session-map-more text-slate-200'}
+                  />
+                </div>
+                <div className="session-map-meta">
+                  <span className="session-map-time">
+                    <Clock size={14} />
+                    {formatSessionTime(session)}
+                  </span>
+                  <button
+                    type="button"
+                    className="session-map-id-copy"
+                    onClick={() => void copyText(session.id)}
+                    title={`复制会话 ID: ${session.id}`}
+                    aria-label={`复制会话 ID ${session.id}`}
+                  >
+                    {session.id.slice(0, 8)}
                   </button>
                 </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
         </div>
-        {openPreview && (() => {
-          const previewSession = sessions.find(session => session.id === openPreview.id);
-          if (!previewSession) return null;
-          return (
-            <SessionPreviewPopover
-              active={previewSession.id === sessionId}
-              open
-              preview={previewBySessionId[previewSession.id]}
-              rowIndex={openPreview.index}
-              session={previewSession}
-            />
-          );
-        })()}
       </div>
+
+      <SessionPreviewPopover
+        active={displaySession?.id === sessionId}
+        onClose={closeSessionPreview}
+        open={previewOpen}
+        preview={displaySession ? previewBySessionId[displaySession.id] : undefined}
+        session={displaySession}
+      />
     </div>
   );
 }
 
 function SessionPreviewPopover({
   active,
+  onClose,
   open,
   preview,
-  rowIndex,
   session
 }: {
-  active: boolean;
+  active?: boolean;
+  onClose: () => void;
   open: boolean;
   preview?: SessionPreviewState;
-  rowIndex: number;
-  session: SessionDto;
+  session: SessionDto | null;
 }) {
   const entries = preview?.status === 'ready' ? sessionPreviewEntries(preview.events) : [];
   return (
     <div
-      id={`session-preview-${session.id}`}
-      className="session-star-preview"
+      id={session ? `session-preview-${session.id}` : 'session-preview-empty'}
+      className="session-map-preview-pane"
       data-open={open ? 'true' : 'false'}
-      style={{ top: `clamp(0rem, ${rowIndex * 6}rem, calc(100% - 13.5rem))` }}
       role="status"
       aria-hidden={!open}
     >
-      <div className="rounded-[1.8rem] bg-[linear-gradient(145deg,rgba(255,255,255,0.96),rgba(226,232,240,0.92)_38%,rgba(148,163,184,0.72))] p-px text-gray-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_24px_70px_rgba(15,23,42,0.18)]">
-        <div className="rounded-[1.72rem] bg-white/[0.92] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),inset_0_0_0_1px_rgba(148,163,184,0.24)] ring-1 ring-inset ring-gray-200/70 backdrop-blur-2xl">
-        <div className="mb-3 flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-black">{sessionTitle(session)}</div>
-            <div className="mt-1 flex items-center gap-2 text-[11px] font-medium text-gray-400">
-              <MessageSquarePlus size={12} />
-              <span>预览记录</span>
-              <span>{formatSessionTime(session)}</span>
-            </div>
-          </div>
-          <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${active ? 'bg-emerald-400' : 'bg-gray-300'}`} />
-        </div>
+      <div className="session-map-preview-inner">
+        <button type="button" onClick={onClose} className="session-map-preview-close" aria-label="关闭预览">
+          <X size={20} strokeWidth={2.5} />
+        </button>
 
-        {preview?.status === 'loading' && (
-          <div className="flex items-center gap-2 rounded-2xl bg-gray-50 px-3 py-3 text-xs font-medium text-gray-500">
-            <Loader2 size={14} className="animate-spin text-blue-500" />
-            正在加载最近记录...
-          </div>
-        )}
-
-        {preview?.status === 'error' && (
-          <div className="rounded-2xl border border-red-100 bg-red-50/80 px-3 py-3 text-xs font-medium text-red-700">
-            预览加载失败: {preview.message}
-          </div>
-        )}
-
-        {preview?.status === 'ready' && entries.length === 0 && (
-          <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/80 px-3 py-3 text-xs text-gray-500">
-            这个会话还没有可预览的消息。
-          </div>
-        )}
-
-        {entries.length > 0 && (
-          <div className="space-y-2">
-            {entries.map(entry => (
-              <div key={entry.key} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 rounded-2xl bg-gray-50/80 px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <span className={[
-                    'h-1.5 w-1.5 rounded-full',
-                    entry.tone === 'user' ? 'bg-gray-900' :
-                      entry.tone === 'assistant' ? 'bg-blue-500' :
-                        entry.tone === 'error' ? 'bg-red-500' : 'bg-emerald-500'
-                  ].join(' ')} />
-                  <span className="text-[11px] font-bold uppercase tracking-wide text-gray-500">{entry.label}</span>
+        {session && (
+          <>
+            <div className="session-map-preview-header">
+              <div className="min-w-0">
+                <h3 className="truncate text-[22px] font-bold tracking-tight text-slate-900">{sessionTitle(session)}</h3>
+                <div className="mt-3 flex items-center gap-2 text-[13px] font-medium text-slate-500">
+                  <FileText size={14} strokeWidth={2.5} />
+                  <span>预览记录</span>
+                  <span>·</span>
+                  <span>{formatSessionTime(session)}</span>
                 </div>
-                <div className="min-w-0">
-                  <div className="truncate text-xs font-semibold text-gray-800">{entry.content}</div>
-                  {entry.meta && <div className="mt-0.5 truncate text-[10px] text-gray-400">{entry.meta}</div>}
-                </div>
+                <button
+                  type="button"
+                  className="mt-2 font-mono text-[11px] font-semibold uppercase tracking-wide text-slate-400 transition hover:text-slate-700"
+                  onClick={() => void copyText(session.id)}
+                  title={`复制会话 ID: ${session.id}`}
+                >
+                  {session.id}
+                </button>
               </div>
-            ))}
-          </div>
+              <div className={`session-map-status-pill ${active ? 'session-map-status-pill-active' : ''}`}>
+                <span />
+                {active ? '当前会话' : '执行成功'}
+              </div>
+            </div>
+
+            <div className="session-map-preview-frame">
+              <div className="session-map-preview-scroll">
+                {preview?.status === 'loading' && (
+                  <div className="session-map-preview-state">
+                    <Loader2 size={16} className="animate-spin text-blue-500" />
+                    正在加载最近记录...
+                  </div>
+                )}
+
+                {preview?.status === 'error' && (
+                  <div className="session-map-preview-error">
+                    预览加载失败: {preview.message}
+                  </div>
+                )}
+
+                {preview?.status === 'ready' && entries.length === 0 && (
+                  <div className="session-map-preview-empty">
+                    这个会话还没有可预览的消息。
+                  </div>
+                )}
+
+                {entries.length > 0 && (
+                  <div className="session-map-timeline">
+                    {entries.map((entry, index) => (
+                      <div key={entry.key} className="session-map-timeline-row group/preview">
+                        {index !== entries.length - 1 && <div className="session-map-timeline-line" />}
+                        <div className={`session-map-dot session-map-dot-${entry.tone}`} />
+                        <div className="session-map-timeline-label">{entry.label}</div>
+                        <div className="session-map-timeline-card">
+                          <div className="flex items-start justify-between gap-4">
+                            <span className="min-w-0 break-words text-[15px] font-bold text-slate-800">{entry.content}</span>
+                            {entry.meta && <span className="shrink-0 whitespace-nowrap font-mono text-[12px] text-slate-400">{entry.meta}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
         )}
-        </div>
       </div>
     </div>
   );

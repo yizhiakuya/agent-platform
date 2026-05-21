@@ -90,12 +90,13 @@ test.describe('Spatial canvas chat shell', () => {
     await sessionButton.hover();
     const preview = page.locator('#session-preview-s1');
     await expect(preview).toBeVisible();
-    const rowBox = await sessionButton.locator('xpath=ancestor::div[contains(@class,"group/session")]').boundingBox();
+    await expect.poll(async () => (await page.locator('.session-map-list-pane').boundingBox())?.width ?? 0).toBeLessThanOrEqual(430);
+    const rowBox = await sessionButton.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " session-map-row ")]').boundingBox();
     const previewBox = await preview.boundingBox();
     if (!rowBox || !previewBox) throw new Error('Session preview layout boxes were unavailable');
     expect(previewBox.x).toBeGreaterThan(rowBox.x + rowBox.width);
     expect(rowBox.width / rowBox.height).toBeLessThan(6);
-    await expect(preview.locator('> div')).toHaveCSS('background-image', /linear-gradient/);
+    await expect(preview.locator('.session-map-preview-frame')).toHaveCSS('background-image', /linear-gradient/);
     await expect(page.getByText('预览记录')).toBeVisible();
     await expect(page.getByText('打开小黑盒')).toBeVisible();
   });
@@ -154,16 +155,17 @@ test.describe('Spatial canvas chat shell', () => {
     await sessionButton.hover();
     const preview = page.locator('#session-preview-wide-1');
     await expect(preview).toBeVisible();
+    await expect.poll(async () => (await page.locator('.session-map-list-pane').boundingBox())?.width ?? 0).toBeLessThanOrEqual(430);
 
-    const rowBox = await sessionButton.locator('xpath=ancestor::div[contains(@class,"session-star-row")]').boundingBox();
-    const listBox = await page.locator('.session-star-list').boundingBox();
+    const rowBox = await sessionButton.locator('xpath=ancestor::*[contains(concat(" ", normalize-space(@class), " "), " session-map-row ")]').boundingBox();
+    const listBox = await page.locator('.session-map-list-pane').boundingBox();
     const previewBox = await preview.boundingBox();
     if (!rowBox || !listBox || !previewBox) throw new Error('Session preview layout boxes were unavailable');
-    expect(listBox.width).toBeLessThanOrEqual(500);
+    expect(listBox.width).toBeLessThanOrEqual(430);
     expect(rowBox.width).toBeLessThanOrEqual(500);
     expect(rowBox.width / rowBox.height).toBeLessThan(6);
     expect(previewBox.x).toBeGreaterThan(rowBox.x + rowBox.width);
-    await expect(preview.locator('> div')).toHaveCSS('background-image', /linear-gradient/);
+    await expect(preview.locator('.session-map-preview-frame')).toHaveCSS('background-image', /linear-gradient/);
   });
 
   test('keeps tool progress out of the final assistant bubble', async ({ page }) => {
