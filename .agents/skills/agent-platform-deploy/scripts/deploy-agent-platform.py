@@ -4,7 +4,7 @@ Stable one-command deployment for Agent Platform.
 
 The script keeps the fragile parts in one place:
 - local build validation
-- GHCR image packaging through the existing PowerShell builder
+- GHCR image packaging from already-built artifacts
 - LF-only remote bash execution over SSH
 - compose image replacement with backup and public asset verification
 """
@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime as dt
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 
@@ -32,7 +35,6 @@ def main() -> int:
     repo_root = Path(args.repo_root).resolve() if args.repo_root else Path(__file__).resolve().parents[4]
     services = resolve_services(args.services)
     deploy_services = resolve_deploy_services(args, services)
-    build_script = repo_root / ".agents" / "skills" / "agent-platform-deploy" / "scripts" / "build-ghcr-images.ps1"
 
     log(f"REPO_ROOT={repo_root}")
     log(f"SERVICES={','.join(deploy_services)}")
@@ -46,6 +48,22 @@ def main() -> int:
     if args.plan_only:
         log("PLAN_ONLY=1")
 
+    if args.rollback_backup:
+        if args.plan_only:
+            log(f"HOST={args.host}")
+            log(f"REMOTE_DIR={args.remote_dir}")
+            log(f"PUBLIC_URL={args.public_url}")
+            log(f"ROLLBACK_BACKUP={args.rollback_backup}")
+            return 0
+        rollback_remote(
+            host=args.host,
+            remote_dir=args.remote_dir,
+            public_url=args.public_url,
+            backup=args.rollback_backup,
+            services=deploy_services,
+        )
+        return 0
+
     images: dict[str, str] = {}
     if args.agent_image:
         images["AGENT_IMAGE"] = args.agent_image
@@ -55,7 +73,7 @@ def main() -> int:
     if not args.deploy_only:
         if not args.skip_local_build and not args.plan_only:
             run_local_builds(repo_root, services, java_home=args.java_home)
-        images.update(build_images(repo_root, build_script, services, args))
+        images.update(build_images(repo_root, services, args))
 
     for key, value in images.items():
         log(f"{key}={value}")
@@ -88,7 +106,7 @@ def main() -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build, publish, and deploy Agent Platform to Megumin.")
     parser.add_argument("--services", default="web", help="Comma-separated services: web,agent-service")
-    parser.add_argument("--tag-prefix", default="deploy", help="Tag prefix used by the GHCR build script.")
+    parser.add_argument("--tag-prefix", default="deploy", help="Tag prefix for published GHCR images.")
     parser.add_argument("--label", default=None, help="Remote compose backup label. Defaults to --tag-prefix.")
     parser.add_argument("--repo-root", default=None, help="Repository root. Auto-detected from this script by default.")
     parser.add_argument("--owner", default=DEFAULT_OWNER, help="GHCR owner.")
@@ -105,12 +123,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--plan-only", action="store_true", help="Print intended images/deploy target without building or mutating remote.")
     parser.add_argument("--build-only", action="store_true", help="Build and push images, but do not deploy.")
     parser.add_argument("--deploy-only", action="store_true", help="Deploy provided --agent-image/--web-image without building images.")
-    parser.add_argument("--docker-timeout-seconds", type=int, default=180, help="Docker startup timeout for builder script.")
+    parser.add_argument("--rollback-backup", default="", help="Restore a compose backup on Megumin, then recreate --services.")
+    parser.add_argument("--docker-timeout-seconds", type=int, default=180, help="Docker server startup timeout.")
     args = parser.parse_args()
     if args.label is None:
         args.label = args.tag_prefix
     if args.deploy_only and not (args.agent_image or args.web_image):
         parser.error("--deploy-only requires --agent-image or --web-image")
+    if args.rollback_backup and (args.agent_image or args.web_image or args.deploy_only or args.build_only):
+        parser.error("--rollback-backup cannot be combined with image build/deploy flags")
     return args
 
 
@@ -149,8 +170,9 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     printable = " ".join(command)
     log(f"$ {printable}")
+    resolved = resolve_command(command)
     return subprocess.run(
-        command,
+        resolved,
         cwd=str(cwd),
         env=env,
         text=True,
@@ -160,6 +182,18 @@ def run(
         stderr=subprocess.STDOUT if capture else None,
         check=True,
     )
+
+
+def resolve_command(command: list[str]) -> list[str]:
+    if not command:
+        raise ValueError("command cannot be empty")
+    executable = command[0]
+    resolved = executable if any(sep in executable for sep in ("/", "\\")) else shutil.which(executable)
+    if not resolved:
+        resolved = executable
+    if os.name == "nt" and Path(resolved).suffix.lower() in {".bat", ".cmd"}:
+        return [os.environ.get("ComSpec", "cmd.exe"), "/d", "/c", resolved, *command[1:]]
+    return [resolved, *command[1:]]
 
 
 def check_git_state(repo_root: Path, *, allow_dirty: bool) -> None:
@@ -185,40 +219,124 @@ def run_local_builds(repo_root: Path, services: list[str], *, java_home: str) ->
         run(["npm", "run", "build"], cwd=repo_root / "web")
 
 
-def build_images(repo_root: Path, build_script: Path, services: list[str], args: argparse.Namespace) -> dict[str, str]:
-    if not build_script.exists():
-        raise SystemExit(f"Missing build script: {build_script}")
-    ps = shutil.which("powershell") or shutil.which("powershell.exe")
-    if not ps:
-        raise SystemExit("PowerShell is required for GHCR packaging on this workstation.")
-    command = [
-        ps,
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(build_script),
-        "-Services",
-        ",".join(services),
-        "-TagPrefix",
-        args.tag_prefix,
-        "-RepoRoot",
-        str(repo_root),
-        "-Owner",
-        args.owner,
-        "-DockerTimeoutSeconds",
-        str(args.docker_timeout_seconds),
-    ]
-    if args.plan_only:
-        command.append("-PlanOnly")
-    result = run(command, cwd=repo_root, capture=True)
-    print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
+def build_images(repo_root: Path, services: list[str], args: argparse.Namespace) -> dict[str, str]:
+    tag = image_tag(repo_root, args.tag_prefix)
     images: dict[str, str] = {}
-    for line in result.stdout.splitlines():
-        if line.startswith("AGENT_IMAGE="):
-            images["AGENT_IMAGE"] = line.split("=", 1)[1].strip()
-        if line.startswith("WEB_IMAGE="):
-            images["WEB_IMAGE"] = line.split("=", 1)[1].strip()
+
+    agent_jar = repo_root / "agent-service" / "target" / "agent-service-0.0.1-SNAPSHOT.jar"
+    web_dist = repo_root / "web" / "dist"
+    web_nginx = repo_root / "web" / "nginx.conf"
+
+    if "agent-service" in services and not agent_jar.exists():
+        raise SystemExit(f"Missing {agent_jar}. Run local Maven package before image build.")
+    if "web" in services:
+        if not web_dist.exists():
+            raise SystemExit(f"Missing {web_dist}. Run npm run build in web before image build.")
+        if not web_nginx.exists():
+            raise SystemExit(f"Missing {web_nginx}.")
+
+    if not args.plan_only:
+        ensure_docker(args.docker_timeout_seconds)
+
+    if "agent-service" in services:
+        image = f"ghcr.io/{args.owner}/agent-platform-agent-service:{tag}"
+        images["AGENT_IMAGE"] = image
+        if not args.plan_only:
+            build_agent_image(agent_jar, image)
+
+    if "web" in services:
+        image = f"ghcr.io/{args.owner}/agent-platform-web:web-{tag}"
+        images["WEB_IMAGE"] = image
+        if not args.plan_only:
+            build_web_image(web_dist, web_nginx, image)
+
     return images
+
+
+def image_tag(repo_root: Path, tag_prefix: str) -> str:
+    short_sha = run(["git", "rev-parse", "--short", "HEAD"], cwd=repo_root, capture=True).stdout.strip()
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
+    return f"{tag_prefix}-{stamp}-{short_sha}"
+
+
+def ensure_docker(timeout_seconds: int) -> None:
+    docker = shutil.which("docker")
+    if not docker:
+        raise SystemExit("Docker CLI is not available on PATH.")
+    if docker_server_available(docker):
+        return
+
+    docker_desktop = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Docker" / "Docker" / "Docker Desktop.exe"
+    if docker_desktop.exists():
+        log(f"$ start {docker_desktop}")
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(
+            [str(docker_desktop)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if docker_server_available(docker):
+            return
+        time.sleep(3)
+    raise SystemExit(f"Docker server is not available after {timeout_seconds} seconds.")
+
+
+def docker_server_available(docker: str) -> bool:
+    command = resolve_command([docker, "version", "--format", "{{.Server.Version}}"])
+    try:
+        subprocess.run(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            text=True,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def build_agent_image(jar: Path, image: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-platform-agent-service-") as tmp:
+        ctx = Path(tmp)
+        shutil.copy2(jar, ctx / "app.jar")
+        write_text(
+            ctx / "Dockerfile",
+            """\
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
+COPY app.jar /app/app.jar
+ENTRYPOINT ["java", "-XX:+UseG1GC", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]
+""",
+        )
+        run(["docker", "build", "-t", image, str(ctx)], cwd=ctx)
+        run(["docker", "push", image], cwd=ctx)
+
+
+def build_web_image(dist: Path, nginx_conf: Path, image: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-platform-web-") as tmp:
+        ctx = Path(tmp)
+        shutil.copytree(dist, ctx / "dist")
+        shutil.copy2(nginx_conf, ctx / "nginx.conf")
+        write_text(
+            ctx / "Dockerfile",
+            """\
+FROM nginx:alpine
+COPY dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+""",
+        )
+        run(["docker", "build", "-t", image, str(ctx)], cwd=ctx)
+        run(["docker", "push", image], cwd=ctx)
+
+
+def write_text(path: Path, content: str) -> None:
+    path.write_text(content.replace("\r\n", "\n"), encoding="ascii")
 
 
 def deploy_remote(
@@ -247,7 +365,34 @@ def deploy_remote(
     encoded = base64.b64encode(remote_script.encode("utf-8")).decode("ascii")
     log(f"$ ssh {host} 'base64 -d | bash'")
     proc = subprocess.run(
-        ["ssh", host, "base64 -d | bash"],
+        resolve_command(["ssh", host, "base64 -d | bash"]),
+        input=encoded,
+        text=True,
+        encoding="ascii",
+        check=True,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(proc.returncode)
+
+
+def rollback_remote(
+    *,
+    host: str,
+    remote_dir: str,
+    public_url: str,
+    backup: str,
+    services: list[str],
+) -> None:
+    remote_script = remote_rollback_script(
+        remote_dir=remote_dir,
+        public_url=public_url,
+        backup=backup,
+        services=" ".join(services),
+    )
+    encoded = base64.b64encode(remote_script.encode("utf-8")).decode("ascii")
+    log(f"$ ssh {host} 'base64 -d | bash'")
+    proc = subprocess.run(
+        resolve_command(["ssh", host, "base64 -d | bash"]),
         input=encoded,
         text=True,
         encoding="ascii",
@@ -367,6 +512,77 @@ done
 echo '--- public assets ---'
 curl -k -fsS "$public_url" | grep -o 'assets/[^" ]*' | head -n 10 || true
 echo 'DEPLOY_OK=1'
+"""
+    return script.replace("\r\n", "\n")
+
+
+def remote_rollback_script(
+    *,
+    remote_dir: str,
+    public_url: str,
+    backup: str,
+    services: str,
+) -> str:
+    script = f"""\
+set -euo pipefail
+cd {shell_single_quote(remote_dir)}
+backup={shell_single_quote(backup)}
+services={shell_single_quote(services)}
+public_url={shell_single_quote(public_url)}
+
+test -f "$backup"
+cp "$backup" docker-compose.ghcr-photo.yml
+echo "COMPOSE_RESTORED=$backup"
+
+docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull $services
+docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml up -d --no-build --force-recreate $services
+
+echo '--- ps ---'
+docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml ps $services
+
+if printf '%s\\n' "$services" | grep -qw 'agent-service'; then
+    echo '--- agent-service health ---'
+    for i in $(seq 1 40); do
+        if docker exec agent-platform-agent-service-1 sh -c 'wget -qO- http://localhost:8082/actuator/health' 2>/dev/null; then
+            echo
+            break
+        fi
+        if [ "$i" = "40" ]; then
+            echo 'agent-service health failed after retry' >&2
+            docker logs --tail 120 agent-platform-agent-service-1 >&2
+            exit 1
+        fi
+        sleep 3
+    done
+fi
+
+echo '--- caddy local http ---'
+for i in $(seq 1 20); do
+    if curl -fsSI http://localhost:8480/chat | sed -n '1,12p'; then
+        break
+    fi
+    if [ "$i" = "20" ]; then
+        echo 'local caddy check failed' >&2
+        exit 1
+    fi
+    sleep 2
+done
+
+echo '--- public https ---'
+for i in $(seq 1 20); do
+    if curl -k -fsSI "$public_url" | sed -n '1,12p'; then
+        break
+    fi
+    if [ "$i" = "20" ]; then
+        echo 'public https check failed' >&2
+        exit 1
+    fi
+    sleep 2
+done
+
+echo '--- public assets ---'
+curl -k -fsS "$public_url" | grep -o 'assets/[^" ]*' | head -n 10 || true
+echo 'ROLLBACK_OK=1'
 """
     return script.replace("\r\n", "\n")
 

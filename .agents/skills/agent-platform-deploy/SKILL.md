@@ -21,7 +21,7 @@ Use the broader `agent-platform` skill for architecture and service ownership. U
 - Use timestamp plus short SHA tags, never floating-only `latest` for production compose updates.
 - Back up `/opt/agent-platform/docker-compose.ghcr-photo.yml` before editing it.
 - After editing compose, `grep` the exact new image tags before `pull` or `up`.
-- Use remote base64 scripts for PowerShell-to-SSH operations that contain `$VAR`, `$(...)`, heredocs, or quotes.
+- Use the Python entrypoint's LF-normalized base64 SSH runner for remote mutation scripts that contain `$VAR`, `$(...)`, heredocs, or quotes.
 - Verify with retries. `agent-service` can take several seconds after `up -d` before `/actuator/health` is ready.
 - Health ports: `agent-service=8082`, `chat-service=8084`, `gateway=8080`, `web=80` inside compose; public Caddy is `https://agent.rainaki.top:8443`.
 
@@ -54,8 +54,7 @@ python .agents\skills\agent-platform-deploy\scripts\deploy-agent-platform.py `
 
 The Python entrypoint is the stable deploy wrapper. It runs git/GitNexus checks,
 local builds, GHCR packaging, LF-only SSH deployment, compose backup, exact image
-grep, targeted compose pull/up, and live URL/asset verification. Use the lower
-level PowerShell scripts only for focused debugging.
+grep, targeted compose pull/up, and live URL/asset verification.
 
 1. Inspect state:
 
@@ -77,27 +76,30 @@ git diff --check
 
 3. Commit and push the branch before deploying.
 
-4. Package and push images from already-built artifacts:
+4. Package, push, and deploy images through the Python entrypoint:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .agents\skills\agent-platform-deploy\scripts\build-ghcr-images.ps1 `
-  -Services agent-service,web `
-  -TagPrefix final-reply
+python .agents\skills\agent-platform-deploy\scripts\deploy-agent-platform.py `
+  --services agent-service,web `
+  --tag-prefix final-reply
 ```
 
-The script emits `AGENT_IMAGE=...` and/or `WEB_IMAGE=...`.
-Use `-PlanOnly` first when validating paths and intended tags without building or pushing.
-Use comma form for `-Services`, such as `agent-service,web`. Do not pass services as a space-separated positional list.
+The script emits `AGENT_IMAGE=...`, `WEB_IMAGE=...`, `COMPOSE_BACKUP=...`, live
+asset hashes, and `DEPLOY_OK=1` when successful. Use `--plan-only` first when
+validating paths and intended tags without building, pushing, or touching Megumin.
 
-5. Deploy only the changed services:
+5. Deploy only already-pushed images:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .agents\skills\agent-platform-deploy\scripts\deploy-megumin.ps1 `
-  -AgentImage ghcr.io/yizhiakuya/agent-platform-agent-service:<tag> `
-  -WebImage ghcr.io/yizhiakuya/agent-platform-web:<tag>
+python .agents\skills\agent-platform-deploy\scripts\deploy-agent-platform.py `
+  --deploy-only `
+  --agent-image ghcr.io/yizhiakuya/agent-platform-agent-service:<tag> `
+  --web-image ghcr.io/yizhiakuya/agent-platform-web:<tag> `
+  --label rollback-or-hotfix
 ```
 
-Use `-PlanOnly` first to print the target host, services, images, and public URL without SSH or remote mutation.
+Use `--plan-only` with `--deploy-only` to print the target host, services, images,
+and public URL without SSH or remote mutation.
 
 6. Report:
 
@@ -108,22 +110,6 @@ Use `-PlanOnly` first to print the target host, services, images, and public URL
 - live health and public URL result
 - any residual risk or untracked files
 
-## Build Script Notes
-
-`scripts/build-ghcr-images.ps1`:
-
-- Starts Docker Desktop if the Docker server is unavailable.
-- Supports `-PlanOnly` to verify artifact paths and output intended image tags without Docker build/push.
-- Packages `agent-service` from `agent-service/target/agent-service-0.0.1-SNAPSHOT.jar`.
-- Packages `web` from `web/dist` plus `web/nginx.conf`.
-- Uses tiny temporary Docker contexts under `%TEMP%`.
-- Does not install packages during Docker build. Do not add `apk add curl`; Alpine repository access can fail and business images do not need curl for runtime.
-- Pushes to:
-  - `ghcr.io/yizhiakuya/agent-platform-agent-service:<tag>`
-  - `ghcr.io/yizhiakuya/agent-platform-web:<tag>`
-
-If a jar or `web/dist` is missing, run the local Maven/npm build first.
-
 ## Deploy Script Notes
 
 `scripts/deploy-agent-platform.py`:
@@ -132,43 +118,29 @@ If a jar or `web/dist` is missing, run the local Maven/npm build first.
 - Runs local builds unless `--skip-local-build` is passed.
 - Refuses tracked dirty worktrees unless `--allow-dirty` is passed; untracked
   files such as `APP.txt` are reported but not deployed.
-- Calls `build-ghcr-images.ps1` for image packaging, then deploys via SSH with
-  an LF-normalized base64 bash script sent over stdin. This avoids PowerShell
-  CRLF/quoting corruption in remote `set -euo pipefail` scripts.
+- Starts Docker Desktop if the Docker server is unavailable.
+- Packages `agent-service` from `agent-service/target/agent-service-0.0.1-SNAPSHOT.jar`.
+- Packages `web` from `web/dist` plus `web/nginx.conf`.
+- Uses tiny temporary Docker contexts under `%TEMP%`.
+- Does not install packages during Docker build. Do not add `apk add curl`; Alpine repository access can fail and business images do not need curl for runtime.
+- Pushes to:
+  - `ghcr.io/yizhiakuya/agent-platform-agent-service:<tag>`
+  - `ghcr.io/yizhiakuya/agent-platform-web:<tag>`
+- Deploys via SSH with an LF-normalized base64 bash script sent over stdin. This avoids shell CRLF/quoting corruption in remote `set -euo pipefail` scripts.
 - Supports `--plan-only`, `--build-only`, and `--deploy-only`.
 - Prints `AGENT_IMAGE=...`, `WEB_IMAGE=...`, `COMPOSE_BACKUP=...`, live asset
   hashes, and `DEPLOY_OK=1` when successful.
-
-`scripts/deploy-megumin.ps1`:
-
-- Mutates only `agent-service` and/or `web` image lines in `/opt/agent-platform/docker-compose.ghcr-photo.yml`.
-- Supports `-PlanOnly` to print the intended remote deployment without SSH.
-- Creates `docker-compose.ghcr-photo.yml.bak-<label>-<timestamp>`.
-- Runs `docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull <services>`.
-- Runs `up -d --no-build --force-recreate <services>`.
-- Verifies:
-  - `agent-service` health from inside its container with `wget`
-  - local Caddy HTTP on `http://localhost:8480/chat`
-  - public HTTPS on `https://agent.rainaki.top:8443/chat`
-  - public asset hashes from the served index
-  - container image tags in `docker compose ps`
 
 ## Rollback
 
 Use the compose backup named by the deploy output, then pull/recreate the affected services:
 
 ```powershell
-$backup = 'docker-compose.ghcr-photo.yml.bak-<label>-<timestamp>'
-$remote = @'
-set -euo pipefail
-cd /opt/agent-platform
-cp "__BACKUP__" docker-compose.ghcr-photo.yml
-docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull agent-service web
-docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml up -d --no-build --force-recreate agent-service web
-'@
-$remote = $remote.Replace('__BACKUP__', $backup)
-$b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remote))
-ssh root@192.168.0.109 "echo $b64 | base64 -d | bash"
+python .agents\skills\agent-platform-deploy\scripts\deploy-agent-platform.py `
+  --rollback-backup docker-compose.ghcr-photo.yml.bak-<label>-<timestamp> `
+  --services agent-service,web `
+  --skip-git-check
 ```
 
-Then rerun the deploy script's verification or manually check health/public headers.
+The rollback path restores the backup, pulls/recreates the requested services,
+and reruns the same health/public checks.
