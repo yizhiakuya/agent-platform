@@ -761,6 +761,7 @@
   grid-template-columns: 0.5rem 3rem minmax(0, 1fr);
   gap: 1rem;
   align-items: flex-start;
+  min-width: 0;
 }
 
 .session-map-timeline-line {
@@ -817,6 +818,7 @@
 
 .session-map-timeline-card {
   min-width: 0;
+  overflow: hidden;
   border: 1px solid #f1f5f9;
   border-radius: 1rem;
   background: #fff;
@@ -827,6 +829,47 @@
 
 .session-map-timeline-card:hover {
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.session-map-timeline-card-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.session-map-timeline-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.session-map-timeline-meta {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.session-map-timeline-detail {
+  margin-top: 0.75rem;
+  max-height: 7.5rem;
+  overflow: auto;
+  border: 1px solid #f1f5f9;
+  border-radius: 0.75rem;
+  background: #f8fafc;
+  padding: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #64748b;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 1023px) {

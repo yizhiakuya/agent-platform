@@ -252,6 +252,19 @@ test.describe('Spatial canvas chat shell', () => {
 
     await expect(page.getByText('已从最近任务关闭小黑盒。')).toBeVisible();
     await expect(page.getByText(/我先确认小黑盒的包名和关闭方式.*已从最近任务关闭小黑盒。/)).not.toBeVisible();
+
+    await page.getByRole('button', { name: /你好/ }).click();
+    const sessionButton = page.locator('button[aria-describedby="session-preview-s2"]');
+    await expect(sessionButton).toBeVisible();
+    await sessionButton.hover();
+    const preview = page.locator('#session-preview-s2');
+    await expect(preview).toBeVisible();
+    const toolCard = preview.locator('.session-map-timeline-card', { hasText: 'ui.run_steps' }).first();
+    await expect(toolCard).toBeVisible();
+    await expect(toolCard.locator('.session-map-timeline-detail')).toContainText('global_action');
+    const titleBox = await toolCard.locator('.session-map-timeline-title').boundingBox();
+    if (!titleBox) throw new Error('Tool preview title box unavailable');
+    expect(titleBox.width).toBeGreaterThan(80);
   });
 
   test('keeps short duplicated action text out of the live final bubble', async ({ page }) => {

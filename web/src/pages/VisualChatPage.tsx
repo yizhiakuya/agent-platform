@@ -71,6 +71,7 @@ type SessionPreviewEntry = {
   key: string;
   label: string;
   content: string;
+  detail?: string;
   meta: string;
   tone: 'user' | 'assistant' | 'tool' | 'error';
 };
@@ -1889,10 +1890,11 @@ function SessionPreviewPopover({
                         <div className={`session-map-dot session-map-dot-${entry.tone}`} />
                         <div className="session-map-timeline-label">{entry.label}</div>
                         <div className="session-map-timeline-card">
-                          <div className="flex items-start justify-between gap-4">
-                            <span className="min-w-0 break-words text-[15px] font-bold text-slate-800">{entry.content}</span>
-                            {entry.meta && <span className="shrink-0 whitespace-nowrap font-mono text-[12px] text-slate-400">{entry.meta}</span>}
+                          <div className="session-map-timeline-card-head">
+                            <span className="session-map-timeline-title">{entry.content}</span>
+                            {entry.meta && <span className="session-map-timeline-meta">{entry.meta}</span>}
                           </div>
+                          {entry.detail && <div className="session-map-timeline-detail">{entry.detail}</div>}
                         </div>
                       </div>
                     ))}
@@ -3145,7 +3147,8 @@ function sessionPreviewEntry(event: ChatEvent, index: number): SessionPreviewEnt
       key: `tool-start-${index}`,
       label: '调用',
       content: String(event.data?.tool ?? 'tool'),
-      meta: event.data?.args ? compactJson(event.data.args) : createdAt,
+      detail: event.data?.args ? compactJson(event.data.args) : undefined,
+      meta: createdAt,
       tone: 'tool'
     };
   }
