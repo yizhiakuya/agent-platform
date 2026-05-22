@@ -141,6 +141,7 @@ the exact tool calls, result metadata, and timestamps needed to verify it.
 
 - The server/provider may emit multiple tool calls, and Android can run independent non-UI tools concurrently, but all `ui.*` operations share the foreground screen and are serialized by `AgentForegroundService.uiToolMutex`.
 - Do not speed up UI automation by firing parallel taps/swipes/types. Use `ui.run_steps` to send a short ordered macro to the phone in one tool call.
+- For Android app-closing intents, prefer `apps.close` semantic tool (mode-based close) instead of `ui.global(RECENTS)` + guessed swipe coordinates.
 - `ui.run_steps` supports `open_app`, `tap`, `long_press`, `swipe`, `type_text`, `global`, `wait`, and `dump_tree`. Prefer `observe=final` or `observe=on_failure`; use `observe=after_each` only while debugging a flaky flow.
 - First-time app learning still starts with `ui.dump_tree` and sometimes `ui.screen_capture`. Project/runtime skills should store stable package names, page recognition patterns, node ids/bounds, safe workflow segments, and safety stops. Later turns can execute those known segments through `ui.run_steps` instead of one observe-after-each-action loop.
 - To save an image shown inside another Android app, locate the image bounds, call `ui.long_press` or `ui.run_steps` action `long_press`, wait for the app context menu, tap the visible save action (`保存图片`, `保存到手机`, `保存到相册`, etc.), then verify/show it with `photos.list_recent`, `photos.recent_screenshots`, `photos.semantic_search`, or `photos.get_full`.

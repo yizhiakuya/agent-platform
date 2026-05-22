@@ -55,6 +55,7 @@ import com.agentplatform.android.tools.ui.UiScreenCaptureTool
 import com.agentplatform.android.tools.ui.UiSwipeTool
 import com.agentplatform.android.tools.ui.UiTapTool
 import com.agentplatform.android.tools.ui.UiTypeTextTool
+import com.agentplatform.android.tools.ui.AppsCloseTool
 import com.agentplatform.android.tools.videos.VideosListRecentTool
 import com.agentplatform.android.ui.MainActivity
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -129,6 +130,7 @@ class AgentForegroundService : Service() {
         toolRegistry.register(UiScreenCaptureTool(mapper))
         toolRegistry.register(UiListAppsTool(applicationContext, mapper))
         toolRegistry.register(UiOpenAppTool(applicationContext, mapper))
+        toolRegistry.register(AppsCloseTool(applicationContext, mapper))
         toolRegistry.register(UiRunStepsTool(applicationContext, mapper))
         toolRegistry.register(UiTapTool(mapper))
         toolRegistry.register(UiLongPressTool(mapper))

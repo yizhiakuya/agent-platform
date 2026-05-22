@@ -64,6 +64,7 @@ object ToolConfirmation {
             "ui.swipe" -> "滑动 (${args.path("x1").asText("?")}, ${args.path("y1").asText("?")}) 到 (${args.path("x2").asText("?")}, ${args.path("y2").asText("?")})"
             "ui.type_text" -> "输入文本长度=${args.path("text").asText("").length}"
             "ui.global" -> "系统操作 ${args.path("action").asText("?")}"
+            "apps.close" -> "关闭应用 mode=${args.path("mode").asText("recent_task")} package=${args.path("package").asText("")}"
             else -> args.toString().take(500)
         }
         return body.take(500)

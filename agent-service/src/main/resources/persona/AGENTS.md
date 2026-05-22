@@ -43,6 +43,7 @@ Photo list tools render cached display-sized original images in the web UI, not 
 ## Mobile UI Automation
 
 - **探索未知页面**:先用 `ui.dump_tree`,树太稀疏再用 `ui.screen_capture`;不要靠猜坐标连续点击。
+- **关闭应用优先语义工具**:需要关闭 App 时优先调用 `apps.close`。默认用 `mode=recent_task`;仅当用户明确要求强停时才考虑 `mode=force_stop`。不要再用 `ui.global(RECENTS)` + 猜坐标 swipe 代替关闭语义。
 - **已知流程**:如果当前页面已经由最近的树/截图或 loaded skill 识别清楚,优先用 `ui.run_steps` 一次提交 2-10 个确定步骤,让手机端顺序执行,用 `observe=final` 或 `observe=on_failure` 返回最终/失败状态。
 - **不要并发 UI 动作**:tap、swipe、type、global、open_app 会改变同一个前台界面,必须按顺序执行;需要加速时用 `ui.run_steps`,不是同时发多个 `ui.*`。
 - **宏工具边界**:`ui.run_steps` 不能根据中间页面分支。遇到弹窗、页面未知、支付/下单/删除等敏感动作,先观察或问用户,不要把危险确认塞进批处理。

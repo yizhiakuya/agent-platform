@@ -40,7 +40,8 @@ public class UserDeviceStatusController {
                         s.deviceId(),
                         true,
                         s.connectedAt(),
-                        s.manifest().tools() == null ? 0 : s.manifest().tools().size()))
+                        s.manifest().tools() == null ? 0 : s.manifest().tools().size(),
+                        s.manifest().tools()))
                 .toList();
     }
 

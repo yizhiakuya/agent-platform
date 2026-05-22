@@ -8,6 +8,7 @@ import {
   Battery,
   CheckCircle2,
   CheckSquare,
+  ChevronDown,
   ChevronRight,
   Clock,
   Download,
@@ -33,7 +34,7 @@ import {
   Wifi,
   X
 } from 'lucide-react';
-import { api, ApiError, type DeviceDto, type DeviceOnlineStatusDto, type EnrollmentResponse, type MemoryFactDto, type MessageDto, type SessionDto } from '../api/client';
+import { api, ApiError, type DeviceDto, type DeviceOnlineStatusDto, type DeviceToolSpecDto, type EnrollmentResponse, type MemoryFactDto, type MessageDto, type SessionDto } from '../api/client';
 import { streamChat } from '../api/sse';
 import { getToken } from '../lib/auth';
 import { ChatEvent, ChatRunState, NEW_SESSION_KEY, PendingDraftImage, QueuedChatTurn, useChatStore } from '../lib/chatStore';
@@ -46,6 +47,7 @@ type DeviceRow = DeviceDto & {
   connectedAt?: string;
   lastSeenAt?: string;
   toolCount: number;
+  tools: DeviceToolSpecDto[];
 };
 
 type ToolStepStatus = 'success' | 'running' | 'pending' | 'failed';
@@ -1926,6 +1928,8 @@ function DevicesOverlay({
   const [creating, setCreating] = useState(false);
   const [confirmingDeviceId, setConfirmingDeviceId] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [inspectingDeviceId, setInspectingDeviceId] = useState<string | null>(null);
+  const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
   const onlineCount = deviceRows.filter(d => d.online).length;
 
   async function createEnrollment() {
@@ -1982,6 +1986,8 @@ function DevicesOverlay({
           {deviceRows.map(device => {
             const isConfirming = confirmingDeviceId === device.id;
             const isRevoking = revokingId === device.id;
+            const isInspecting = inspectingDeviceId === device.id;
+            const hasTools = (device.tools?.length ?? 0) > 0;
             return (
               <div key={device.id} className="group relative overflow-hidden rounded-[2.5rem] border border-gray-100 bg-white/80 p-6 shadow-sm">
                 <div className={`absolute left-0 top-0 h-1 w-full ${device.online ? 'bg-gradient-to-r from-emerald-400 to-teal-400' : 'bg-gray-200'}`} />
@@ -2001,10 +2007,66 @@ function DevicesOverlay({
                     <p className="mt-2 truncate font-mono text-[11px] text-gray-400">{device.id}</p>
                   </div>
                   <div className="grid min-w-48 grid-cols-2 gap-3">
-                    <DeviceStat icon={<Wifi size={14} />} label="工具" value={String(device.toolCount)} />
+                    <DeviceStat
+                      icon={<Wifi size={14} />}
+                      label="工具"
+                      value={String(device.toolCount)}
+                      clickable
+                      onClick={() => setInspectingDeviceId(prev => (prev === device.id ? null : device.id))}
+                      title={hasTools ? '点击查看工具详情' : '当前无工具清单'}
+                    />
                     <DeviceStat icon={<Battery size={14} />} label="连接" value={device.online ? 'live' : 'idle'} />
                   </div>
                 </div>
+                {isInspecting && (
+                  <div className="mt-5 rounded-3xl border border-gray-100 bg-white/70 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="text-sm font-bold text-gray-900">工具详情</div>
+                      <div className="text-xs text-gray-500">{device.tools.length} 个工具</div>
+                    </div>
+                    {device.tools.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-sm text-gray-500">
+                        当前设备未上报工具 manifest。请确认设备在线并点击“刷新状态”。
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {device.tools.map(tool => {
+                          const key = `${device.id}:${tool.name}`;
+                          const open = Boolean(expandedTools[key]);
+                          return (
+                            <div key={key} className="rounded-2xl border border-gray-100 bg-white">
+                              <button
+                                type="button"
+                                onClick={() => setExpandedTools(prev => ({ ...prev, [key]: !open }))}
+                                className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left hover:bg-gray-50"
+                              >
+                                <div className="min-w-0">
+                                  <div className="truncate font-mono text-xs font-semibold text-gray-900">{tool.name}</div>
+                                  {tool.description && <div className="mt-1 line-clamp-2 text-xs text-gray-500">{tool.description}</div>}
+                                  <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+                                    <ToolBadge label={`confirm ${tool.confirmRequired ? 'yes' : 'no'}`} />
+                                    <ToolBadge label={`safety ${tool.safetyLevel ?? '-'}`} />
+                                    <ToolBadge label={`class ${tool.toolClass ?? '-'}`} />
+                                    <ToolBadge label={`result ${tool.resultType ?? '-'}`} />
+                                  </div>
+                                </div>
+                                <ChevronDown size={16} className={`mt-0.5 shrink-0 text-gray-400 transition ${open ? 'rotate-180' : ''}`} />
+                              </button>
+                              {open && (
+                                <div className="border-t border-gray-100 px-4 py-3">
+                                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Schema</div>
+                                  <pre className="max-h-64 overflow-auto rounded-xl bg-gray-950/95 p-3 text-[11px] leading-relaxed text-gray-100">
+                                    {JSON.stringify(tool.schema ?? {}, null, 2)}
+                                  </pre>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-4 text-xs text-gray-500">
                   <span>{device.connectedAt ? `当前连接 ${new Date(device.connectedAt).toLocaleString()}` : device.lastSeenAt ? `最后连接 ${new Date(device.lastSeenAt).toLocaleString()}` : '从未连接'}</span>
                   {isConfirming ? (
@@ -2341,15 +2403,49 @@ function GlassMetric({ label, value, tone = 'gray' }: { label: string; value: st
   );
 }
 
-function DeviceStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function DeviceStat({
+  icon,
+  label,
+  value,
+  clickable = false,
+  onClick,
+  title
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  clickable?: boolean;
+  onClick?: () => void;
+  title?: string;
+}) {
+  const className = `rounded-2xl bg-gray-50 p-4 ${clickable ? 'transition hover:bg-gray-100' : ''}`;
+  if (clickable && onClick) {
+    return (
+      <button type="button" title={title} onClick={onClick} className={`${className} text-left`}>
+        <div className="mb-2 flex items-center gap-2 text-gray-400">
+          {icon}
+          <span className="text-xs font-bold uppercase">{label}</span>
+        </div>
+        <div className="truncate text-xl font-black text-gray-900">{value}</div>
+      </button>
+    );
+  }
   return (
-    <div className="rounded-2xl bg-gray-50 p-4">
+    <div className={className}>
       <div className="mb-2 flex items-center gap-2 text-gray-400">
         {icon}
         <span className="text-xs font-bold uppercase">{label}</span>
       </div>
       <div className="truncate text-xl font-black text-gray-900">{value}</div>
     </div>
+  );
+}
+
+function ToolBadge({ label }: { label: string }) {
+  return (
+    <span className="rounded-full bg-gray-100 px-2 py-0.5 font-semibold text-gray-600">
+      {label}
+    </span>
   );
 }
 
@@ -3108,7 +3204,8 @@ function mergeDeviceRows(devices: DeviceDto[], onlineStatus: DeviceOnlineStatusD
       online: live?.online === true,
       connectedAt: live?.connectedAt,
       lastSeenAt,
-      toolCount: live?.toolCount ?? 0
+      toolCount: live?.toolCount ?? 0,
+      tools: live?.tools ?? []
     };
   });
 }

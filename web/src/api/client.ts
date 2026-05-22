@@ -163,6 +163,19 @@ export interface DeviceOnlineStatusDto {
   online: boolean;
   connectedAt?: string;
   toolCount: number;
+  tools?: DeviceToolSpecDto[];
+}
+
+export interface DeviceToolSpecDto {
+  name: string;
+  description?: string;
+  schema?: unknown;
+  confirmRequired?: boolean;
+  schemaVersion?: string;
+  toolClass?: string;
+  safetyLevel?: string;
+  defaultDisplayPolicy?: string;
+  resultType?: string;
 }
 
 export interface EnrollmentResponse {
