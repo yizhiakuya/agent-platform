@@ -357,12 +357,14 @@ class MediaGalleryBrowseTool(
         val page = sorted.drop(offset).take(limit + 1)
         val hasMore = page.size > limit
         val visible = page.take(limit)
+        val mutationAction = if (category == "recent_deleted") MediaMutationAction.Restore else MediaMutationAction.Trash
         val items = mapper.createArrayNode()
         visible.forEachIndexed { index, candidate ->
             items.add(candidate.item.apply {
                 putThumbnailUrl(this, candidate.mediaType, candidate.id, maxDim)
                 put("display_index", offset + index + 1)
                 put("media_ref", "media://${candidate.mediaType}/${candidate.id}")
+                putMutationAction(this, candidate.mediaType, candidate.id.toLong(), mutationAction)
             })
         }
 
@@ -702,7 +704,6 @@ class MediaGalleryBrowseTool(
                 item.put("preview_kind", "thumbnail")
                 item.put("open_original_available", true)
                 putOpenOriginalAction(item, id)
-                putTrashAction(item, "photo", id)
 
                 out += MediaCandidate(
                     mediaType = "photo",
@@ -788,7 +789,6 @@ class MediaGalleryBrowseTool(
                 if (!relativePath.isNullOrBlank()) item.put("relative_path", relativePath)
                 item.put("preview_kind", "thumbnail")
                 item.put("open_original_available", false)
-                putTrashAction(item, "video", id)
 
                 out += MediaCandidate(
                     mediaType = "video",
@@ -878,9 +878,9 @@ class MediaGalleryBrowseTool(
         })
     }
 
-    private fun putTrashAction(item: ObjectNode, mediaType: String, id: Long) {
-        item.set<ObjectNode>("trash", mapper.createObjectNode().apply {
-            put("tool", "media.gallery.trash")
+    private fun putMutationAction(item: ObjectNode, mediaType: String, id: Long, action: MediaMutationAction) {
+        item.set<ObjectNode>(action.fieldName, mapper.createObjectNode().apply {
+            put("tool", action.toolName)
             set<ArrayNode>("items", mapper.createArrayNode().apply {
                 addObject()
                     .put("media_type", mediaType)
@@ -932,6 +932,14 @@ class MediaGalleryBrowseTool(
         val sortMs: Long,
         val maxDim: Int
     )
+
+    private enum class MediaMutationAction(
+        val fieldName: String,
+        val toolName: String
+    ) {
+        Trash("trash", "media.gallery.trash"),
+        Restore("restore", "media.gallery.restore")
+    }
 
     private interface GalleryFilter {
         fun selection(): String?

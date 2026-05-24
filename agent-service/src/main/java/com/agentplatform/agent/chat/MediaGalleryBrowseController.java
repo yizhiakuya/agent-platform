@@ -36,6 +36,7 @@ public class MediaGalleryBrowseController {
     private static final String THUMBNAIL_TOOL = "media.gallery.thumbnail";
     private static final String PHOTO_ORIGINAL_TOOL = "photos.get_full";
     private static final String TRASH_TOOL = "media.gallery.trash";
+    private static final String RESTORE_TOOL = "media.gallery.restore";
     private static final int DEFAULT_THUMBNAIL_MAX_DIM = 256;
     private static final int MIN_THUMBNAIL_MAX_DIM = 128;
     private static final int MAX_THUMBNAIL_MAX_DIM = 640;
@@ -162,6 +163,19 @@ public class MediaGalleryBrowseController {
         OnlineDeviceDto device = resolveDevice(userId, request.deviceId());
         ensureTool(device, TRASH_TOOL, "当前设备还没有上报相册删除工具，请重连或更新 APK");
         JsonNode value = dispatch(device, userId, TRASH_TOOL, request.args(), "设备没有返回删除结果", "相册删除工具调用失败");
+        cache.invalidateDevice(userId, device.deviceId());
+        return value;
+    }
+
+    @PostMapping("/restore")
+    public JsonNode restore(@RequestBody MediaGalleryRestoreRequest request) {
+        UUID userId = PrincipalContext.requireUserId();
+        if (request == null || request.args() == null || !request.args().isObject()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "恢复参数必须是 JSON object");
+        }
+        OnlineDeviceDto device = resolveDevice(userId, request.deviceId());
+        ensureTool(device, RESTORE_TOOL, "当前设备还没有上报相册恢复工具，请重连或更新 APK");
+        JsonNode value = dispatch(device, userId, RESTORE_TOOL, request.args(), "设备没有返回恢复结果", "相册恢复工具调用失败");
         cache.invalidateDevice(userId, device.deviceId());
         return value;
     }
@@ -335,4 +349,5 @@ public class MediaGalleryBrowseController {
     public record MediaGalleryOriginalRequest(String id, String mediaType, Integer maxDim, UUID deviceId,
                                               Long dateModifiedSec, Long sizeBytes) {}
     public record MediaGalleryTrashRequest(JsonNode args, UUID deviceId) {}
+    public record MediaGalleryRestoreRequest(JsonNode args, UUID deviceId) {}
 }

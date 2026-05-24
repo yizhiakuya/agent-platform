@@ -6,6 +6,7 @@ import { streamChat } from '../api/sse';
 import { ChatEvent, ChatRunState, NEW_SESSION_KEY, PendingDraftImage, QueuedChatTurn, useChatStore } from '../lib/chatStore';
 import { getToken } from '../lib/auth';
 import {
+  buildMediaGalleryRestoreArgs,
   buildMediaGalleryTrashArgs,
   hasMediaGalleryDragItems,
   mediaGalleryImageSources,
@@ -127,6 +128,12 @@ export default function ChatPage() {
   async function trashMediaGallery(items: any[]) {
     return api.trashMediaGalleryItems({
       args: buildMediaGalleryTrashArgs(items)
+    });
+  }
+
+  async function restoreMediaGallery(items: any[]) {
+    return api.restoreMediaGalleryItems({
+      args: buildMediaGalleryRestoreArgs(items)
     });
   }
 
@@ -971,6 +978,7 @@ export default function ChatPage() {
                   onBrowseGallery={browseMediaGallery}
                   onOpenOriginalMedia={openMediaGalleryOriginal}
                   onTrashMedia={trashMediaGallery}
+                  onRestoreMedia={restoreMediaGallery}
                 />
               );
             }
@@ -984,6 +992,7 @@ export default function ChatPage() {
                   onBrowseGallery={browseMediaGallery}
                   onOpenOriginalMedia={openMediaGalleryOriginal}
                   onTrashMedia={trashMediaGallery}
+                  onRestoreMedia={restoreMediaGallery}
                 />
               );
             }
@@ -998,6 +1007,7 @@ export default function ChatPage() {
                 onBrowseGallery={browseMediaGallery}
                 onOpenOriginalMedia={openMediaGalleryOriginal}
                 onTrashMedia={trashMediaGallery}
+                onRestoreMedia={restoreMediaGallery}
               />
             );
           })}
@@ -1173,6 +1183,7 @@ type OpenImage = (src: string, options?: OpenImageOptions) => void;
 type OpenOriginalMediaResult = string | ({ src?: string | null } & OpenImageOptions) | null;
 type OpenOriginalMedia = (item: any, fallbackSrc?: string | null) => Promise<OpenOriginalMediaResult>;
 type TrashMedia = (items: any[]) => Promise<any>;
+type RestoreMedia = (items: any[]) => Promise<any>;
 type LightboxSize = { width: number; height: number };
 
 const MAX_ATTACHMENTS = 4;
@@ -2050,11 +2061,15 @@ function MessageAttachmentGrid({
   items: UploadedChatImage[];
   onOpenImage: OpenImage;
 }) {
+  const renderableItems = items
+    .map(item => ({ item, src: imageUrl(item.imageUrl) }))
+    .filter((entry): entry is { item: UploadedChatImage; src: string } => Boolean(entry.src));
+
+  if (renderableItems.length === 0) return null;
+
   return (
-    <div className="grid max-w-xs grid-cols-2 justify-end gap-2">
-      {items.map(item => {
-        const src = imageUrl(item.imageUrl);
-        if (!src) return null;
+    <div className={`message-attachment-grid${renderableItems.length === 1 ? ' message-attachment-grid-single' : ''}`}>
+      {renderableItems.map(({ item, src }) => {
         return (
           <AuthImage
             key={item.imageUrl}
@@ -2062,7 +2077,7 @@ function MessageAttachmentGrid({
             alt={item.name ?? '图片附件'}
             title={item.name}
             onOpen={() => onOpenImage(src)}
-            className="media-thumb h-32 w-32"
+            className="message-attachment-thumb media-thumb"
           />
         );
       })}
@@ -2078,7 +2093,8 @@ function ProcessPanel({
   onReferenceMedia,
   onBrowseGallery,
   onOpenOriginalMedia,
-  onTrashMedia
+  onTrashMedia,
+  onRestoreMedia
 }: {
   item: Extract<TimelineItem, { kind: 'process' }>;
   busy: boolean;
@@ -2088,6 +2104,7 @@ function ProcessPanel({
   onBrowseGallery?: (args: any) => Promise<any>;
   onOpenOriginalMedia?: OpenOriginalMedia;
   onTrashMedia?: TrashMedia;
+  onRestoreMedia?: RestoreMedia;
 }) {
   const status = processStatus(item);
   const active = busy && status === 'running';
@@ -2149,7 +2166,7 @@ function ProcessPanel({
               {shouldShowToolResultOutsideProcess(ev) ? (
                 <ToolResultExternalSummary ev={ev} />
               ) : (
-                <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} />
+                <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} onRestoreMedia={onRestoreMedia} />
               )}
             </div>
           ) : ev.type === 'assistant_message' ? (
@@ -2166,6 +2183,7 @@ function ProcessPanel({
               onBrowseGallery={onBrowseGallery}
               onOpenOriginalMedia={onOpenOriginalMedia}
               onTrashMedia={onTrashMedia}
+              onRestoreMedia={onRestoreMedia}
             />
           ))}
         </div>
@@ -2239,7 +2257,8 @@ function VisibleToolResult({
   onReferenceMedia,
   onBrowseGallery,
   onOpenOriginalMedia,
-  onTrashMedia
+  onTrashMedia,
+  onRestoreMedia
 }: {
   ev: ChatEvent;
   onOpenImage: OpenImage;
@@ -2247,6 +2266,7 @@ function VisibleToolResult({
   onBrowseGallery?: (args: any) => Promise<any>;
   onOpenOriginalMedia?: OpenOriginalMedia;
   onTrashMedia?: TrashMedia;
+  onRestoreMedia?: RestoreMedia;
 }) {
   const tool = String(ev.data?.tool ?? 'tool');
   return (
@@ -2257,7 +2277,7 @@ function VisibleToolResult({
           <span className="font-medium text-slate-600">{toolResultTitle(tool)}</span>
           <code className="tool-chip">{tool}</code>
         </div>
-        <ToolResult tool={tool} result={ev.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} />
+        <ToolResult tool={tool} result={ev.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} onRestoreMedia={onRestoreMedia} />
       </div>
     </div>
   );
@@ -2277,7 +2297,8 @@ function Bubble({
   onReferenceMedia,
   onBrowseGallery,
   onOpenOriginalMedia,
-  onTrashMedia
+  onTrashMedia,
+  onRestoreMedia
 }: {
   ev: ChatEvent;
   nextToolResult?: ChatEvent | null;
@@ -2286,23 +2307,25 @@ function Bubble({
   onBrowseGallery?: (args: any) => Promise<any>;
   onOpenOriginalMedia?: OpenOriginalMedia;
   onTrashMedia?: TrashMedia;
+  onRestoreMedia?: RestoreMedia;
 }) {
   switch (ev.type) {
     case 'user_message': {
       const time = formatMessageTime(ev.data?.createdAt);
       const attachments = normalizeMessageAttachments(ev.data?.attachments);
+      const hasRenderableAttachments = attachments.some(item => Boolean(imageUrl(item.imageUrl)));
       return (
         <div className="flex justify-end">
           <div className="max-w-[min(42rem,86%)]">
-            <div className="space-y-2">
-              {attachments.length > 0 && (
+            <div className={hasRenderableAttachments ? 'message-attachment-card' : 'space-y-2'}>
+              {hasRenderableAttachments && (
                 <MessageAttachmentGrid
                   items={attachments}
                   onOpenImage={onOpenImage}
                 />
               )}
               {ev.data?.content && (
-                <div className="user-bubble whitespace-pre-wrap">
+                <div className={hasRenderableAttachments ? 'message-attachment-caption whitespace-pre-wrap' : 'user-bubble whitespace-pre-wrap'}>
                   {ev.data.content}
                 </div>
               )}
@@ -2333,7 +2356,7 @@ function Bubble({
     case 'tool_call_started':
       return <ToolCallRow ev={ev} resultEvent={nextToolResult} />;
     case 'tool_call_result':
-      return <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} />;
+      return <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} onRestoreMedia={onRestoreMedia} />;
     case 'error':
       return (
         <div className="status-error">
@@ -2387,7 +2410,7 @@ function QueuedTurnsNotice({ count }: { count: number }) {
   );
 }
 
-function ToolResult({ tool, result, onOpenImage, onReferenceMedia, onBrowseGallery, onOpenOriginalMedia, onTrashMedia }: {
+function ToolResult({ tool, result, onOpenImage, onReferenceMedia, onBrowseGallery, onOpenOriginalMedia, onTrashMedia, onRestoreMedia }: {
   tool: string;
   result: any;
   onOpenImage: OpenImage;
@@ -2395,9 +2418,10 @@ function ToolResult({ tool, result, onOpenImage, onReferenceMedia, onBrowseGalle
   onBrowseGallery?: (args: any) => Promise<any>;
   onOpenOriginalMedia?: OpenOriginalMedia;
   onTrashMedia?: TrashMedia;
+  onRestoreMedia?: RestoreMedia;
 }) {
   if (tool === 'media.gallery.browse') {
-    return <MediaGalleryResult result={result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} />;
+    return <MediaGalleryResult result={result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} onRestoreMedia={onRestoreMedia} />;
   }
 
   const standardMedia = standardToolMedia(result);

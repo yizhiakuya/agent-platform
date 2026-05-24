@@ -8,15 +8,21 @@ import type {
   ReactNode
 } from 'react';
 import {
+  Check,
+  CheckSquare,
   ChevronRight,
+  Eye,
   FileText,
   Folder,
   Image as ImageIcon,
   Images,
+  Link2,
   Loader2,
   Maximize2,
   RotateCcw,
+  Square,
   Trash2,
+  Undo2,
   Video
 } from 'lucide-react';
 import { getToken } from '../lib/auth';
@@ -34,6 +40,7 @@ type BrowseGallery = (args: any) => Promise<any>;
 type OpenOriginalMediaResult = string | ({ src?: string | null } & OpenImageOptions) | null;
 type OpenOriginalMedia = (item: any, fallbackSrc?: string | null) => Promise<OpenOriginalMediaResult>;
 type TrashMedia = (items: any[]) => Promise<any>;
+type RestoreMedia = (items: any[]) => Promise<any>;
 
 const FAST_BROWSE_LIMIT = 20;
 const FAST_BROWSE_MAX_DIM = 256;
@@ -41,7 +48,7 @@ const VIDEO_OPEN_THUMB_MAX_DIM = 640;
 const SELECTION_EDGE_GUTTER_PX = 32;
 const SELECTION_HIT_SLOP_PX = 8;
 const SELECTION_TILE_EDGE_PX = 24;
-const MASONRY_TILE_WIDTH_PX = 124;
+const MASONRY_TILE_WIDTH_PX = 132;
 const MASONRY_ROW_HEIGHT_PX = 8;
 const MASONRY_GAP_PX = 12;
 const MEDIA_GALLERY_DRAG_TYPE = 'application/x-agent-platform-media-gallery';
@@ -53,6 +60,7 @@ export function MediaGalleryResult({
   onBrowseGallery,
   onOpenOriginalMedia,
   onTrashMedia,
+  onRestoreMedia,
   variant = 'default'
 }: {
   result: any;
@@ -61,6 +69,7 @@ export function MediaGalleryResult({
   onBrowseGallery?: BrowseGallery;
   onOpenOriginalMedia?: OpenOriginalMedia;
   onTrashMedia?: TrashMedia;
+  onRestoreMedia?: RestoreMedia;
   variant?: 'default' | 'soft';
 }) {
   const [activeResult, setActiveResult] = useState<any>(result);
@@ -187,6 +196,33 @@ export function MediaGalleryResult({
     }
   }
 
+  async function restoreMediaItems(itemsToRestore: any[]) {
+    if (!onRestoreMedia || itemsToRestore.length === 0) return;
+    setLoadingKey(RESTORE_SELECTED_KEY);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = unwrapToolValue(await onRestoreMedia(itemsToRestore));
+      if (result?.ok === false || result?.error || result?.error_detail) {
+        throw new Error(toolErrorMessage(result, '恢复失败'));
+      }
+      const affected = numberOrUndefined(result?.affected_count ?? result?.affectedCount ?? result?.summary?.affected_count);
+      if (!affected || affected <= 0) {
+        throw new Error('设备没有确认任何媒体被恢复。');
+      }
+      if (affected < itemsToRestore.length) {
+        throw new Error(`设备只确认 ${affected} / ${itemsToRestore.length} 项被恢复，当前列表不会自动移除。`);
+      }
+      removeMediaItems(itemsToRestore);
+      setNotice(`已恢复 ${affected} 项。`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      throw e;
+    } finally {
+      setLoadingKey(null);
+    }
+  }
+
   function removeMediaItems(itemsToRemove: any[]) {
     const removed = new Set(itemsToRemove.map(mediaIdentity).filter(Boolean));
     if (removed.size === 0) return;
@@ -204,27 +240,27 @@ export function MediaGalleryResult({
   }
 
   return (
-    <div className="space-y-3">
+    <div className={`media-gallery-result ${variant === 'soft' ? 'media-gallery-result-soft' : ''}`}>
       {history.length > 0 && (
-        <div className={panelClass(variant, 'flex items-center gap-2 px-3 py-2')}>
-          <button type="button" onClick={goBack} className={buttonClass(variant)}>
+        <div className="media-gallery-nav-panel">
+          <button type="button" onClick={goBack} className="media-gallery-nav-button">
             <RotateCcw size={14} />
             返回
           </button>
-          <span className={variant === 'soft' ? 'truncate text-xs text-gray-500' : 'truncate text-xs text-slate-500'}>
+          <span className="media-gallery-nav-title">
             {activeResult?.title ?? '相册'}
           </span>
         </div>
       )}
 
       {error && (
-        <div className={panelClass(variant, 'border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700')}>
+        <div className="media-gallery-alert media-gallery-alert-error">
           {error}
         </div>
       )}
 
       {notice && (
-        <div className={panelClass(variant, 'border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-700')}>
+        <div className="media-gallery-alert media-gallery-alert-success">
           {notice}
         </div>
       )}
@@ -235,7 +271,6 @@ export function MediaGalleryResult({
           onOpenImage={onOpenImage}
           onBrowseEntry={(entry, key) => browse(entry?.browse_args ?? entry?.browseArgs, key)}
           loadingKey={loadingKey}
-          variant={variant}
         />
       ) : items.length > 0 ? (
         <GalleryMediaGrid
@@ -246,12 +281,13 @@ export function MediaGalleryResult({
           onOpenMedia={openMedia}
           onReferenceMedia={onReferenceMedia}
           onTrashItems={onTrashMedia ? trashMediaItems : undefined}
+          onRestoreItems={onRestoreMedia ? restoreMediaItems : undefined}
           onLoadMore={(args, key) => loadMore(args, key)}
           loadingKey={loadingKey}
-          variant={variant}
         />
       ) : (
-        <div className={panelClass(variant, 'px-3 py-4 text-sm text-slate-500')}>
+        <div className="media-gallery-empty">
+          <ImageIcon size={18} />
           没查到可展示的媒体。
         </div>
       )}
@@ -330,6 +366,12 @@ export function buildMediaGalleryTrashArgs(items: any[]) {
   };
 }
 
+export function buildMediaGalleryRestoreArgs(items: any[]) {
+  return {
+    items: items.map(trashItem).filter(Boolean)
+  };
+}
+
 export function hasMediaGalleryDragItems(dataTransfer: DataTransfer | null | undefined) {
   if (!dataTransfer) return false;
   return Array.from(dataTransfer.types ?? []).includes(MEDIA_GALLERY_DRAG_TYPE);
@@ -351,31 +393,29 @@ function GallerySections({
   sections,
   onOpenImage,
   onBrowseEntry,
-  loadingKey,
-  variant
+  loadingKey
 }: {
   sections: any[];
   onOpenImage: OpenImage;
   onBrowseEntry?: (entry: any, key: string) => void;
   loadingKey: string | null;
-  variant: 'default' | 'soft';
 }) {
   return (
-    <div className="space-y-5">
+    <div className="media-gallery-sections">
       {sections.map((section, sectionIndex) => {
         const entries = Array.isArray(section?.entries) ? section.entries : [];
         if (entries.length === 0) return null;
         return (
-          <section key={`${section?.title ?? 'section'}-${sectionIndex}`} className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h3 className={variant === 'soft' ? 'text-sm font-bold text-gray-900' : 'text-sm font-semibold text-slate-800'}>
+          <section key={`${section?.title ?? 'section'}-${sectionIndex}`} className="media-gallery-section">
+            <div className="media-gallery-section-head">
+              <h3>
                 {section?.title ?? '相册'}
               </h3>
-              <span className={variant === 'soft' ? 'text-xs text-gray-400' : 'text-xs text-slate-400'}>
+              <span>
                 {entries.length} 项
               </span>
             </div>
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
+            <div className="media-gallery-entry-grid">
               {entries.map((entry: any, entryIndex: number) => {
                 const key = entryKey(entry, sectionIndex, entryIndex);
                 return (
@@ -385,7 +425,6 @@ function GallerySections({
                     onOpenImage={onOpenImage}
                     onBrowse={() => onBrowseEntry?.(entry, key)}
                     loading={loadingKey === key}
-                    variant={variant}
                   />
                 );
               })}
@@ -401,14 +440,12 @@ function GalleryEntryCard({
   entry,
   onOpenImage,
   onBrowse,
-  loading,
-  variant
+  loading
 }: {
   entry: any;
   onOpenImage: OpenImage;
   onBrowse?: () => void;
   loading: boolean;
-  variant: 'default' | 'soft';
 }) {
   const { big, small } = mediaImageSources(entry);
   const count = numberOrUndefined(entry?.count ?? entry?.photo_count);
@@ -421,19 +458,19 @@ function GalleryEntryCard({
       type="button"
       onClick={onBrowse}
       disabled={!canBrowse || loading}
-      className={panelClass(variant, 'block overflow-hidden text-left transition hover:-translate-y-0.5 hover:shadow-md disabled:cursor-default disabled:hover:translate-y-0 disabled:hover:shadow-sm')}
+      className="media-gallery-entry-card"
       aria-label={`打开${title}`}
     >
-      <div className="relative aspect-[4/3] bg-slate-100">
+      <div className="media-gallery-entry-cover">
         {small ? (
           <AuthMediaImage
             src={small}
             alt={title}
             title={title}
-            className="h-full w-full object-cover"
+            className="media-gallery-image"
           />
         ) : (
-          <div className="grid h-full w-full place-items-center text-slate-400">
+          <div className="media-gallery-entry-placeholder">
             {entryIcon(entry, 24)}
           </div>
         )}
@@ -452,27 +489,27 @@ function GalleryEntryCard({
                 onOpenImage(big);
               }
             }}
-            className="absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-full bg-white/90 text-slate-700 shadow-sm"
+            className="media-gallery-entry-preview"
             aria-label="预览封面"
           >
             <Maximize2 size={15} />
           </span>
         )}
       </div>
-      <div className="flex min-w-0 items-start gap-2 px-3 py-2">
-        <div className="mt-0.5 shrink-0 text-slate-500">{entryIcon(entry, 16)}</div>
-        <div className="min-w-0 flex-1">
-          <div className={variant === 'soft' ? 'truncate text-sm font-semibold text-gray-900' : 'truncate text-sm font-semibold text-slate-900'} title={title}>
+      <div className="media-gallery-entry-body">
+        <div className="media-gallery-entry-icon">{entryIcon(entry, 16)}</div>
+        <div className="media-gallery-entry-text">
+          <div className="media-gallery-entry-title" title={title}>
             {title}
           </div>
-          <div className={variant === 'soft' ? 'text-xs text-gray-500' : 'text-xs text-slate-500'}>
+          <div className="media-gallery-entry-meta">
             {typeof count === 'number' ? `${count} 项` : entry?.category ?? entry?.entry_type ?? '入口'}
           </div>
         </div>
         {loading ? (
-          <Loader2 size={16} className="mt-1 shrink-0 animate-spin text-slate-400" />
+          <Loader2 size={16} className="media-gallery-entry-spin" />
         ) : (
-          <ChevronRight size={16} className="mt-1 shrink-0 text-slate-300" />
+          <ChevronRight size={16} className="media-gallery-entry-chevron" />
         )}
       </div>
     </button>
@@ -487,9 +524,9 @@ function GalleryMediaGrid({
   onOpenMedia,
   onReferenceMedia,
   onTrashItems,
+  onRestoreItems,
   onLoadMore,
-  loadingKey,
-  variant
+  loadingKey
 }: {
   result: any;
   items: any[];
@@ -498,9 +535,9 @@ function GalleryMediaGrid({
   onOpenMedia?: (item: any, index: number, fallbackSrc: string | null) => Promise<void>;
   onReferenceMedia?: ReferenceMedia;
   onTrashItems?: (items: any[]) => Promise<void>;
+  onRestoreItems?: (items: any[]) => Promise<void>;
   onLoadMore?: (args: any, key: string) => void;
   loadingKey: string | null;
-  variant: 'default' | 'soft';
 }) {
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
@@ -508,13 +545,21 @@ function GalleryMediaGrid({
   const selectionDragRef = useRef<SelectionDragState | null>(null);
   const selectionRefreshRafRef = useRef<number | null>(null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const selectedRef = useRef<Set<string>>(selected);
   const [contextMenu, setContextMenu] = useState<GalleryContextMenu | null>(null);
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
   const canDragReference = Boolean(onReferenceMedia);
   const displayEntries = mediaDisplayEntries(items);
   const selectedItems = items.filter((item, index) => selected.has(mediaKey(item, index)));
+  const restoreMode = isRecentDeletedResult(result);
+  const canMutate = restoreMode ? Boolean(onRestoreItems) : Boolean(onTrashItems);
+  const mutationLabel = restoreMode ? '恢复' : '移到回收站';
 
   const nextKey = nextPageKey(result);
+
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
 
   useEffect(() => {
     setSelected(prev => {
@@ -616,13 +661,14 @@ function GalleryMediaGrid({
     setContextMenu(null);
   }
 
-  async function trashMenuTarget() {
+  async function mutateMenuTarget() {
     const target = menuTargetItems();
     setContextMenu(null);
-    if (!onTrashItems || target.length === 0) return;
-    if (!window.confirm(`移到回收站 ${target.length} 项？`)) return;
+    if (!canMutate || target.length === 0) return;
+    if (!window.confirm(`${mutationLabel} ${target.length} 项？`)) return;
     try {
-      await onTrashItems(target);
+      if (restoreMode) await onRestoreItems?.(target);
+      else await onTrashItems?.(target);
     } catch {
       // The parent renders the tool error and keeps the current selection for retry.
     }
@@ -670,7 +716,7 @@ function GalleryMediaGrid({
       currentY: startPoint.y,
       currentClientX: ev.clientX,
       currentClientY: ev.clientY,
-      base: additive ? new Set(selected) : new Set(),
+      base: additive ? new Set(selectedRef.current) : new Set(),
       additive,
       moved: false,
       pointerId: ev.pointerId
@@ -737,11 +783,27 @@ function GalleryMediaGrid({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="media-gallery-media">
+      <div className="media-gallery-grid-toolbar">
+        <div className="media-gallery-grid-title">
+          <Images size={15} />
+          <span>{result?.title ?? '媒体'}</span>
+        </div>
+        <div className="media-gallery-grid-stats">
+          <span>{displayEntries.length} 项</span>
+          {selectedItems.length > 0 && <span className="media-gallery-selected-pill">已选 {selectedItems.length}</span>}
+          {selectedItems.length > 0 && canMutate && (
+            <button type="button" className="media-gallery-inline-action" onClick={() => void mutateMenuTarget()}>
+              {restoreMode ? <Undo2 size={14} /> : <Trash2 size={14} />}
+              {mutationLabel}
+            </button>
+          )}
+        </div>
+      </div>
       <div
         ref={surfaceRef}
         data-testid="media-gallery-selection-surface"
-        className="relative min-h-24 select-none"
+        className="media-gallery-selection-surface"
         style={{
           marginLeft: -SELECTION_EDGE_GUTTER_PX,
           marginRight: -SELECTION_EDGE_GUTTER_PX,
@@ -756,7 +818,7 @@ function GalleryMediaGrid({
       >
         <div
           data-testid="media-gallery-masonry"
-          className="grid w-full justify-start gap-3"
+          className="media-gallery-masonry"
           style={{
             gridTemplateColumns: `repeat(auto-fill, ${MASONRY_TILE_WIDTH_PX}px)`,
             gridAutoRows: `${MASONRY_ROW_HEIGHT_PX}px`
@@ -776,7 +838,6 @@ function GalleryMediaGrid({
                 setTileRef={node => setTileRef(key, node)}
                 canDragReference={canDragReference}
                 loading={loadingKey === `open:${key}`}
-                variant={variant}
               />
             );
           })}
@@ -784,7 +845,7 @@ function GalleryMediaGrid({
         {selectionBox && createPortal(
           <div
             data-testid="media-gallery-selection-box"
-            className="pointer-events-none fixed z-[10000] border border-blue-500 bg-blue-500/10"
+            className="media-gallery-selection-box"
             style={{
               left: selectionBox.left,
               top: selectionBox.top,
@@ -797,8 +858,13 @@ function GalleryMediaGrid({
       </div>
 
       {page?.hasMore && page.nextArgs && onLoadMore && (
-        <div ref={loadMoreRef} className="flex h-12 items-center justify-center text-slate-400">
-          {loadingKey === nextKey && <Loader2 size={18} className="animate-spin" />}
+        <div ref={loadMoreRef} className="media-gallery-load-more">
+          {loadingKey === nextKey && (
+            <>
+              <Loader2 size={18} className="animate-spin" />
+              <span>加载中</span>
+            </>
+          )}
         </div>
       )}
 
@@ -809,7 +875,9 @@ function GalleryMediaGrid({
           targetCount={menuTargetItems().length}
           contextItemSelected={contextMenu.item ? selected.has(mediaKey(contextMenu.item, contextMenu.index)) : false}
           canReference={Boolean(onReferenceMedia) && menuTargetItems().some(item => item?.media_type === 'photo')}
-          canTrash={Boolean(onTrashItems) && menuTargetItems().length > 0}
+          canMutate={canMutate && menuTargetItems().length > 0}
+          mutationLabel={mutationLabel}
+          restoreMode={restoreMode}
           canOpen={Boolean(contextMenu.item)}
           onOpen={() => {
             if (contextMenu.item) openItem(contextMenu.item, contextMenu.index);
@@ -818,7 +886,7 @@ function GalleryMediaGrid({
           onReference={referenceMenuTarget}
           onToggleSelection={toggleContextItemSelection}
           onClearSelection={clearSelection}
-          onTrash={() => void trashMenuTarget()}
+          onMutate={() => void mutateMenuTarget()}
         />,
         document.body
       )}
@@ -835,8 +903,7 @@ function MediaTile({
   onToggleSelect,
   setTileRef,
   canDragReference,
-  loading,
-  variant
+  loading
 }: {
   item: any;
   index: number;
@@ -847,7 +914,6 @@ function MediaTile({
   setTileRef: (node: HTMLDivElement | null) => void;
   canDragReference: boolean;
   loading: boolean;
-  variant: 'default' | 'soft';
 }) {
   const { small } = mediaImageSources(item);
   const isVideo = item?.media_type === 'video';
@@ -868,7 +934,7 @@ function MediaTile({
     const observer = new ResizeObserver(updateSpan);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [aspectRatio, title, loading, selected, variant]);
+  }, [aspectRatio, title, loading, selected]);
 
   function handleTileRef(node: HTMLDivElement | null) {
     tileRef.current = node;
@@ -917,6 +983,17 @@ function MediaTile({
     onContextMenuAt(ev.clientX, ev.clientY);
   }
 
+  function handleSelectClick(ev: ReactMouseEvent<HTMLButtonElement>) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    onToggleSelect();
+  }
+
+  function handleSelectPointerDown(ev: ReactPointerEvent<HTMLButtonElement>) {
+    ev.preventDefault();
+    ev.stopPropagation();
+  }
+
   return (
     <div
       ref={handleTileRef}
@@ -935,39 +1012,47 @@ function MediaTile({
       onDragStart={handleDragStart}
       onContextMenu={handleContextMenu}
       onContextMenuCapture={handleContextMenu}
-      className={panelClass(variant, `w-full overflow-hidden cursor-zoom-in self-start ring-offset-2 ${selected ? 'ring-2 ring-blue-500' : ''}`)}
+      className="media-gallery-tile"
       style={{ gridRowEnd: `span ${rowSpan}` }}
     >
-      <div className="relative bg-slate-100" style={{ aspectRatio }}>
+      <div className="media-gallery-tile-media" style={{ aspectRatio }}>
         {small ? (
           <AuthMediaImage
             src={small}
             alt={title}
             title={title}
-            className="h-full w-full object-cover"
+            className="media-gallery-image"
           />
         ) : (
-          <div className="grid h-full w-full place-items-center px-2 text-center text-xs text-slate-400">
+          <div className="media-gallery-tile-placeholder">
             {title}
           </div>
         )}
         {loading && (
-          <span className="absolute right-2 top-2 z-10 grid h-8 w-8 place-items-center rounded-full bg-white/90 text-slate-700 shadow-sm">
+          <span className="media-gallery-tile-loading">
             <Loader2 size={15} className="animate-spin" />
           </span>
         )}
-        {selected && (
-          <span className="absolute left-2 top-2 z-10 h-5 w-5 rounded-sm border-2 border-white bg-blue-500 shadow-sm" />
-        )}
-        <span className="absolute bottom-2 left-2 rounded-full bg-black/65 px-2 py-1 text-[11px] font-medium text-white">
+        <button
+          type="button"
+          className="media-gallery-select-mark"
+          onPointerDown={handleSelectPointerDown}
+          onClick={handleSelectClick}
+          aria-pressed={selected}
+          aria-label={selected ? '取消选择图片' : '选择图片'}
+          title={selected ? '取消选择' : '选择'}
+        >
+          {selected && <Check size={13} strokeWidth={3} />}
+        </button>
+        <span className="media-gallery-kind-badge">
           {isVideo ? `视频${duration ? ` ${duration}` : ''}` : '照片'}
         </span>
       </div>
-      <div className="px-2 py-2 text-xs">
-        <div className={variant === 'soft' ? 'truncate font-medium text-gray-800' : 'truncate font-medium text-slate-800'} title={title}>
+      <div className="media-gallery-tile-body">
+        <div className="media-gallery-tile-title" title={title}>
           {title}
         </div>
-        <div className={variant === 'soft' ? 'mt-0.5 truncate text-gray-500' : 'mt-0.5 truncate text-slate-500'}>
+        <div className="media-gallery-tile-meta">
           {item?.bucket_name ?? item?.relative_path ?? item?.media_ref ?? item?.id}
         </div>
       </div>
@@ -981,31 +1066,35 @@ function GalleryContextMenu({
   targetCount,
   contextItemSelected,
   canReference,
-  canTrash,
+  canMutate,
+  mutationLabel,
+  restoreMode,
   canOpen,
   onOpen,
   onReference,
   onToggleSelection,
   onClearSelection,
-  onTrash
+  onMutate
 }: {
   menu: GalleryContextMenu;
   selectedCount: number;
   targetCount: number;
   contextItemSelected: boolean;
   canReference: boolean;
-  canTrash: boolean;
+  canMutate: boolean;
+  mutationLabel: string;
+  restoreMode: boolean;
   canOpen: boolean;
   onOpen: () => void;
   onReference: () => void;
   onToggleSelection: () => void;
   onClearSelection: () => void;
-  onTrash: () => void;
+  onMutate: () => void;
 }) {
   return (
     <div
       data-testid="media-gallery-context-menu"
-      className="fixed z-[10000] min-w-40 overflow-hidden rounded-md border border-slate-200 bg-white py-1 text-sm text-slate-700 shadow-xl"
+      className="media-gallery-context-menu"
       style={{ left: menu.x, top: menu.y }}
       onContextMenu={ev => {
         ev.preventDefault();
@@ -1013,25 +1102,27 @@ function GalleryContextMenu({
       }}
       onMouseDown={ev => ev.stopPropagation()}
     >
-      {canOpen && <MenuItem onClick={onOpen}>查看图片</MenuItem>}
-      <MenuItem onClick={onReference} disabled={!canReference}>引用图片{targetCount > 1 ? ` ${targetCount}` : ''}</MenuItem>
+      {canOpen && <MenuItem icon={<Eye size={15} />} onClick={onOpen}>查看图片</MenuItem>}
+      <MenuItem icon={<Link2 size={15} />} onClick={onReference} disabled={!canReference}>引用图片{targetCount > 1 ? ` ${targetCount}` : ''}</MenuItem>
       {menu.item && (
-        <MenuItem onClick={onToggleSelection}>{contextItemSelected ? '取消选择图片' : '选择图片'}</MenuItem>
+        <MenuItem icon={contextItemSelected ? <CheckSquare size={15} /> : <Square size={15} />} onClick={onToggleSelection}>{contextItemSelected ? '取消选择图片' : '选择图片'}</MenuItem>
       )}
-      {selectedCount > 0 && <MenuItem onClick={onClearSelection}>清空选择 {selectedCount}</MenuItem>}
-      <div className="my-1 h-px bg-slate-100" />
-      <MenuItem onClick={onTrash} disabled={!canTrash} danger>移到回收站{targetCount > 1 ? ` ${targetCount}` : ''}</MenuItem>
+      {selectedCount > 0 && <MenuItem icon={<RotateCcw size={15} />} onClick={onClearSelection}>清空选择 {selectedCount}</MenuItem>}
+      <div className="media-gallery-menu-separator" />
+      <MenuItem icon={restoreMode ? <Undo2 size={15} /> : <Trash2 size={15} />} onClick={onMutate} disabled={!canMutate} danger={!restoreMode}>{mutationLabel}{targetCount > 1 ? ` ${targetCount}` : ''}</MenuItem>
     </div>
   );
 }
 
 function MenuItem({
   children,
+  icon,
   disabled,
   danger,
   onClick
 }: {
   children: ReactNode;
+  icon?: ReactNode;
   disabled?: boolean;
   danger?: boolean;
   onClick: () => void;
@@ -1044,9 +1135,10 @@ function MenuItem({
         ev.stopPropagation();
         onClick();
       }}
-      className={`block w-full px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-40 ${danger ? 'text-red-600 hover:bg-red-50' : 'hover:bg-slate-50'}`}
+      className={`media-gallery-menu-item ${danger ? 'media-gallery-menu-item-danger' : ''}`}
     >
-      {children}
+      <span className="media-gallery-menu-icon">{icon}</span>
+      <span className="media-gallery-menu-label">{children}</span>
     </button>
   );
 }
@@ -1107,7 +1199,7 @@ function AuthMediaImage({
   }, [objectUrl]);
 
   const displaySrc = objectUrl ?? (src && !needsAuthenticatedFetch(src) ? src : null);
-  if (!displaySrc || failed) return <div className="h-full w-full bg-slate-100" />;
+  if (!displaySrc || failed) return <div className="media-gallery-image-skeleton" />;
   return <img src={displaySrc} alt={alt} title={title} draggable={false} className={className} />;
 }
 
@@ -1585,6 +1677,12 @@ function mediaGalleryResultIdentity(result: any) {
   });
 }
 
+function isRecentDeletedResult(result: any) {
+  const category = String(result?.category ?? result?.display?.category ?? '').toLowerCase();
+  const title = String(result?.title ?? '').trim();
+  return category === 'recent_deleted' || title === '最近删除';
+}
+
 function trashItem(item: any) {
   const ref = parseMediaRef(item?.media_ref);
   const mediaType = item?.media_type ?? ref?.mediaType;
@@ -1634,21 +1732,8 @@ function numberOrUndefined(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-function panelClass(variant: 'default' | 'soft', extra: string) {
-  const base = variant === 'soft'
-    ? 'rounded-2xl border border-gray-100 bg-white/80 shadow-sm'
-    : 'rounded-md border border-slate-200 bg-white shadow-sm';
-  return `${base} ${extra}`;
-}
-
-function buttonClass(variant: 'default' | 'soft') {
-  const base = variant === 'soft'
-    ? 'rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50'
-    : 'rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50';
-  return `${base} inline-flex items-center gap-1.5`;
-}
-
 const TRASH_SELECTED_KEY = 'trash:selected';
+const RESTORE_SELECTED_KEY = 'restore:selected';
 
 interface GalleryContextMenu {
   x: number;

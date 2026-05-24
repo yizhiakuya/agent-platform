@@ -296,5 +296,4 @@ docker compose --profile default exec chat-service curl -fsS http://localhost:80
 | device hub 多实例 | 单实例运行；多实例需要外部在线设备注册表、粘性路由或跨 hub 转发 |
 | FCM push 唤醒 | 未实现 |
 | 设备 token 加密存储 | 当前使用 SharedPreferences |
-| Playwright + adb 端到端测试 | 部分覆盖 |
 | 流式输出中途 provider failover | 未实现 |

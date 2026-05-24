@@ -78,6 +78,36 @@ class MediaGalleryBrowseControllerTest {
     }
 
     @Test
+    void restoreInvalidatesDeviceCache() {
+        PrincipalContext.set(new Principal(Principal.TYPE_USER, userId.toString(), userId.toString(), "jti"));
+        when(deviceHubClient.listOnlineByUser(userId)).thenReturn(List.of(device()));
+
+        ObjectNode args = mapper.createObjectNode();
+        args.put("view", "category");
+        args.put("category", "recent_deleted");
+
+        ObjectNode first = galleryValue("deleted");
+        ObjectNode second = galleryValue("after-restore");
+        when(dispatcher.dispatch(eq(deviceId), eq(userId), eq("media.gallery.browse"), any()))
+                .thenReturn(ToolResult.ok(first))
+                .thenReturn(ToolResult.ok(second));
+        when(dispatcher.dispatch(eq(deviceId), eq(userId), eq("media.gallery.restore"), any()))
+                .thenReturn(ToolResult.ok(mapper.createObjectNode().put("ok", true).put("affected_count", 1)));
+
+        MediaGalleryBrowseController.MediaGalleryBrowseRequest request =
+                new MediaGalleryBrowseController.MediaGalleryBrowseRequest(args, deviceId);
+        assertThat(controller.browse(request).path("marker").asText()).isEqualTo("deleted");
+        assertThat(controller.browse(request).path("marker").asText()).isEqualTo("deleted");
+
+        ObjectNode restoreArgs = mapper.createObjectNode();
+        restoreArgs.putArray("items").addObject().put("media_type", "photo").put("id", "101");
+        controller.restore(new MediaGalleryBrowseController.MediaGalleryRestoreRequest(restoreArgs, deviceId));
+
+        assertThat(controller.browse(request).path("marker").asText()).isEqualTo("after-restore");
+        verify(dispatcher, times(2)).dispatch(eq(deviceId), eq(userId), eq("media.gallery.browse"), any());
+    }
+
+    @Test
     void originalCacheUsesMediaVersion() {
         PrincipalContext.set(new Principal(Principal.TYPE_USER, userId.toString(), userId.toString(), "jti"));
         when(deviceHubClient.listOnlineByUser(userId)).thenReturn(List.of(device()));
@@ -104,6 +134,7 @@ class MediaGalleryBrowseControllerTest {
                 tool("media.gallery.browse"),
                 tool("media.gallery.thumbnail"),
                 tool("media.gallery.trash"),
+                tool("media.gallery.restore"),
                 tool("photos.get_full")
         )), OffsetDateTime.now());
     }

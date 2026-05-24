@@ -95,6 +95,12 @@ export const api = {
       body: JSON.stringify(input)
     }),
 
+  restoreMediaGalleryItems: (input: MediaGalleryRestoreRequest) =>
+    request<unknown>('/api/chat/media-gallery/restore', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+
   sessionExportUrl: (sessionId: string) =>
     `/api/sessions/${sessionId}/export.jsonl`,
 
@@ -211,6 +217,11 @@ export interface MediaGalleryOriginalRequest {
 }
 
 export interface MediaGalleryTrashRequest {
+  args: unknown;
+  deviceId?: string;
+}
+
+export interface MediaGalleryRestoreRequest {
   args: unknown;
   deviceId?: string;
 }

@@ -25,6 +25,7 @@ import com.agentplatform.android.data.AppPrefs
 import com.agentplatform.android.photos.PhotoIndexUploader
 import com.agentplatform.android.tools.diagnostics.AndroidDiagnosticsTool
 import com.agentplatform.android.tools.media.MediaGalleryBrowseTool
+import com.agentplatform.android.tools.media.MediaGalleryRestoreTool
 import com.agentplatform.android.tools.media.MediaGalleryThumbnailTool
 import com.agentplatform.android.tools.media.MediaGalleryTrashTool
 import com.agentplatform.android.tools.media.MediaSelectionCreateTool
@@ -127,6 +128,7 @@ class AgentForegroundService : Service() {
         toolRegistry.register(MediaGalleryBrowseTool(applicationContext, mapper))
         toolRegistry.register(MediaGalleryThumbnailTool(applicationContext, mapper))
         toolRegistry.register(MediaGalleryTrashTool(applicationContext, mapper))
+        toolRegistry.register(MediaGalleryRestoreTool(applicationContext, mapper))
         toolRegistry.register(MediaSelectionCreateTool(applicationContext, mapper))
         toolRegistry.register(AndroidDiagnosticsTool(applicationContext, mapper))
         toolRegistry.register(PrivilegesStatusTool(applicationContext, mapper))

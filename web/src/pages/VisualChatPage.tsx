@@ -39,6 +39,7 @@ import { streamChat } from '../api/sse';
 import { getToken } from '../lib/auth';
 import { ChatEvent, ChatRunState, NEW_SESSION_KEY, PendingDraftImage, QueuedChatTurn, useChatStore } from '../lib/chatStore';
 import {
+  buildMediaGalleryRestoreArgs,
   buildMediaGalleryTrashArgs,
   hasMediaGalleryDragItems,
   mediaGalleryImageSources,
@@ -59,6 +60,7 @@ type OpenImage = (src: string, options?: OpenImageOptions) => void;
 type OpenOriginalMediaResult = string | ({ src?: string | null } & OpenImageOptions) | null;
 type OpenOriginalMedia = (item: any, fallbackSrc?: string | null) => Promise<OpenOriginalMediaResult>;
 type TrashMedia = (items: any[]) => Promise<any>;
+type RestoreMedia = (items: any[]) => Promise<any>;
 type LightboxSize = { width: number; height: number };
 
 type DeviceRow = DeviceDto & {
@@ -324,6 +326,13 @@ export default function VisualChatPage() {
   async function trashMediaGallery(items: any[]) {
     return api.trashMediaGalleryItems({
       args: buildMediaGalleryTrashArgs(items),
+      deviceId: activeDevice?.id
+    });
+  }
+
+  async function restoreMediaGallery(items: any[]) {
+    return api.restoreMediaGalleryItems({
+      args: buildMediaGalleryRestoreArgs(items),
       deviceId: activeDevice?.id
     });
   }
@@ -1015,6 +1024,7 @@ export default function VisualChatPage() {
                   onBrowseGallery={browseMediaGallery}
                   onOpenOriginalMedia={openMediaGalleryOriginal}
                   onTrashMedia={trashMediaGallery}
+                  onRestoreMedia={restoreMediaGallery}
                 />
               );
             }
@@ -1051,6 +1061,7 @@ export default function VisualChatPage() {
               onBrowseGallery={browseMediaGallery}
               onOpenOriginalMedia={openMediaGalleryOriginal}
               onTrashMedia={trashMediaGallery}
+              onRestoreMedia={restoreMediaGallery}
             />
           </div>
         </div>
@@ -1067,6 +1078,7 @@ export default function VisualChatPage() {
           onBrowseGallery={browseMediaGallery}
           onOpenOriginalMedia={openMediaGalleryOriginal}
           onTrashMedia={trashMediaGallery}
+          onRestoreMedia={restoreMediaGallery}
         />
       </div>
 
@@ -1464,7 +1476,8 @@ function VisualBubble({
   onReferenceMedia,
   onBrowseGallery,
   onOpenOriginalMedia,
-  onTrashMedia
+  onTrashMedia,
+  onRestoreMedia
 }: {
   event: ChatEvent;
   index: number;
@@ -1474,24 +1487,26 @@ function VisualBubble({
   onBrowseGallery?: (args: any) => Promise<any>;
   onOpenOriginalMedia?: OpenOriginalMedia;
   onTrashMedia?: TrashMedia;
+  onRestoreMedia?: RestoreMedia;
 }) {
   const delayStyle = { animationDelay: `${Math.min(index, 8) * 0.08}s` };
 
   if (event.type === 'user_message') {
     const attachments = normalizeMessageAttachments(event.data?.attachments);
+    const hasRenderableAttachments = attachments.some(item => Boolean(imageUrl(item.imageUrl)));
     return (
       <div className="animate-float-up mb-4 flex justify-end" style={delayStyle}>
         <div className="max-w-[min(42rem,86%)]">
-          {attachments.length > 0 && (
-            <div className="mb-2 flex justify-end">
+          <div className={hasRenderableAttachments ? 'message-attachment-card' : ''}>
+            {hasRenderableAttachments && (
               <MessageAttachmentGrid items={attachments} onOpenImage={onOpenImage} />
-            </div>
-          )}
-          {event.data?.content && (
-            <div className="rounded-[1.5rem] rounded-tr-sm bg-gray-900 px-6 py-4 text-[16px] leading-relaxed text-white shadow-md max-sm:max-w-[88vw]">
-              {event.data.content}
-            </div>
-          )}
+            )}
+            {event.data?.content && (
+              <div className={hasRenderableAttachments ? 'message-attachment-caption whitespace-pre-wrap' : 'rounded-[1.5rem] rounded-tr-sm bg-gray-900 px-6 py-4 text-[16px] leading-relaxed text-white shadow-md max-sm:max-w-[88vw]'}>
+                {event.data.content}
+              </div>
+            )}
+          </div>
           <BubbleMeta align="right" createdAt={event.data?.createdAt} />
         </div>
       </div>
@@ -1539,7 +1554,7 @@ function VisualBubble({
   if (event.type === 'tool_call_result') {
     return (
       <div className="animate-float-up max-w-3xl pl-[4.5rem] max-sm:pl-0" style={delayStyle}>
-        <ToolResult tool={event.data?.tool} result={event.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} />
+        <ToolResult tool={event.data?.tool} result={event.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} onRestoreMedia={onRestoreMedia} />
       </div>
     );
   }
@@ -1649,7 +1664,8 @@ function VisualCanvas({
   onReferenceMedia,
   onBrowseGallery,
   onOpenOriginalMedia,
-  onTrashMedia
+  onTrashMedia,
+  onRestoreMedia
 }: {
   event: ChatEvent | null;
   isVisible: boolean;
@@ -1660,6 +1676,7 @@ function VisualCanvas({
   onBrowseGallery?: (args: any) => Promise<any>;
   onOpenOriginalMedia?: OpenOriginalMedia;
   onTrashMedia?: TrashMedia;
+  onRestoreMedia?: RestoreMedia;
 }) {
   if (!isVisible || !event) return null;
   const tool = String(event.data?.tool ?? 'tool');
@@ -1690,7 +1707,7 @@ function VisualCanvas({
       </div>
 
       <div className="visual-canvas-body min-h-0 flex-1 overflow-y-auto p-5 scroll-smooth max-sm:p-4">
-        <CanvasToolResult tool={tool} result={event.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} />
+        <CanvasToolResult tool={tool} result={event.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} onRestoreMedia={onRestoreMedia} />
       </div>
     </div>
   );
@@ -1703,7 +1720,8 @@ function CanvasToolResult({
   onReferenceMedia,
   onBrowseGallery,
   onOpenOriginalMedia,
-  onTrashMedia
+  onTrashMedia,
+  onRestoreMedia
 }: {
   tool: string;
   result: any;
@@ -1712,9 +1730,10 @@ function CanvasToolResult({
   onBrowseGallery?: (args: any) => Promise<any>;
   onOpenOriginalMedia?: OpenOriginalMedia;
   onTrashMedia?: TrashMedia;
+  onRestoreMedia?: RestoreMedia;
 }) {
   if (tool === 'media.gallery.browse') {
-    return <MediaGalleryResult result={result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} variant="soft" />;
+    return <MediaGalleryResult result={result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} onRestoreMedia={onRestoreMedia} variant="soft" />;
   }
   const photos = canvasPhotoItems(tool, result);
   if (photos.length > 0) {
@@ -1753,7 +1772,7 @@ function CanvasToolResult({
       </div>
     );
   }
-  return <ToolResult tool={tool} result={result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} />;
+  return <ToolResult tool={tool} result={result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} onRestoreMedia={onRestoreMedia} />;
 }
 
 function OverlayManager({
@@ -2602,14 +2621,18 @@ function PendingImageGrid({
 }
 
 function MessageAttachmentGrid({ items, onOpenImage }: { items: UploadedChatImage[]; onOpenImage: OpenImage }) {
+  const renderableItems = items
+    .map(item => ({ item, src: imageUrl(item.imageUrl) }))
+    .filter((entry): entry is { item: UploadedChatImage; src: string } => Boolean(entry.src));
+
+  if (renderableItems.length === 0) return null;
+
   return (
-    <div className="grid max-w-xs grid-cols-2 justify-end gap-2">
-      {items.map(item => {
-        const src = imageUrl(item.imageUrl);
-        if (!src) return null;
+    <div className={`message-attachment-grid${renderableItems.length === 1 ? ' message-attachment-grid-single' : ''}`}>
+      {renderableItems.map(({ item, src }) => {
         return (
-          <button type="button" key={item.imageUrl} onClick={() => onOpenImage(src)} className="overflow-hidden rounded-2xl border border-white/80 bg-white/50 shadow-sm">
-            <AuthImage src={src} alt={item.name ?? '图片附件'} title={item.name} className="h-32 w-32 object-cover" />
+          <button type="button" key={item.imageUrl} onClick={() => onOpenImage(src)} className="message-attachment-thumb overflow-hidden">
+            <AuthImage src={src} alt={item.name ?? '图片附件'} title={item.name} className="h-full w-full object-cover" />
           </button>
         );
       })}
@@ -2796,7 +2819,8 @@ function ToolResult({
   onReferenceMedia,
   onBrowseGallery,
   onOpenOriginalMedia,
-  onTrashMedia
+  onTrashMedia,
+  onRestoreMedia
 }: {
   tool: string;
   result: any;
@@ -2805,9 +2829,10 @@ function ToolResult({
   onBrowseGallery?: (args: any) => Promise<any>;
   onOpenOriginalMedia?: OpenOriginalMedia;
   onTrashMedia?: TrashMedia;
+  onRestoreMedia?: RestoreMedia;
 }) {
   if (tool === 'media.gallery.browse') {
-    return <MediaGalleryResult result={result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} variant="soft" />;
+    return <MediaGalleryResult result={result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} onRestoreMedia={onRestoreMedia} variant="soft" />;
   }
 
   const standardMedia = standardToolMedia(result);
