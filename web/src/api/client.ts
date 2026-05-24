@@ -77,6 +77,24 @@ export const api = {
   cancelChatRun: (clientRunId: string) =>
     request<void>(`/api/chat/runs/${encodeURIComponent(clientRunId)}/cancel`, { method: 'POST' }),
 
+  browseMediaGallery: (input: MediaGalleryBrowseRequest = {}) =>
+    request<unknown>('/api/chat/media-gallery/browse', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+
+  openMediaGalleryOriginal: (input: MediaGalleryOriginalRequest) =>
+    request<unknown>('/api/chat/media-gallery/original', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+
+  trashMediaGalleryItems: (input: MediaGalleryTrashRequest) =>
+    request<unknown>('/api/chat/media-gallery/trash', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    }),
+
   sessionExportUrl: (sessionId: string) =>
     `/api/sessions/${sessionId}/export.jsonl`,
 
@@ -176,6 +194,25 @@ export interface DeviceToolSpecDto {
   safetyLevel?: string;
   defaultDisplayPolicy?: string;
   resultType?: string;
+}
+
+export interface MediaGalleryBrowseRequest {
+  args?: unknown;
+  deviceId?: string;
+}
+
+export interface MediaGalleryOriginalRequest {
+  id: string;
+  mediaType?: string;
+  maxDim?: number;
+  deviceId?: string;
+  dateModifiedSec?: number;
+  sizeBytes?: number;
+}
+
+export interface MediaGalleryTrashRequest {
+  args: unknown;
+  deviceId?: string;
 }
 
 export interface EnrollmentResponse {

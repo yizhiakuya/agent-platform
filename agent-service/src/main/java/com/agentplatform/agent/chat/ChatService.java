@@ -494,6 +494,13 @@ public class ChatService {
             item.put("name", textOrNull(att.name()));
             if (att.width() != null) item.put("width", att.width());
             if (att.height() != null) item.put("height", att.height());
+            item.put("source", textOrNull(att.source()));
+            item.put("mediaRef", textOrNull(att.mediaRef()));
+            item.put("mediaType", textOrNull(att.mediaType()));
+            item.put("mediaId", textOrNull(att.mediaId()));
+            item.put("sourceTool", textOrNull(att.sourceTool()));
+            item.put("bucketName", textOrNull(att.bucketName()));
+            if (att.dateTakenMs() != null) item.put("dateTakenMs", att.dateTakenMs());
             item.put("index", i + 1);
             metadata.add(item);
 
@@ -527,7 +534,14 @@ public class ChatService {
                     att.bytes(),
                     trimToNull(att.name()),
                     att.width(),
-                    att.height()));
+                    att.height(),
+                    trimToNull(att.source()),
+                    trimToNull(att.mediaRef()),
+                    trimToNull(att.mediaType()),
+                    trimToNull(att.mediaId()),
+                    trimToNull(att.sourceTool()),
+                    trimToNull(att.bucketName()),
+                    att.dateTakenMs()));
             if (out.size() >= 4) break;
         }
         return List.copyOf(out);
@@ -592,6 +606,21 @@ public class ChatService {
             }
             if (att.name() != null && !att.name().isBlank()) {
                 sb.append(", name=").append(att.name());
+            }
+            if (att.source() != null && !att.source().isBlank()) {
+                sb.append(", source=").append(att.source());
+            }
+            if (att.mediaRef() != null && !att.mediaRef().isBlank()) {
+                sb.append(", media_ref=").append(att.mediaRef());
+            }
+            if (att.mediaType() != null && !att.mediaType().isBlank()) {
+                sb.append(", media_type=").append(att.mediaType());
+            }
+            if (att.mediaId() != null && !att.mediaId().isBlank()) {
+                sb.append(", media_id=").append(att.mediaId());
+            }
+            if (att.bucketName() != null && !att.bucketName().isBlank()) {
+                sb.append(", bucket_name=").append(att.bucketName());
             }
             sb.append('\n');
         }

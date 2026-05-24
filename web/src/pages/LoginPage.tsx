@@ -30,15 +30,15 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="grid min-h-screen bg-slate-50 text-slate-950 lg:grid-cols-[minmax(0,1fr)_28rem]">
-      <section className="relative flex min-h-[42vh] items-end overflow-hidden border-b border-slate-200 bg-white p-6 sm:p-10 lg:min-h-screen lg:border-b-0 lg:border-r">
+    <div className="grid min-h-screen bg-slate-50 text-slate-950 lg:grid-cols-[minmax(0,1fr)_28rem]" style={{ minHeight: '100dvh' }}>
+      <section className="relative flex min-h-[38dvh] items-end overflow-hidden border-b border-slate-200 bg-white p-6 sm:p-10 lg:min-h-[100dvh] lg:border-b-0 lg:border-r">
         <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(37,99,235,0.08),transparent_36%),linear-gradient(315deg,rgba(15,23,42,0.04),transparent_30%)]" />
         <div className="relative max-w-3xl">
           <div className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 shadow-sm">
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
             Private mobile agent console
           </div>
-          <h1 className="mt-6 max-w-2xl text-4xl font-semibold leading-tight sm:text-6xl">
+          <h1 className="mt-6 max-w-2xl text-4xl font-semibold leading-tight sm:text-5xl xl:text-6xl">
             Agent Platform
           </h1>
           <p className="mt-5 max-w-xl text-base leading-7 text-slate-600">
@@ -52,7 +52,7 @@ export default function LoginPage() {
         </div>
       </section>
 
-      <section className="flex items-center justify-center bg-slate-50 px-4 py-8 text-slate-950 lg:min-h-screen">
+      <section className="flex items-center justify-center bg-slate-50 px-4 py-8 text-slate-950 lg:min-h-[100dvh]">
         <form onSubmit={submit} className="w-full max-w-sm">
           <div className="mb-8">
             <div className="text-xs font-semibold uppercase text-slate-500">Access</div>

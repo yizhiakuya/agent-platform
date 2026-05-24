@@ -19,6 +19,16 @@ export interface PendingDraftImage {
   previewUrl: string;
   width?: number;
   height?: number;
+  source?: 'upload' | 'media_gallery';
+  mediaRef?: string;
+  mediaType?: string;
+  mediaId?: string;
+  deviceId?: string;
+  sourceTool?: string;
+  bucketName?: string;
+  dateTakenMs?: number;
+  dateModifiedSec?: number;
+  sizeBytes?: number;
 }
 
 export interface QueuedChatTurn {

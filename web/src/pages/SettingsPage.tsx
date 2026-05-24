@@ -77,8 +77,8 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="workbench grid lg:grid-cols-[minmax(0,1fr)_20rem]">
-      <section className="page-surface flex min-h-[calc(100vh-2rem)] min-w-0 flex-col overflow-hidden lg:min-h-0">
+    <div className="workbench grid xl:grid-cols-[minmax(0,1fr)_20rem]">
+      <section className="page-surface flex min-h-[calc(100dvh-2rem)] min-w-0 flex-col overflow-hidden xl:min-h-0">
         <div className="panel-header">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>

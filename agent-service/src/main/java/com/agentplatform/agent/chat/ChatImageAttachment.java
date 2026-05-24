@@ -15,5 +15,12 @@ public record ChatImageAttachment(
         @PositiveOrZero Long bytes,
         @Size(max = 160) String name,
         @PositiveOrZero Integer width,
-        @PositiveOrZero Integer height
+        @PositiveOrZero Integer height,
+        @Size(max = 40) String source,
+        @Size(max = 120) String mediaRef,
+        @Size(max = 20) String mediaType,
+        @Size(max = 80) String mediaId,
+        @Size(max = 80) String sourceTool,
+        @Size(max = 160) String bucketName,
+        @PositiveOrZero Long dateTakenMs
 ) {}

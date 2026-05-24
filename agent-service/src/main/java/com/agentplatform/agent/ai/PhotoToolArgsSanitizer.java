@@ -24,9 +24,11 @@ public class PhotoToolArgsSanitizer implements ToolPreInterceptor {
             "photos.list_by_album",
             "photos.recent_screenshots",
             "photos.semantic_candidates",
-            "videos.list_recent");
+            "videos.list_recent",
+            "media.gallery.browse");
     private static final Set<String> EMPTY_STRING_FIELDS = Set.of(
             "bucket_id",
+            "category",
             "name_contains");
     private static final Set<String> DATE_FIELDS = Set.of(
             "date_after",
@@ -34,7 +36,8 @@ public class PhotoToolArgsSanitizer implements ToolPreInterceptor {
     private static final Map<String, Integer> LIST_LIMIT_CAPS = new HashMap<>(Map.of(
             "photos.list_recent", 8,
             "photos.list_by_album", 8,
-            "photos.recent_screenshots", 8
+            "photos.recent_screenshots", 8,
+            "media.gallery.browse", 80
     ));
 
     private final ObjectMapper mapper;

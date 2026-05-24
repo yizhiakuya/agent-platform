@@ -1,6 +1,7 @@
 package com.agentplatform.agent.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 import java.util.List;
 
@@ -32,8 +33,10 @@ public record AgentProperties(
             int maxConsecutiveUiToolCalls,
             List<Provider> providers,
             Memory memory,
-            Photos photos
+            Photos photos,
+            MediaGalleryCache mediaGalleryCache
     ) {
+        @ConstructorBinding
         public Agent {
             if (maxTokens <= 0) {
                 maxTokens = 4096;
@@ -54,6 +57,22 @@ public record AgentProperties(
             if (photos == null) {
                 photos = new Photos(null, null, null, 0, null, null, null, true, true, false, 50, 0.20d, 8, 180);
             }
+            if (mediaGalleryCache == null) {
+                mediaGalleryCache = new MediaGalleryCache(null, null, 0, null, null, 0);
+            }
+        }
+
+        public Agent(long toolCallTimeoutMs,
+                     String hubBaseUri,
+                     int maxTokens,
+                     int maxAgentIterations,
+                     int maxToolCallsPerTurn,
+                     int maxConsecutiveUiToolCalls,
+                     List<Provider> providers,
+                     Memory memory,
+                     Photos photos) {
+            this(toolCallTimeoutMs, hubBaseUri, maxTokens, maxAgentIterations, maxToolCallsPerTurn,
+                    maxConsecutiveUiToolCalls, providers, memory, photos, null);
         }
     }
 
@@ -229,6 +248,36 @@ public record AgentProperties(
             }
             if (requestTimeoutSeconds <= 0) {
                 requestTimeoutSeconds = 180;
+            }
+        }
+    }
+
+    public record MediaGalleryCache(
+            Boolean enabled,
+            String redisHost,
+            int redisPort,
+            String redisUsername,
+            String redisPassword,
+            int redisDatabase
+    ) {
+        public MediaGalleryCache {
+            if (enabled == null) {
+                enabled = Boolean.FALSE;
+            }
+            if (redisHost == null || redisHost.isBlank()) {
+                redisHost = "localhost";
+            }
+            if (redisPort <= 0) {
+                redisPort = 6379;
+            }
+            if (redisUsername != null && redisUsername.isBlank()) {
+                redisUsername = null;
+            }
+            if (redisPassword != null && redisPassword.isBlank()) {
+                redisPassword = null;
+            }
+            if (redisDatabase < 0) {
+                redisDatabase = 0;
             }
         }
     }

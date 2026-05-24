@@ -123,6 +123,27 @@ class PhotoToolArgsSanitizerTest {
         assertEquals(30, out.path("limit").asInt());
     }
 
+    @Test
+    void normalizesGalleryBrowseArgs() {
+        ObjectNode args = mapper.createObjectNode();
+        args.put("view", "category");
+        args.put("category", "");
+        args.put("bucket_id", "");
+        args.put("limit", 120);
+
+        JsonNode out = sanitizer.before(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                spec("media.gallery.browse"),
+                args,
+                Map.of());
+
+        assertEquals("category", out.path("view").asText());
+        assertEquals(80, out.path("limit").asInt());
+        assertFalse(out.has("category"));
+        assertFalse(out.has("bucket_id"));
+    }
+
     private ToolSpec spec(String name) {
         return new ToolSpec(name, "test", mapper.createObjectNode(), false);
     }

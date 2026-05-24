@@ -25,6 +25,15 @@ export interface ChatImageAttachment {
   name?: string;
   width?: number;
   height?: number;
+  source?: string;
+  mediaRef?: string;
+  mediaType?: string;
+  mediaId?: string;
+  sourceTool?: string;
+  bucketName?: string;
+  dateTakenMs?: number;
+  dateModifiedSec?: number;
+  sizeBytes?: number;
 }
 
 /**

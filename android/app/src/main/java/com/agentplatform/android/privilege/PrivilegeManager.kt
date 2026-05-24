@@ -82,6 +82,15 @@ object PrivilegeManager {
         val after: AccessibilitySettingsStatus
     )
 
+    data class AppLaunchShellResult(
+        val strategy: String,
+        val command: String,
+        val result: CommandResult
+    ) {
+        val ok: Boolean
+            get() = result.ok
+    }
+
     fun status(context: Context): Status {
         val running = isShizukuRunning()
         val granted = running && hasShizukuPermission()
@@ -146,9 +155,13 @@ object PrivilegeManager {
     fun configureXiaomiBackgroundOps(context: Context): List<Pair<String, CommandResult>> {
         requireUsableShizuku()
         val packageName = context.packageName
-        return XIAOMI_BACKGROUND_OPS.map { op ->
-            val command = "appops set --user 0 $packageName $op allow"
-            command to execShell(command)
+        return XIAOMI_BACKGROUND_OPS.flatMap { op ->
+            listOf(
+                "appops set --user 0 $packageName $op allow",
+                "cmd appops set --user 0 $packageName $op allow"
+            ).map { command ->
+                command to execShell(command)
+            }
         }
     }
 
@@ -276,6 +289,29 @@ object PrivilegeManager {
         )
     }
 
+    fun launchApp(packageName: String, activityName: String?, timeoutSeconds: Long = 6): List<AppLaunchShellResult> {
+        require(packageName.matches(PACKAGE_NAME_REGEX)) { "Invalid package name" }
+        if (!activityName.isNullOrBlank()) {
+            require(activityName.matches(ACTIVITY_NAME_REGEX)) { "Invalid activity name" }
+        }
+        requireUsableShizuku()
+
+        val commands = buildList {
+            if (!activityName.isNullOrBlank()) {
+                val component = "$packageName/$activityName"
+                add("am_start_component" to "am start --user 0 -n ${shellQuote(component)}")
+            }
+            add("monkey_launcher" to "monkey -p ${shellQuote(packageName)} -c android.intent.category.LAUNCHER 1")
+        }
+        val results = mutableListOf<AppLaunchShellResult>()
+        for ((strategy, command) in commands) {
+            val result = execShell(command, timeoutSeconds = timeoutSeconds)
+            results += AppLaunchShellResult(strategy, command, result)
+            if (result.ok) break
+        }
+        return results
+    }
+
     fun setImagesTrashed(ids: List<Long>, trashed: Boolean): List<MediaCommandResult> {
         requireUsableShizuku()
         val value = if (trashed) 1 else 0
@@ -285,10 +321,27 @@ object PrivilegeManager {
         }
     }
 
+    fun setVideosTrashed(ids: List<Long>, trashed: Boolean): List<MediaCommandResult> {
+        requireUsableShizuku()
+        val value = if (trashed) 1 else 0
+        return ids.map { id ->
+            val command = "content update --uri ${videoContentUri(id)} --bind is_trashed:i:$value"
+            MediaCommandResult(id, command, execShell(command))
+        }
+    }
+
     fun deleteImages(ids: List<Long>): List<MediaCommandResult> {
         requireUsableShizuku()
         return ids.map { id ->
             val command = "content delete --uri ${imageContentUri(id)}"
+            MediaCommandResult(id, command, execShell(command))
+        }
+    }
+
+    fun deleteVideos(ids: List<Long>): List<MediaCommandResult> {
+        requireUsableShizuku()
+        return ids.map { id ->
+            val command = "content delete --uri ${videoContentUri(id)}"
             MediaCommandResult(id, command, execShell(command))
         }
     }
@@ -375,6 +428,9 @@ object PrivilegeManager {
     private fun imageContentUri(id: Long): String =
         "content://media/external/images/media/$id"
 
+    private fun videoContentUri(id: Long): String =
+        "content://media/external/video/media/$id"
+
     private fun accessibilityServiceComponent(context: Context): String =
         "${context.packageName}/${context.packageName}.ui.accessibility.UiAccessibilityService"
 
@@ -414,4 +470,7 @@ object PrivilegeManager {
             )
             info.requestedPermissions?.contains(permission) == true
         }.getOrDefault(false)
+
+    private val PACKAGE_NAME_REGEX = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")
+    private val ACTIVITY_NAME_REGEX = Regex("(\\.[A-Za-z0-9_.$]+)|([A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_.$]+)+)")
 }

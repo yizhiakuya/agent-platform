@@ -33,12 +33,16 @@ description: Project skill for D:\agent-platform, a self-hosted mobile agent pla
 ## Routing — pick by the symptom
 
 **Server runtime location:** production/backend services run only on Megumin
-(`root@192.168.0.109`, `/opt/agent-platform`). When checking live sessions,
-service logs, Postgres data, container status, health checks, or deployment
-state, SSH to Megumin and inspect the remote compose stack. Do not look for
-server containers on this local workstation unless the user explicitly says a
-local dev stack was started. The local workstation is for source edits, local
-builds/tests, Android APK builds, and packaging/publishing deploy artifacts.
+(`/opt/agent-platform`, LAN IP `192.168.0.109`). First check whether the
+current host is Megumin (`hostname` is `megumin`, the host has IP
+`192.168.0.109`, or `/opt/agent-platform/docker-compose.yml` exists with live
+`agent-platform-*` containers). When already on Megumin, inspect the local
+compose stack directly: `cd /opt/agent-platform`, `docker compose ...`,
+`docker exec agent-platform-postgres ...`, and `docker logs ...`. Do not SSH to
+`root@192.168.0.109` from Megumin itself. When not on Megumin, SSH to
+`root@192.168.0.109` and run the same commands there. Do not inspect unrelated
+local workstation containers unless the user explicitly says a local dev stack
+is running.
 
 | Problem | Files / commands |
 |---|---|
@@ -52,7 +56,7 @@ builds/tests, Android APK builds, and packaging/publishing deploy artifacts.
 | Semantic photo search noisy or wrong | `PhotosSemanticCandidatesTool.kt` + `SemanticPhotoSearchCallback.java` + `skills/photos-search/SKILL.md` + `ChatPage.tsx` |
 | Provider/model routing | `AgentBeans`, `CodexResponsesLoopRunner`, `.env`, `docker compose logs agent-service` |
 | Background LLM / LangChain4j | `LangChain4jModelFactory`, `RoutingBackgroundChatModel`, `BackgroundFactExtractor`, `SessionSummarizer`, `BackgroundLlmClient`, `EmbeddingService` |
-| GHCR / megumin deploy | Use the `agent-platform-deploy` skill; it packages already-built artifacts into GHCR images, updates Megumin compose, and verifies health/assets |
+| Megumin deploy | Use the `agent-platform-deploy` skill; on Megumin it builds local Docker image tags, updates compose, and verifies health/assets. Use GHCR only when deploying from another machine. |
 
 ## Adding a new device tool (the canonical workflow)
 
@@ -80,14 +84,14 @@ path.
 
 ## Session log analysis workflow
 
-When the user gives a session prefix/id, inspect Megumin only. Do not look for
-local server containers unless the user explicitly says a local dev stack is
-running.
+When the user gives a session prefix/id, inspect the Megumin live stack only.
+If the current host is Megumin, run the Docker/Postgres/log commands locally.
+If not, SSH to `root@192.168.0.109` first. Do not look for unrelated local
+server containers unless the user explicitly says a local dev stack is running.
 
 1. Resolve the full session id:
 
-```powershell
-$remote = @'
+```bash
 set -e
 sid_prefix='__SESSION_PREFIX__'
 docker exec -i agent-platform-postgres psql -U agent -d agent_platform <<SQL
@@ -96,10 +100,6 @@ SELECT id, user_id, title, created_at, last_message_at
 FROM chat.sessions
 WHERE id::text LIKE '${sid_prefix}%';
 SQL
-'@
-$remote = $remote.Replace('__SESSION_PREFIX__', '<session prefix>')
-$b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remote))
-ssh root@192.168.0.109 "echo $b64 | base64 -d | bash"
 ```
 
 2. Print a compact message/tool timeline:
@@ -328,7 +328,7 @@ Web at `http://localhost` (or whatever `WEB_PUBLIC_URL` is); first user register
 
 - Before deployment or image builds, run `git status --short` and keep the worktree clean. If there are pending changes, either commit them in a named branch or intentionally stash/park them before building, so a deploy never accidentally includes unrelated dirty worktree changes.
 - If GitNexus itself has a problem (MCP/CLI call fails, tool is unavailable, index is stale/broken, or impact/change detection cannot run), stop the current business task and fix GitNexus first. Run `npx gitnexus analyze` when needed, repair/restart the MCP/CLI path if needed, and verify GitNexus works before continuing code, deploy, or debugging work.
-- Before editing code symbols, follow `AGENTS.md`: run GitNexus impact analysis and warn if risk is HIGH/CRITICAL. Before committing, run `gitnexus_detect_changes()`.
+- Before editing code symbols, follow `AGENTS.md`: run GitNexus impact analysis and warn if risk is HIGH/CRITICAL. Treat risk as advisory, not a veto; report the blast radius and continue unless the change is destructive/irreversible, crosses security/auth/payment/permissions/data-schema/deployment boundaries, or the user asks to stop. Before committing, run `gitnexus_detect_changes()` and separate whole-worktree risk from the current task's symbol-level risk.
 - Java changes: use the local Maven wrapper `.\mvnw.cmd` from the repository root with JDK 21. Do not use Gradle for backend services; this is a Maven multi-module backend.
 - Web changes: run `npm run build` in `web/`. When online deployment is available, deploy immediately after a successful build and verify the live web asset hash/container image. Do not stop at "build passed" unless the user explicitly asked for local-only validation.
 - Android ADB path on this machine is `C:\Users\admin\AppData\Local\Android\Sdk\platform-tools\adb.exe`; `adb` is not necessarily on PATH.

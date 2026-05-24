@@ -47,7 +47,7 @@ export default function DevicesPage() {
   const neverConnectedCount = deviceRows.filter(d => !d.lastSeenAt).length;
 
   return (
-    <div className="workbench grid lg:grid-cols-[minmax(0,1fr)_22rem]">
+    <div className="workbench grid xl:grid-cols-[minmax(0,1fr)_22rem]">
       <section className="page-surface min-w-0 overflow-hidden">
         <div className="panel-header">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">

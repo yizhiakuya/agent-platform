@@ -20,7 +20,7 @@ description: "Use when the user wants to know what will break if they change som
 1. gitnexus_impact({target: "X", direction: "upstream"})  → What depends on this
 2. READ gitnexus://repo/{name}/processes                   → Check affected execution flows
 3. gitnexus_detect_changes()                               → Map current git changes to affected flows
-4. Assess risk and report to user
+4. Assess risk, report it briefly, and continue unless the change is genuinely unsafe
 ```
 
 > If "Index is stale" → run `npx gitnexus analyze` in terminal.
@@ -29,20 +29,31 @@ description: "Use when the user wants to know what will break if they change som
 
 ```
 - [ ] gitnexus_impact({target, direction: "upstream"}) to find dependents
-- [ ] Review d=1 items first (these WILL BREAK)
+- [ ] Review d=1 items first (direct dependents most likely to need validation)
 - [ ] Check high-confidence (>0.8) dependencies
 - [ ] READ processes to check affected execution flows
 - [ ] gitnexus_detect_changes() for pre-commit check
-- [ ] Assess risk level and report to user
+- [ ] Assess risk level, report it to user, and proceed unless the edit is destructive/irreversible, crosses security/auth/payment/permissions/data-schema/deployment boundaries, or the user asks to stop
 ```
 
 ## Understanding Output
 
-| Depth | Risk Level       | Meaning                  |
-| ----- | ---------------- | ------------------------ |
-| d=1   | **WILL BREAK**   | Direct callers/importers |
-| d=2   | LIKELY AFFECTED  | Indirect dependencies    |
-| d=3   | MAY NEED TESTING | Transitive effects       |
+| Depth | Signal              | Meaning                                  |
+| ----- | ------------------- | ---------------------------------------- |
+| d=1   | DIRECT DEPENDENTS   | Direct callers/importers to inspect/test |
+| d=2   | LIKELY AFFECTED     | Indirect dependencies                    |
+| d=3   | MAY NEED TESTING    | Transitive effects                       |
+
+Risk labels are advisory, not vetoes. HIGH and CRITICAL mean "slow down,
+explain the blast radius, and verify more carefully"; they do not mean "refuse
+to edit". Continue after reporting unless the proposed edit is destructive or
+irreversible, crosses security/auth/payment/permissions/data-schema/deployment
+boundaries, or the user asks you to stop.
+
+`gitnexus_detect_changes()` analyzes the whole current diff. If unrelated dirty
+files, docs, persona, or skill files are present, separate that whole-worktree
+risk from the symbol-level risk of the current task instead of blocking on the
+aggregate label.
 
 ## Risk Assessment
 
@@ -65,7 +76,7 @@ gitnexus_impact({
   maxDepth: 3
 })
 
-→ d=1 (WILL BREAK):
+→ d=1 (DIRECT DEPENDENTS):
   - loginHandler (src/auth/login.ts:42) [CALLS, 100%]
   - apiMiddleware (src/api/middleware.ts:15) [CALLS, 100%]
 
@@ -87,7 +98,7 @@ gitnexus_detect_changes({scope: "staged"})
 
 ```
 1. gitnexus_impact({target: "validateUser", direction: "upstream"})
-   → d=1: loginHandler, apiMiddleware (WILL BREAK)
+   → d=1: loginHandler, apiMiddleware (direct dependents)
    → d=2: authRouter, sessionManager (LIKELY AFFECTED)
 
 2. READ gitnexus://repo/my-app/processes

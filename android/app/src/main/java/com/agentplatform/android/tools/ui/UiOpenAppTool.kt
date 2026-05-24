@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import com.agentplatform.android.core.tool.Tool
 import com.agentplatform.android.core.tool.ToolResultEnvelope
+import com.agentplatform.android.privilege.PrivilegeManager
 import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -54,8 +55,8 @@ class UiOpenAppTool(
             )
         }
 
-        val intent = context.packageManager.getLaunchIntentForPackage(packageName)
-            ?: knownLaunchIntent(packageName)
+        val launchTarget = launchTarget(packageName)
+            ?: knownLaunchTarget(packageName)
             ?: return ToolResultEnvelope.applyStandardFields(mapper, this, mapper.createObjectNode().apply {
                 put("opened", false)
                 put("package", packageName)
@@ -67,6 +68,7 @@ class UiOpenAppTool(
                 })
             }, ok = false, request = args)
 
+        val intent = launchTarget.intent
         intent.addFlags(
             Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED or
@@ -74,7 +76,7 @@ class UiOpenAppTool(
         )
         val launchResults = mutableListOf<LaunchResult>()
         val launchStartedAtMs = System.currentTimeMillis()
-        val launchResult = sendLaunchIntent(intent)
+        val launchResult = sendLaunchIntent(packageName, launchTarget.activityName, intent)
         launchResults += launchResult
         if (!launchResult.sent) {
             return ToolResultEnvelope.applyStandardFields(mapper, this, mapper.createObjectNode().apply {
@@ -114,6 +116,13 @@ class UiOpenAppTool(
             launchResults += accessibilityResult
             if (accessibilityResult.sent) {
                 observation = waitForForegroundPackage(packageName, waitMs, System.currentTimeMillis())
+            }
+        }
+        if (observation.packageName != packageName) {
+            val shellResults = sendLaunchIntentFromShell(packageName, launchTarget.activityName)
+            launchResults += shellResults
+            if (shellResults.any { it.sent }) {
+                observation = waitForForegroundPackage(packageName, SHELL_VERIFY_WAIT_MS, System.currentTimeMillis())
             }
         }
         val foregroundPackage = observation.packageName
@@ -180,7 +189,14 @@ class UiOpenAppTool(
         )
     }
 
-    private fun sendLaunchIntent(intent: Intent): LaunchResult {
+    private fun sendLaunchIntent(packageName: String, activityName: String?, intent: Intent): LaunchResult {
+        val shellResult = sendLaunchIntentFromShell(packageName, activityName).firstOrNull { it.sent }
+        if (shellResult != null) return shellResult
+        if (UiAccessibilityService.isAvailable()) {
+            val accessibilityResult = sendLaunchIntentFromAccessibility(intent)
+            if (accessibilityResult.sent) return accessibilityResult
+        }
+
         try {
             context.startActivity(intent)
             return LaunchResult(sent = true, source = "application")
@@ -247,22 +263,52 @@ class UiOpenAppTool(
         )
     }
 
-    private fun knownLaunchIntent(packageName: String): Intent? =
+    private fun sendLaunchIntentFromShell(packageName: String, activityName: String?): List<LaunchResult> =
+        runCatching {
+            PrivilegeManager.launchApp(packageName, activityName, timeoutSeconds = SHELL_LAUNCH_TIMEOUT_SECONDS)
+                .map { shell ->
+                    LaunchResult(
+                        sent = shell.ok,
+                        source = "shizuku:${shell.strategy}",
+                        error = shell.result.stderr.takeIf { it.isNotBlank() }
+                            ?: shell.result.stdout.takeIf { !shell.ok && it.isNotBlank() }
+                            ?: if (shell.result.timedOut) "timed out" else null
+                    )
+                }
+        }.getOrElse { error ->
+            listOf(LaunchResult(sent = false, source = "shizuku", error = error.message))
+        }
+
+    private fun launchTarget(packageName: String): LaunchTarget? {
+        val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return null
+        return LaunchTarget(intent, intent.component?.className)
+    }
+
+    private fun knownLaunchTarget(packageName: String): LaunchTarget? =
         when (packageName) {
-            "com.tencent.mm" -> launcherIntent(packageName, "com.tencent.mm.ui.LauncherUI")
-            "com.tencent.mobileqq" -> launcherIntent(packageName, "com.tencent.mobileqq.activity.SplashActivity")
+            "com.tencent.mm" -> launcherTarget(packageName, "com.tencent.mm.ui.LauncherUI")
+            "com.tencent.mobileqq" -> launcherTarget(packageName, "com.tencent.mobileqq.activity.SplashActivity")
+            "com.max.xiaoheihe" -> launcherTarget(packageName, "com.max.xiaoheihe.SplashActivity")
             else -> null
         }
 
-    private fun launcherIntent(packageName: String, activityName: String): Intent =
-        Intent(Intent.ACTION_MAIN)
-            .addCategory(Intent.CATEGORY_LAUNCHER)
-            .setClassName(packageName, activityName)
+    private fun launcherTarget(packageName: String, activityName: String): LaunchTarget =
+        LaunchTarget(
+            Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_LAUNCHER)
+                .setClassName(packageName, activityName),
+            activityName
+        )
 
     private data class LaunchResult(
         val sent: Boolean,
         val source: String,
         val error: String? = null
+    )
+
+    private data class LaunchTarget(
+        val intent: Intent,
+        val activityName: String?
     )
 
     private data class ForegroundObservation(
@@ -274,7 +320,9 @@ class UiOpenAppTool(
     )
 
     private companion object {
-        private const val DEFAULT_VERIFY_WAIT_MS = 1_500L
+        private const val DEFAULT_VERIFY_WAIT_MS = 2_500L
+        private const val SHELL_VERIFY_WAIT_MS = 4_000L
+        private const val SHELL_LAUNCH_TIMEOUT_SECONDS = 8L
         private const val ACTIVE_WINDOW_PROBE_TIMEOUT_MS = 300L
     }
 }

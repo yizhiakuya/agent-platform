@@ -37,6 +37,8 @@ public class ToolArtifactExtractor {
             collectPhotoArray(out, sessionId, userId, messageId, tool, result.path("photos"));
             collectPhotoArray(out, sessionId, userId, messageId, tool, result.path("items"));
             collectSinglePhoto(out, sessionId, userId, messageId, tool, result, null);
+        } else if ("media.gallery.browse".equals(tool)) {
+            collectMediaArray(out, sessionId, userId, messageId, tool, result.path("items"));
         } else if ("ui.screen_capture".equals(tool)) {
             collectScreenCapture(out, sessionId, userId, messageId, tool, result);
         } else if ("ui.dump_tree".equals(tool)) {
@@ -179,6 +181,60 @@ public class ToolArtifactExtractor {
                 metadata));
     }
 
+    private void collectMediaArray(List<UpsertSessionArtifactRequest> out,
+                                   UUID sessionId,
+                                   UUID userId,
+                                   UUID messageId,
+                                   String tool,
+                                   JsonNode items) {
+        if (!items.isArray()) return;
+        int rank = 1;
+        for (JsonNode item : items) {
+            String mediaType = firstText(item, "media_type", "mediaType");
+            if ("video".equals(mediaType)) {
+                collectSingleVideo(out, sessionId, userId, messageId, tool, item, rank++);
+            } else {
+                collectSinglePhoto(out, sessionId, userId, messageId, tool, item, rank++);
+            }
+            if (out.size() >= MAX_ARTIFACTS_PER_RESULT) return;
+        }
+    }
+
+    private void collectSingleVideo(List<UpsertSessionArtifactRequest> out,
+                                    UUID sessionId,
+                                    UUID userId,
+                                    UUID messageId,
+                                    String tool,
+                                    JsonNode video,
+                                    Integer resultRank) {
+        String id = firstText(video, "id", "asset_id", "video_id", "mediaStoreId", "media_store_id");
+        if (id == null || id.isBlank()) return;
+        String title = firstText(video, "name", "display_name", "filename", "bucketName", "bucket_name");
+        Long dateTakenMs = firstLong(video, "dateTakenMs", "date_taken_ms");
+        String summary = videoSummary(title, dateTakenMs, firstText(video, "mimeType", "mime_type"));
+        ObjectNode metadata = mapper.createObjectNode();
+        metadata.put("tool", tool == null ? "" : tool);
+        metadata.put("videoId", id);
+        metadata.put("mediaType", "video");
+        if (resultRank != null) metadata.put("resultRank", resultRank);
+        putIfText(metadata, "name", title);
+        putIfText(metadata, "bucketName", firstText(video, "bucketName", "bucket_name"));
+        putIfText(metadata, "mimeType", firstText(video, "mimeType", "mime_type"));
+        putIfText(metadata, "mediaRef", firstText(video, "media_ref", "mediaRef"));
+        Long durationMs = firstLong(video, "durationMs", "duration_ms");
+        if (dateTakenMs != null) metadata.put("dateTakenMs", dateTakenMs);
+        if (durationMs != null) metadata.put("durationMs", durationMs);
+        out.add(new UpsertSessionArtifactRequest(
+                sessionId,
+                userId,
+                messageId,
+                "video",
+                id,
+                title,
+                summary,
+                metadata));
+    }
+
     private static boolean isPhotoTool(String tool) {
         return tool != null && tool.startsWith("photos.");
     }
@@ -232,6 +288,14 @@ public class ToolArtifactExtractor {
 
     private static String photoSummary(String title, Long dateTakenMs, String mimeType) {
         StringBuilder sb = new StringBuilder("Photo result");
+        if (title != null && !title.isBlank()) sb.append(": ").append(title);
+        if (dateTakenMs != null) sb.append(" taken_ms=").append(dateTakenMs);
+        if (mimeType != null && !mimeType.isBlank()) sb.append(" mime=").append(mimeType);
+        return sb.toString();
+    }
+
+    private static String videoSummary(String title, Long dateTakenMs, String mimeType) {
+        StringBuilder sb = new StringBuilder("Video result");
         if (title != null && !title.isBlank()) sb.append(": ").append(title);
         if (dateTakenMs != null) sb.append(" taken_ms=").append(dateTakenMs);
         if (mimeType != null && !mimeType.isBlank()) sb.append(" mime=").append(mimeType);

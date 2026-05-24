@@ -5,6 +5,14 @@ import { api, MessageDto, SessionDto } from '../api/client';
 import { streamChat } from '../api/sse';
 import { ChatEvent, ChatRunState, NEW_SESSION_KEY, PendingDraftImage, QueuedChatTurn, useChatStore } from '../lib/chatStore';
 import { getToken } from '../lib/auth';
+import {
+  buildMediaGalleryTrashArgs,
+  hasMediaGalleryDragItems,
+  mediaGalleryImageSources,
+  mediaGalleryItemCount,
+  MediaGalleryResult,
+  readMediaGalleryDragItems
+} from '../components/MediaGalleryResult';
 
 export default function ChatPage() {
   const {
@@ -32,6 +40,8 @@ export default function ChatPage() {
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightboxRatio, setLightboxRatio] = useState<number | null>(null);
+  const [lightboxSize, setLightboxSize] = useState<LightboxSize | null>(null);
   const [lightboxScale, setLightboxScale] = useState(1);
   const [composerError, setComposerError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -44,6 +54,81 @@ export default function ChatPage() {
   const selectedCount = selectedSessionIds.size;
   const allSessionsSelected = sessionCount > 0 && selectedCount === sessionCount;
   const partiallySelected = selectedCount > 0 && selectedCount < sessionCount;
+
+  function appendMediaReferences(items: any[]) {
+    void attachMediaGalleryItems(items);
+  }
+
+  async function attachMediaGalleryItems(items: any[]) {
+    const photos = items.filter(item => item?.media_type === 'photo' && String(item?.id ?? '').trim());
+    if (photos.length === 0) return;
+    setComposerError(null);
+    const slots = Math.max(0, MAX_ATTACHMENTS - pendingImages.length);
+    if (slots === 0) {
+      setComposerError(`最多一次添加 ${MAX_ATTACHMENTS} 张图片`);
+      return;
+    }
+    const accepted: PendingDraftImage[] = [];
+    for (const item of photos.slice(0, slots)) {
+      const { big, small } = mediaGalleryImageSources(item);
+      const mimeType = supportedImageMime(item?.mime_type) ?? 'image/jpeg';
+      const fileName = sanitizeImageFileName(item?.name ?? `media-${item.id}`, mimeType);
+      accepted.push({
+        id: `gallery-${item.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        file: new File([new Uint8Array()], fileName, { type: mimeType }),
+        previewUrl: small ?? big ?? '',
+        width: numberOrUndefined(item?.width ?? item?.image_width),
+        height: numberOrUndefined(item?.height ?? item?.image_height),
+        source: 'media_gallery',
+        mediaRef: item?.media_ref ?? `media://${item?.media_type ?? 'photo'}/${item.id}`,
+        mediaType: item?.media_type ?? 'photo',
+        mediaId: String(item.id),
+        sourceTool: 'media.gallery.browse',
+        bucketName: item?.bucket_name,
+        dateTakenMs: typeof item?.date_taken_ms === 'number' ? item.date_taken_ms : undefined,
+        dateModifiedSec: numberOrUndefined(item?.date_modified_sec ?? item?.dateModifiedSec),
+        sizeBytes: numberOrUndefined(item?.size_bytes ?? item?.sizeBytes)
+      });
+    }
+    if (photos.length > slots) {
+      setComposerError(`最多一次添加 ${MAX_ATTACHMENTS} 张图片`);
+    }
+    if (accepted.length > 0) {
+      setPendingImagesForKey(activeDraftKey, prev => [...prev, ...accepted]);
+    }
+  }
+
+  async function browseMediaGallery(args: any) {
+    return api.browseMediaGallery({ args });
+  }
+
+  async function openMediaGalleryOriginal(item: any, fallbackSrc?: string | null): Promise<OpenOriginalMediaResult> {
+    if (item?.media_type !== 'photo') return fallbackSrc ?? null;
+    const id = String(item?.id ?? '').trim();
+    if (!id) return fallbackSrc ?? null;
+    const result = await api.openMediaGalleryOriginal({
+      id,
+      mediaType: 'photo',
+      maxDim: 2048,
+      dateModifiedSec: numberOrUndefined(item?.date_modified_sec ?? item?.dateModifiedSec),
+      sizeBytes: numberOrUndefined(item?.size_bytes ?? item?.sizeBytes)
+    });
+    const resultRecord = asRecord(result);
+    const { big, small } = mediaGalleryImageSources(result);
+    const src = big ?? small ?? fallbackSrc ?? null;
+    if (!src) return null;
+    return {
+      src,
+      width: numberOrUndefined(resultRecord?.width ?? resultRecord?.image_width),
+      height: numberOrUndefined(resultRecord?.height ?? resultRecord?.image_height)
+    };
+  }
+
+  async function trashMediaGallery(items: any[]) {
+    return api.trashMediaGalleryItems({
+      args: buildMediaGalleryTrashArgs(items)
+    });
+  }
 
   async function refreshSessions() {
     setSessionsError(null);
@@ -228,6 +313,12 @@ export default function ChatPage() {
   }
 
   function handleDrop(e: React.DragEvent<HTMLFormElement>) {
+    const galleryItems = readMediaGalleryDragItems(e.dataTransfer);
+    if (galleryItems.length > 0) {
+      e.preventDefault();
+      void attachMediaGalleryItems(galleryItems);
+      return;
+    }
     const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('image/'));
     if (files.length === 0) return;
     e.preventDefault();
@@ -235,8 +326,9 @@ export default function ChatPage() {
   }
 
   function handleDragOver(e: React.DragEvent<HTMLFormElement>) {
-    if (Array.from(e.dataTransfer.items).some(item => item.type.startsWith('image/'))) {
+    if (hasMediaGalleryDragItems(e.dataTransfer) || Array.from(e.dataTransfer.items).some(item => item.type.startsWith('image/'))) {
       e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
     }
   }
 
@@ -356,13 +448,28 @@ export default function ChatPage() {
     void runTurn(nextTurn, queueKey, sessionIdForKey);
   }
 
-  function openLightbox(src: string) {
+  function openLightbox(src: string, options?: OpenImageOptions) {
+    const nextRatio = lightboxAspectRatio(options);
+    const nextSize = lightboxFrameSize(options);
+    if (options?.replaceFrom) {
+      setLightboxSrc(current => {
+        if (current !== options.replaceFrom) return current;
+        if (nextRatio) setLightboxRatio(nextRatio);
+        if (nextSize) setLightboxSize(nextSize);
+        return src;
+      });
+      return;
+    }
     setLightboxSrc(src);
+    setLightboxRatio(nextRatio);
+    setLightboxSize(nextSize);
     setLightboxScale(1);
   }
 
   function closeLightbox() {
     setLightboxSrc(null);
+    setLightboxRatio(null);
+    setLightboxSize(null);
     setLightboxScale(1);
   }
 
@@ -621,7 +728,7 @@ export default function ChatPage() {
   function restorePendingImages(key: string, items: PendingDraftImage[]) {
     setPendingImagesForKey(key, items.map(img => ({
       ...img,
-      previewUrl: URL.createObjectURL(img.file)
+      previewUrl: img.source === 'media_gallery' ? img.previewUrl : URL.createObjectURL(img.file)
     })));
   }
 
@@ -860,6 +967,10 @@ export default function ChatPage() {
                   ev={item.event}
                   nextToolResult={matchingToolResult(events, item.index)}
                   onOpenImage={openLightbox}
+                  onReferenceMedia={appendMediaReferences}
+                  onBrowseGallery={browseMediaGallery}
+                  onOpenOriginalMedia={openMediaGalleryOriginal}
+                  onTrashMedia={trashMediaGallery}
                 />
               );
             }
@@ -869,6 +980,10 @@ export default function ChatPage() {
                   key={`media-${item.event.data?.tool}-${item.index}`}
                   ev={item.event}
                   onOpenImage={openLightbox}
+                  onReferenceMedia={appendMediaReferences}
+                  onBrowseGallery={browseMediaGallery}
+                  onOpenOriginalMedia={openMediaGalleryOriginal}
+                  onTrashMedia={trashMediaGallery}
                 />
               );
             }
@@ -879,6 +994,10 @@ export default function ChatPage() {
                 busy={busy && item.endIndex >= events.length - 1}
                 now={now}
                 onOpenImage={openLightbox}
+                onReferenceMedia={appendMediaReferences}
+                onBrowseGallery={browseMediaGallery}
+                onOpenOriginalMedia={openMediaGalleryOriginal}
+                onTrashMedia={trashMediaGallery}
               />
             );
           })}
@@ -900,6 +1019,7 @@ export default function ChatPage() {
                 <PendingImageGrid
                   items={pendingImages}
                   disabled={messagesLoading}
+                  onOpen={openLightbox}
                   onRemove={removePendingImage}
                 />
               )}
@@ -1020,13 +1140,17 @@ export default function ChatPage() {
             onContextMenu={e => e.stopPropagation()}
           >
             <div
-              className="cursor-default rounded-md bg-white/5 p-2 shadow-2xl"
-              style={{ transform: `scale(${lightboxScale})`, transformOrigin: 'center center' }}
+              className="flex cursor-default items-center justify-center rounded-md bg-white/5 p-2 shadow-2xl"
+              style={{
+                ...lightboxFrameStyle(lightboxRatio, lightboxSize),
+                transform: `scale(${lightboxScale})`,
+                transformOrigin: 'center center'
+              }}
               onClick={e => e.stopPropagation()}
             >
               <AuthImage
                 src={lightboxSrc}
-                className="max-h-[82vh] max-w-[92vw] select-none object-contain"
+                className="h-full w-full select-none object-contain"
                 alt="预览"
                 draggable={false}
               />
@@ -1038,7 +1162,18 @@ export default function ChatPage() {
   );
 }
 
-type OpenImage = (src: string) => void;
+type OpenImageOptions = {
+  replaceFrom?: string | null;
+  width?: number | null;
+  height?: number | null;
+  aspectRatio?: number | null;
+  mediaType?: string | null;
+};
+type OpenImage = (src: string, options?: OpenImageOptions) => void;
+type OpenOriginalMediaResult = string | ({ src?: string | null } & OpenImageOptions) | null;
+type OpenOriginalMedia = (item: any, fallbackSrc?: string | null) => Promise<OpenOriginalMediaResult>;
+type TrashMedia = (items: any[]) => Promise<any>;
+type LightboxSize = { width: number; height: number };
 
 const MAX_ATTACHMENTS = 4;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -1055,6 +1190,15 @@ interface UploadedChatImage {
   name?: string;
   width?: number;
   height?: number;
+  source?: string;
+  mediaRef?: string;
+  mediaType?: string;
+  mediaId?: string;
+  sourceTool?: string;
+  bucketName?: string;
+  dateTakenMs?: number;
+  dateModifiedSec?: number;
+  sizeBytes?: number;
 }
 
 type TimelineItem =
@@ -1081,19 +1225,99 @@ interface ToolResultPageInfo {
 async function uploadPendingImages(items: PendingImage[]): Promise<UploadedChatImage[]> {
   const out: UploadedChatImage[] = [];
   for (const item of items) {
-    const uploaded = await api.uploadPhoto(item.file);
+    const file = await resolvePendingImageFile(item);
+    if (!SUPPORTED_IMAGE_TYPES.has(file.type)) {
+      throw new Error('仅支持 JPG、PNG、WebP 图片');
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      throw new Error('单张图片不能超过 10MB');
+    }
+    const uploaded = await api.uploadPhoto(file);
     out.push({
       type: 'image',
       imageUrl: uploaded.imageUrl,
       assetId: uploaded.assetId,
-      contentType: uploaded.contentType || item.file.type,
-      bytes: uploaded.bytes || item.file.size,
-      name: item.file.name || uploaded.assetId,
+      contentType: uploaded.contentType || file.type,
+      bytes: uploaded.bytes || file.size,
+      name: file.name || uploaded.assetId,
       width: item.width,
-      height: item.height
+      height: item.height,
+      source: item.source,
+      mediaRef: item.mediaRef,
+      mediaType: item.mediaType,
+      mediaId: item.mediaId,
+      sourceTool: item.sourceTool,
+      bucketName: item.bucketName,
+      dateTakenMs: item.dateTakenMs,
+      dateModifiedSec: item.dateModifiedSec,
+      sizeBytes: item.sizeBytes
     });
   }
   return out;
+}
+
+async function resolvePendingImageFile(item: PendingImage): Promise<File> {
+  if (item.source !== 'media_gallery' || !item.mediaId) return item.file;
+  const result = await api.openMediaGalleryOriginal({
+    id: item.mediaId,
+    mediaType: item.mediaType ?? 'photo',
+    maxDim: 2048,
+    deviceId: item.deviceId,
+    dateModifiedSec: item.dateModifiedSec,
+    sizeBytes: item.sizeBytes
+  });
+  const { big, small } = mediaGalleryImageSources(result);
+  const src = big ?? small;
+  if (!src) throw new Error('相册原图加载失败');
+  return imageSourceToFile(src, item.file.name || `media-${item.mediaId}.jpg`);
+}
+
+async function imageSourceToFile(src: string, name: string): Promise<File> {
+  const blob = src.startsWith('data:')
+    ? dataUrlToBlob(src)
+    : await fetch(src, {
+        headers: authHeadersForImageFetch(src)
+      }).then(resp => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.blob();
+      });
+  const type = blob.type || 'image/jpeg';
+  return new File([blob], sanitizeImageFileName(name, type), { type });
+}
+
+function authHeadersForImageFetch(src: string) {
+  const headers = new Headers();
+  if (/^\/api\//.test(src)) {
+    const token = getToken();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+  }
+  return headers;
+}
+
+function dataUrlToBlob(value: string): Blob {
+  const match = value.match(/^data:([^;,]+)?(;base64)?,(.*)$/);
+  if (!match) throw new Error('invalid data url');
+  const mime = match[1] || 'image/jpeg';
+  const body = match[3] || '';
+  if (match[2]) {
+    const bytes = atob(body);
+    const arr = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i += 1) arr[i] = bytes.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  }
+  return new Blob([decodeURIComponent(body)], { type: mime });
+}
+
+function sanitizeImageFileName(name: string, type: string) {
+  const clean = (name || 'gallery-image').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'gallery-image';
+  if (/\.(jpe?g|png|webp)$/i.test(clean)) return clean;
+  const ext = type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : 'jpg';
+  return `${clean}.${ext}`;
+}
+
+function supportedImageMime(value: unknown) {
+  const type = typeof value === 'string' ? value.toLowerCase() : '';
+  return SUPPORTED_IMAGE_TYPES.has(type) ? type : null;
 }
 
 function toChatAttachment(item: UploadedChatImage) {
@@ -1104,7 +1328,16 @@ function toChatAttachment(item: UploadedChatImage) {
     bytes: item.bytes,
     name: item.name,
     width: item.width,
-    height: item.height
+    height: item.height,
+    source: item.source,
+    mediaRef: item.mediaRef,
+    mediaType: item.mediaType,
+    mediaId: item.mediaId,
+    sourceTool: item.sourceTool,
+    bucketName: item.bucketName,
+    dateTakenMs: item.dateTakenMs,
+    dateModifiedSec: item.dateModifiedSec,
+    sizeBytes: item.sizeBytes
   };
 }
 
@@ -1377,7 +1610,16 @@ function normalizeMessageAttachments(value: unknown): UploadedChatImage[] {
       bytes: typeof r.bytes === 'number' ? r.bytes : undefined,
       name: typeof r.name === 'string' ? r.name : undefined,
       width: typeof r.width === 'number' ? r.width : undefined,
-      height: typeof r.height === 'number' ? r.height : undefined
+      height: typeof r.height === 'number' ? r.height : undefined,
+      source: typeof r.source === 'string' ? r.source : undefined,
+      mediaRef: typeof r.mediaRef === 'string' ? r.mediaRef : typeof r.media_ref === 'string' ? r.media_ref : undefined,
+      mediaType: typeof r.mediaType === 'string' ? r.mediaType : typeof r.media_type === 'string' ? r.media_type : undefined,
+      mediaId: typeof r.mediaId === 'string' ? r.mediaId : typeof r.media_id === 'string' ? r.media_id : undefined,
+      sourceTool: typeof r.sourceTool === 'string' ? r.sourceTool : typeof r.source_tool === 'string' ? r.source_tool : undefined,
+      bucketName: typeof r.bucketName === 'string' ? r.bucketName : typeof r.bucket_name === 'string' ? r.bucket_name : undefined,
+      dateTakenMs: typeof r.dateTakenMs === 'number' ? r.dateTakenMs : typeof r.date_taken_ms === 'number' ? r.date_taken_ms : undefined,
+      dateModifiedSec: numberOrUndefined(r.dateModifiedSec ?? r.date_modified_sec),
+      sizeBytes: numberOrUndefined(r.sizeBytes ?? r.size_bytes)
     });
   });
   return out;
@@ -1531,6 +1773,9 @@ function isStandardHiddenToolResult(result: unknown) {
 
 function isStandardDisplayableToolResult(result: unknown) {
   const policy = toolDisplayPolicy(result);
+  if (policy === 'show_gallery') {
+    return Array.isArray(asRecord(result)?.sections) || Array.isArray(asRecord(result)?.items);
+  }
   if (policy === 'show_primary' || policy === 'show_grid' || policy === 'collapsed_candidates') {
     return hasDisplayableToolMedia(result);
   }
@@ -1758,20 +2003,33 @@ function ToolCallRow({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: ChatEve
 function PendingImageGrid({
   items,
   disabled,
+  onOpen,
   onRemove
 }: {
   items: PendingImage[];
   disabled: boolean;
+  onOpen: OpenImage;
   onRemove: (id: string) => void;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
       {items.map(item => (
         <div key={item.id} className="relative h-20 w-20 overflow-hidden rounded-md border border-slate-200 bg-slate-100 shadow-sm">
-          <img src={item.previewUrl} alt={item.file.name || '待发送图片'} className="h-full w-full object-cover" />
           <button
             type="button"
-            onClick={() => onRemove(item.id)}
+            onClick={() => onOpen(item.previewUrl)}
+            className="block h-full w-full cursor-zoom-in"
+            title="预览图片"
+            aria-label={`预览图片 ${item.file.name || ''}`.trim()}
+          >
+            <AuthImage src={item.previewUrl} alt={item.file.name || '待发送图片'} className="h-full w-full object-cover" />
+          </button>
+          <button
+            type="button"
+            onClick={event => {
+              event.stopPropagation();
+              onRemove(item.id);
+            }}
             disabled={disabled}
             className="absolute right-1 top-1 h-6 w-6 rounded-full bg-black/65 text-sm leading-6 text-white transition hover:bg-black/80 disabled:opacity-50"
             title="移除图片"
@@ -1816,12 +2074,20 @@ function ProcessPanel({
   item,
   busy,
   now,
-  onOpenImage
+  onOpenImage,
+  onReferenceMedia,
+  onBrowseGallery,
+  onOpenOriginalMedia,
+  onTrashMedia
 }: {
   item: Extract<TimelineItem, { kind: 'process' }>;
   busy: boolean;
   now: number;
   onOpenImage: OpenImage;
+  onReferenceMedia?: (items: any[]) => void;
+  onBrowseGallery?: (args: any) => Promise<any>;
+  onOpenOriginalMedia?: OpenOriginalMedia;
+  onTrashMedia?: TrashMedia;
 }) {
   const status = processStatus(item);
   const active = busy && status === 'running';
@@ -1883,7 +2149,7 @@ function ProcessPanel({
               {shouldShowToolResultOutsideProcess(ev) ? (
                 <ToolResultExternalSummary ev={ev} />
               ) : (
-                <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} />
+                <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} />
               )}
             </div>
           ) : ev.type === 'assistant_message' ? (
@@ -1896,6 +2162,10 @@ function ProcessPanel({
               ev={ev}
               nextToolResult={findResultForToolCall(item.events, index)}
               onOpenImage={onOpenImage}
+              onReferenceMedia={onReferenceMedia}
+              onBrowseGallery={onBrowseGallery}
+              onOpenOriginalMedia={onOpenOriginalMedia}
+              onTrashMedia={onTrashMedia}
             />
           ))}
         </div>
@@ -1918,11 +2188,12 @@ function ToolResultExternalSummary({ ev }: { ev: ChatEvent }) {
 
 function visibleToolResultCount(ev: ChatEvent): number | null {
   const result = ev.data?.result;
+  const tool = ev.data?.tool;
+  if (tool === 'media.gallery.browse') return mediaGalleryItemCount(result);
   const media = standardToolMedia(result);
   if (media?.mode === 'primary') return 1;
   if (media?.mode === 'grid' || media?.mode === 'collapsed') return media.items.length;
 
-  const tool = ev.data?.tool;
   if (tool === 'photos.get_full' && hasPhotoImage(result)) return 1;
   if ((isPhotoListTool(tool) || tool === 'photos.semantic_search') && Array.isArray(result?.photos)) {
     return result.photos.length;
@@ -1962,7 +2233,21 @@ function ToolCallDetail({ ev, resultEvent }: { ev: ChatEvent; resultEvent?: Chat
   );
 }
 
-function VisibleToolResult({ ev, onOpenImage }: { ev: ChatEvent; onOpenImage: OpenImage }) {
+function VisibleToolResult({
+  ev,
+  onOpenImage,
+  onReferenceMedia,
+  onBrowseGallery,
+  onOpenOriginalMedia,
+  onTrashMedia
+}: {
+  ev: ChatEvent;
+  onOpenImage: OpenImage;
+  onReferenceMedia?: (items: any[]) => void;
+  onBrowseGallery?: (args: any) => Promise<any>;
+  onOpenOriginalMedia?: OpenOriginalMedia;
+  onTrashMedia?: TrashMedia;
+}) {
   const tool = String(ev.data?.tool ?? 'tool');
   return (
     <div className="flex justify-start">
@@ -1972,13 +2257,14 @@ function VisibleToolResult({ ev, onOpenImage }: { ev: ChatEvent; onOpenImage: Op
           <span className="font-medium text-slate-600">{toolResultTitle(tool)}</span>
           <code className="tool-chip">{tool}</code>
         </div>
-        <ToolResult tool={tool} result={ev.data?.result} onOpenImage={onOpenImage} />
+        <ToolResult tool={tool} result={ev.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} />
       </div>
     </div>
   );
 }
 
 function toolResultTitle(tool: string) {
+  if (tool === 'media.gallery.browse') return '相册';
   if (isPhotoListTool(tool) || tool === 'photos.semantic_search' || tool === 'photos.get_full') return '图片结果';
   if (tool === 'videos.list_recent') return '视频结果';
   return '工具结果';
@@ -1987,11 +2273,19 @@ function toolResultTitle(tool: string) {
 function Bubble({
   ev,
   nextToolResult,
-  onOpenImage
+  onOpenImage,
+  onReferenceMedia,
+  onBrowseGallery,
+  onOpenOriginalMedia,
+  onTrashMedia
 }: {
   ev: ChatEvent;
   nextToolResult?: ChatEvent | null;
   onOpenImage: OpenImage;
+  onReferenceMedia?: (items: any[]) => void;
+  onBrowseGallery?: (args: any) => Promise<any>;
+  onOpenOriginalMedia?: OpenOriginalMedia;
+  onTrashMedia?: TrashMedia;
 }) {
   switch (ev.type) {
     case 'user_message': {
@@ -2039,7 +2333,7 @@ function Bubble({
     case 'tool_call_started':
       return <ToolCallRow ev={ev} resultEvent={nextToolResult} />;
     case 'tool_call_result':
-      return <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} />;
+      return <ToolResult tool={ev.data?.tool} result={ev.data?.result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} />;
     case 'error':
       return (
         <div className="status-error">
@@ -2093,11 +2387,19 @@ function QueuedTurnsNotice({ count }: { count: number }) {
   );
 }
 
-function ToolResult({ tool, result, onOpenImage }: {
+function ToolResult({ tool, result, onOpenImage, onReferenceMedia, onBrowseGallery, onOpenOriginalMedia, onTrashMedia }: {
   tool: string;
   result: any;
   onOpenImage: OpenImage;
+  onReferenceMedia?: (items: any[]) => void;
+  onBrowseGallery?: (args: any) => Promise<any>;
+  onOpenOriginalMedia?: OpenOriginalMedia;
+  onTrashMedia?: TrashMedia;
 }) {
+  if (tool === 'media.gallery.browse') {
+    return <MediaGalleryResult result={result} onOpenImage={onOpenImage} onReferenceMedia={onReferenceMedia} onBrowseGallery={onBrowseGallery} onOpenOriginalMedia={onOpenOriginalMedia} onTrashMedia={onTrashMedia} />;
+  }
+
   const standardMedia = standardToolMedia(result);
   if (standardMedia) {
     return <StandardToolMediaResult media={standardMedia} onOpenImage={onOpenImage} />;
@@ -2481,7 +2783,7 @@ function AuthImage({
 
   const displaySrc = objectUrl ?? (src && !needsAuthenticatedFetch(src) ? src : null);
   if (!displaySrc || failed) {
-    return <div className="h-32 w-full rounded-md border border-slate-200 bg-slate-100" />;
+    return <div className={className ?? 'h-32 w-full rounded-md border border-slate-200 bg-slate-100'} />;
   }
 
   return (
@@ -2495,7 +2797,7 @@ function AuthImage({
 }
 
 function needsAuthenticatedFetch(src: string) {
-  return src.startsWith('/api/uploads/');
+  return src.startsWith('/api/uploads/') || src.startsWith('/api/chat/media-gallery/thumbnail?');
 }
 
 function semanticPrimaryPhoto(result: any) {
@@ -2510,6 +2812,7 @@ function semanticPrimaryPhoto(result: any) {
 function standardToolMedia(result: unknown): StandardToolMedia | null {
   if (isStandardHiddenToolResult(result)) return null;
   const policy = toolDisplayPolicy(result);
+  if (policy === 'show_gallery') return null;
   const candidateOnly = Boolean(asRecord(result)?.candidate_only);
   const primary = primaryToolImage(result);
   const items = toolResultItems(result).filter(item => asRecord(item));
@@ -2573,6 +2876,48 @@ function toolResultPageInfo(result: unknown, fallbackCount: number): ToolResultP
 function numberOrUndefined(value: unknown): number | undefined {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function lightboxAspectRatio(options?: OpenImageOptions) {
+  const direct = numberOrUndefined(options?.aspectRatio);
+  if (direct && direct > 0) return direct;
+  const width = numberOrUndefined(options?.width);
+  const height = numberOrUndefined(options?.height);
+  if (width && height && width > 0 && height > 0) return width / height;
+  return null;
+}
+
+function lightboxFrameSize(options?: OpenImageOptions): LightboxSize | null {
+  const width = numberOrUndefined(options?.width);
+  const height = numberOrUndefined(options?.height);
+  if (width && height && width > 0 && height > 0) return { width, height };
+  return null;
+}
+
+function lightboxFrameStyle(aspectRatio: number | null, size: LightboxSize | null): React.CSSProperties {
+  const ratio = aspectRatio && aspectRatio > 0 ? aspectRatio : 1;
+  if (size) {
+    return {
+      aspectRatio: `${ratio}`,
+      boxSizing: 'content-box',
+      width: `min(${size.width}px, 92vw, calc(82vh * ${ratio}))`,
+      maxHeight: '82vh'
+    };
+  }
+  if (ratio >= 1) {
+    return {
+      aspectRatio: `${ratio}`,
+      boxSizing: 'content-box',
+      maxHeight: '82vh',
+      width: `min(92vw, calc(82vh * ${ratio}))`
+    };
+  }
+  return {
+    aspectRatio: `${ratio}`,
+    boxSizing: 'content-box',
+    height: `min(82vh, calc(92vw / ${ratio}))`,
+    maxWidth: '92vw'
+  };
 }
 
 function primaryToolImage(result: unknown): any | null {

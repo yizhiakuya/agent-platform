@@ -1,5 +1,9 @@
+import { Buffer } from 'node:buffer';
 import { expect, test } from './fixtures';
 import type { Route } from '@playwright/test';
+
+const tinyImage = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const tinyImageBody = Buffer.from(tinyImage.split(',')[1], 'base64');
 
 test.describe('Spatial canvas chat shell', () => {
   test('renders the replicated APP visual preview without login', async ({ page }) => {
@@ -377,5 +381,105 @@ test.describe('Spatial canvas chat shell', () => {
       contentType: 'application/json',
       body: persistedMessages
     });
+  });
+
+  test('opens media gallery context menu from the transformed canvas', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.addInitScript(() => {
+      window.localStorage.setItem('agent.token', 'test-token');
+      window.localStorage.setItem('agent-platform.activeSessionId', 'gallery-canvas');
+    });
+
+    await page.route('**/api/sessions', async route => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([{
+          id: 'gallery-canvas',
+          userId: 'u1',
+          title: '打开相册展示',
+          createdAt: '2026-05-22T00:00:00.000Z',
+          lastMessageAt: '2026-05-22T00:01:00.000Z'
+        }])
+      });
+    });
+
+    await page.route('**/api/me/devices', async route => {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([{
+          id: 'd1',
+          name: 'phone',
+          model: 'Pixel',
+          osVersion: '15',
+          lastSeenAt: '2026-05-22T00:01:00.000Z',
+          createdAt: '2026-05-22T00:00:00.000Z'
+        }])
+      });
+    });
+
+    await page.route('**/api/devices/online-status', async route => {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([{ deviceId: 'd1', online: true, connectedAt: '2026-05-22T00:01:00.000Z', toolCount: 34 }])
+      });
+    });
+
+    await page.route('**/api/sessions/gallery-canvas/messages', async route => {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          { id: 'm1', sessionId: 'gallery-canvas', role: 'USER', content: '查看相册', createdAt: '2026-05-22T00:00:10.000Z' },
+          {
+            id: 'm2',
+            sessionId: 'gallery-canvas',
+            role: 'TOOL_RESULT',
+            content: 'tool media.gallery.browse returned',
+            metadata: {
+              tool: 'media.gallery.browse',
+              result: {
+                ok: true,
+                result_type: 'results',
+                display_policy: 'show_gallery',
+                view: 'category',
+                title: '全部照片',
+                count: 1,
+                items: [{
+                  media_type: 'photo',
+                  id: '101',
+                  name: 'IMG_0001.jpg',
+                  bucket_name: 'Camera',
+                  width: 1536,
+                  height: 2048,
+                  thumb_url: '/api/chat/media-gallery/thumbnail?mediaType=photo&id=101&maxDim=256&deviceId=d1',
+                  media_ref: 'media://photo/101'
+                }]
+              }
+            },
+            createdAt: '2026-05-22T00:00:20.000Z'
+          }
+        ])
+      });
+    });
+
+    await page.route('**/api/chat/media-gallery/thumbnail**', async route => {
+      await route.fulfill({ contentType: 'image/png', body: tinyImageBody });
+    });
+
+    await page.goto('/chat');
+
+    const tile = page.locator('.max-xl\\:hidden').getByTestId('media-gallery-tile').first();
+    await expect(tile).toBeVisible();
+    await tile.click({ button: 'right', position: { x: 12, y: 12 } });
+    const menu = page.getByTestId('media-gallery-context-menu');
+    await expect(menu).toBeVisible();
+    await expect(page.getByRole('button', { name: '查看图片' })).toBeVisible();
+    const tileBox = await tile.boundingBox();
+    const menuBox = await menu.boundingBox();
+    if (!tileBox || !menuBox) throw new Error('Media gallery context menu layout boxes were unavailable');
+    expect(menuBox.x).toBeGreaterThanOrEqual(tileBox.x - 1);
+    expect(menuBox.x).toBeLessThanOrEqual(tileBox.x + tileBox.width + 32);
+    expect(menuBox.y).toBeGreaterThanOrEqual(tileBox.y - 1);
+    expect(menuBox.y).toBeLessThanOrEqual(tileBox.y + tileBox.height + 32);
   });
 });

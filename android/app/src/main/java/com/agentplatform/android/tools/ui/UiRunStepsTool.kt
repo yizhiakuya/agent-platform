@@ -3,6 +3,7 @@ package com.agentplatform.android.tools.ui
 import android.content.Context
 import android.content.Intent
 import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.privilege.PrivilegeManager
 import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -209,11 +210,12 @@ class UiRunStepsTool(
         val packageName = step.path("package").asText("")
         if (packageName.isBlank()) return errorStep("missing package")
 
-        val intent = context.packageManager.getLaunchIntentForPackage(packageName)
-            ?: knownLaunchIntent(packageName)
+        val launchTarget = launchTarget(packageName)
+            ?: knownLaunchTarget(packageName)
             ?: return errorStep("app not installed or has no launcher activity").apply {
                 put("package", packageName)
             }
+        val intent = launchTarget.intent
         intent.addFlags(
             Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED or
@@ -221,9 +223,12 @@ class UiRunStepsTool(
         )
 
         val attempts = mapper.createArrayNode()
-        var sent = sendLaunchIntent(intent, "application", attempts)
+        var sent = sendLaunchIntentFromShell(packageName, launchTarget.activityName, attempts)
         if (!sent) {
             sent = sendLaunchIntentFromAccessibility(intent, attempts)
+        }
+        if (!sent) {
+            sent = sendLaunchIntent(intent, "application", attempts)
         }
         val requestedWaitMs = step.path("duration_ms").asLong(DEFAULT_OPEN_WAIT_MS)
         val waitMs = if (requestedWaitMs <= 0L) {
@@ -240,6 +245,15 @@ class UiRunStepsTool(
                 delay(waitMs)
                 foreground = foregroundPackage()
                 foregroundPackage = foreground.packageName
+            }
+        }
+        if (foregroundPackage != packageName) {
+            val shellSent = sendLaunchIntentFromShell(packageName, launchTarget.activityName, attempts)
+            if (shellSent) {
+                delay(SHELL_OPEN_WAIT_MS)
+                foreground = foregroundPackage()
+                foregroundPackage = foreground.packageName
+                sent = true
             }
         }
 
@@ -358,6 +372,17 @@ class UiRunStepsTool(
             }
 
     private suspend fun foregroundPackage(): ForegroundObservation {
+        val activeWindow = UiAccessibilityService
+            .activeWindowPackageWithTimeout(ACTIVE_WINDOW_PROBE_TIMEOUT_MS)
+            .packageName
+        if (activeWindow.isNotBlank()) {
+            return ForegroundObservation(
+                packageName = activeWindow,
+                source = "active_window",
+                cachedPackage = UiAccessibilityService.currentPackage(),
+                activeWindowPackage = activeWindow
+            )
+        }
         val cached = UiAccessibilityService.currentPackage()
         if (cached.isNotBlank()) {
             return ForegroundObservation(
@@ -367,14 +392,11 @@ class UiRunStepsTool(
                 activeWindowPackage = ""
             )
         }
-        val activeWindow = UiAccessibilityService
-            .activeWindowPackageWithTimeout(ACTIVE_WINDOW_PROBE_TIMEOUT_MS)
-            .packageName
         return ForegroundObservation(
-            packageName = activeWindow,
-            source = if (activeWindow.isBlank()) "unavailable" else "active_window",
+            packageName = "",
+            source = "unavailable",
             cachedPackage = "",
-            activeWindowPackage = activeWindow
+            activeWindowPackage = ""
         )
     }
 
@@ -408,17 +430,54 @@ class UiRunStepsTool(
                 })
             }
 
-    private fun knownLaunchIntent(packageName: String): Intent? =
+    private fun sendLaunchIntentFromShell(
+        packageName: String,
+        activityName: String?,
+        attempts: com.fasterxml.jackson.databind.node.ArrayNode
+    ): Boolean =
+        runCatching {
+            val results = PrivilegeManager.launchApp(packageName, activityName, timeoutSeconds = SHELL_LAUNCH_TIMEOUT_SECONDS)
+            var anyOk = false
+            results.forEach { shell ->
+                if (shell.ok) anyOk = true
+                attempts.add(mapper.createObjectNode().apply {
+                    put("source", "shizuku:${shell.strategy}")
+                    put("sent", shell.ok)
+                    if (shell.result.stderr.isNotBlank()) put("error", shell.result.stderr.take(500))
+                    if (!shell.ok && shell.result.stdout.isNotBlank()) put("stdout", shell.result.stdout.take(500))
+                    if (shell.result.timedOut) put("timed_out", true)
+                })
+            }
+            anyOk
+        }.getOrElse { error ->
+            attempts.add(mapper.createObjectNode().apply {
+                put("source", "shizuku")
+                put("sent", false)
+                put("error", error.message ?: "Shizuku launch failed")
+            })
+            false
+        }
+
+    private fun launchTarget(packageName: String): LaunchTarget? {
+        val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return null
+        return LaunchTarget(intent, intent.component?.className)
+    }
+
+    private fun knownLaunchTarget(packageName: String): LaunchTarget? =
         when (packageName) {
-            "com.tencent.mm" -> launcherIntent(packageName, "com.tencent.mm.ui.LauncherUI")
-            "com.tencent.mobileqq" -> launcherIntent(packageName, "com.tencent.mobileqq.activity.SplashActivity")
+            "com.tencent.mm" -> launcherTarget(packageName, "com.tencent.mm.ui.LauncherUI")
+            "com.tencent.mobileqq" -> launcherTarget(packageName, "com.tencent.mobileqq.activity.SplashActivity")
+            "com.max.xiaoheihe" -> launcherTarget(packageName, "com.max.xiaoheihe.SplashActivity")
             else -> null
         }
 
-    private fun launcherIntent(packageName: String, activityName: String): Intent =
-        Intent(Intent.ACTION_MAIN)
-            .addCategory(Intent.CATEGORY_LAUNCHER)
-            .setClassName(packageName, activityName)
+    private fun launcherTarget(packageName: String, activityName: String): LaunchTarget =
+        LaunchTarget(
+            Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_LAUNCHER)
+                .setClassName(packageName, activityName),
+            activityName
+        )
 
     private fun numberArg(step: JsonNode, name: String): Double? {
         val value = step.get(name) ?: return null
@@ -438,6 +497,11 @@ class UiRunStepsTool(
         val activeWindowPackage: String
     )
 
+    private data class LaunchTarget(
+        val intent: Intent,
+        val activityName: String?
+    )
+
     private fun errorStep(message: String): ObjectNode =
         mapper.createObjectNode().apply {
             put("ok", false)
@@ -448,7 +512,9 @@ class UiRunStepsTool(
         private const val MAX_STEPS = 12
         private const val DEFAULT_STEP_DELAY_MS = 200L
         private const val MAX_STEP_DELAY_MS = 1_000L
-        private const val DEFAULT_OPEN_WAIT_MS = 1_000L
+        private const val DEFAULT_OPEN_WAIT_MS = 1_500L
+        private const val SHELL_OPEN_WAIT_MS = 3_500L
+        private const val SHELL_LAUNCH_TIMEOUT_SECONDS = 8L
         private const val DEFAULT_WAIT_MS = 500L
         private const val DEFAULT_SWIPE_MS = 300L
         private const val DEFAULT_LONG_PRESS_MS = 800L

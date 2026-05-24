@@ -4,8 +4,8 @@ Stable one-command deployment for Agent Platform.
 
 The script keeps the fragile parts in one place:
 - local build validation
-- GHCR image packaging from already-built artifacts
-- LF-only remote bash execution over SSH
+- image packaging from already-built artifacts
+- local Megumin compose deployment, or LF-only remote bash execution over SSH
 - compose image replacement with backup and public asset verification
 """
 
@@ -35,9 +35,11 @@ def main() -> int:
     repo_root = Path(args.repo_root).resolve() if args.repo_root else Path(__file__).resolve().parents[4]
     services = resolve_services(args.services)
     deploy_services = resolve_deploy_services(args, services)
+    local_megumin = is_local_megumin(args.remote_dir)
 
     log(f"REPO_ROOT={repo_root}")
     log(f"SERVICES={','.join(deploy_services)}")
+    log(f"DEPLOY_MODE={'local-megumin' if local_megumin else 'remote-ghcr'}")
 
     if not args.skip_git_check:
         check_git_state(repo_root, allow_dirty=args.allow_dirty)
@@ -50,18 +52,27 @@ def main() -> int:
 
     if args.rollback_backup:
         if args.plan_only:
-            log(f"HOST={args.host}")
+            if not local_megumin:
+                log(f"HOST={args.host}")
             log(f"REMOTE_DIR={args.remote_dir}")
             log(f"PUBLIC_URL={args.public_url}")
             log(f"ROLLBACK_BACKUP={args.rollback_backup}")
             return 0
-        rollback_remote(
-            host=args.host,
-            remote_dir=args.remote_dir,
-            public_url=args.public_url,
-            backup=args.rollback_backup,
-            services=deploy_services,
-        )
+        if local_megumin:
+            rollback_local(
+                remote_dir=args.remote_dir,
+                public_url=args.public_url,
+                backup=args.rollback_backup,
+                services=deploy_services,
+            )
+        else:
+            rollback_remote(
+                host=args.host,
+                remote_dir=args.remote_dir,
+                public_url=args.public_url,
+                backup=args.rollback_backup,
+                services=deploy_services,
+            )
         return 0
 
     images: dict[str, str] = {}
@@ -73,7 +84,7 @@ def main() -> int:
     if not args.deploy_only:
         if not args.skip_local_build and not args.plan_only:
             run_local_builds(repo_root, services, java_home=args.java_home)
-        images.update(build_images(repo_root, services, args))
+        images.update(build_images(repo_root, services, args, local_megumin=local_megumin))
 
     for key, value in images.items():
         log(f"{key}={value}")
@@ -83,7 +94,8 @@ def main() -> int:
         return 0
 
     if args.plan_only:
-        log(f"HOST={args.host}")
+        if not local_megumin:
+            log(f"HOST={args.host}")
         log(f"REMOTE_DIR={args.remote_dir}")
         log(f"PUBLIC_URL={args.public_url}")
         log(f"LABEL={args.label}")
@@ -92,14 +104,23 @@ def main() -> int:
     if not images:
         raise SystemExit("No images were built or provided. Use --services or --agent-image/--web-image.")
 
-    deploy_remote(
-        host=args.host,
-        remote_dir=args.remote_dir,
-        public_url=args.public_url,
-        label=args.label,
-        agent_image=images.get("AGENT_IMAGE", ""),
-        web_image=images.get("WEB_IMAGE", ""),
-    )
+    if local_megumin:
+        deploy_local(
+            remote_dir=args.remote_dir,
+            public_url=args.public_url,
+            label=args.label,
+            agent_image=images.get("AGENT_IMAGE", ""),
+            web_image=images.get("WEB_IMAGE", ""),
+        )
+    else:
+        deploy_remote(
+            host=args.host,
+            remote_dir=args.remote_dir,
+            public_url=args.public_url,
+            label=args.label,
+            agent_image=images.get("AGENT_IMAGE", ""),
+            web_image=images.get("WEB_IMAGE", ""),
+        )
     return 0
 
 
@@ -210,16 +231,33 @@ def check_git_state(repo_root: Path, *, allow_dirty: bool) -> None:
 def run_local_builds(repo_root: Path, services: list[str], *, java_home: str) -> None:
     if "agent-service" in services:
         env = os.environ.copy()
-        if java_home:
+        if java_home and Path(java_home).exists():
             env["JAVA_HOME"] = java_home
             env["PATH"] = str(Path(java_home) / "bin") + os.pathsep + env.get("PATH", "")
-        mvnw = repo_root / "mvnw.cmd"
-        run([str(mvnw), "-pl", "agent-service", "-am", "-DskipTests", "package"], cwd=repo_root, env=env)
+        run(maven_command(repo_root) + ["-pl", "agent-service", "-am", "-DskipTests", "package"], cwd=repo_root, env=env)
     if "web" in services:
-        run(["npm", "run", "build"], cwd=repo_root / "web")
+        run(web_build_command(repo_root / "web"), cwd=repo_root / "web")
 
 
-def build_images(repo_root: Path, services: list[str], args: argparse.Namespace) -> dict[str, str]:
+def maven_command(repo_root: Path) -> list[str]:
+    if os.name == "nt":
+        return [str(repo_root / "mvnw.cmd")]
+    return ["bash", str(repo_root / "mvnw")]
+
+
+def web_build_command(web_root: Path) -> list[str]:
+    if (web_root / "pnpm-lock.yaml").exists():
+        return ["pnpm", "build"]
+    return ["npm", "run", "build"]
+
+
+def build_images(
+    repo_root: Path,
+    services: list[str],
+    args: argparse.Namespace,
+    *,
+    local_megumin: bool,
+) -> dict[str, str]:
     tag = image_tag(repo_root, args.tag_prefix)
     images: dict[str, str] = {}
 
@@ -239,16 +277,24 @@ def build_images(repo_root: Path, services: list[str], args: argparse.Namespace)
         ensure_docker(args.docker_timeout_seconds)
 
     if "agent-service" in services:
-        image = f"ghcr.io/{args.owner}/agent-platform-agent-service:{tag}"
+        image = (
+            f"agent-platform-agent-service:{tag}"
+            if local_megumin
+            else f"ghcr.io/{args.owner}/agent-platform-agent-service:{tag}"
+        )
         images["AGENT_IMAGE"] = image
         if not args.plan_only:
-            build_agent_image(agent_jar, image)
+            build_agent_image(agent_jar, image, push=not local_megumin)
 
     if "web" in services:
-        image = f"ghcr.io/{args.owner}/agent-platform-web:web-{tag}"
+        image = (
+            f"agent-platform-web:{tag}"
+            if local_megumin
+            else f"ghcr.io/{args.owner}/agent-platform-web:web-{tag}"
+        )
         images["WEB_IMAGE"] = image
         if not args.plan_only:
-            build_web_image(web_dist, web_nginx, image)
+            build_web_image(web_dist, web_nginx, image, push=not local_megumin)
 
     return images
 
@@ -347,7 +393,7 @@ def docker_server_available(docker: str) -> bool:
         return False
 
 
-def build_agent_image(jar: Path, image: str) -> None:
+def build_agent_image(jar: Path, image: str, *, push: bool) -> None:
     with tempfile.TemporaryDirectory(prefix="agent-platform-agent-service-") as tmp:
         ctx = Path(tmp)
         shutil.copy2(jar, ctx / "app.jar")
@@ -361,10 +407,11 @@ ENTRYPOINT ["java", "-XX:+UseG1GC", "-XX:MaxRAMPercentage=75", "-jar", "/app/app
 """,
         )
         run(["docker", "build", "-t", image, str(ctx)], cwd=ctx)
-        run(["docker", "push", image], cwd=ctx)
+        if push:
+            run(["docker", "push", image], cwd=ctx)
 
 
-def build_web_image(dist: Path, nginx_conf: Path, image: str) -> None:
+def build_web_image(dist: Path, nginx_conf: Path, image: str, *, push: bool) -> None:
     with tempfile.TemporaryDirectory(prefix="agent-platform-web-") as tmp:
         ctx = Path(tmp)
         shutil.copytree(dist, ctx / "dist")
@@ -375,11 +422,13 @@ def build_web_image(dist: Path, nginx_conf: Path, image: str) -> None:
 FROM nginx:alpine
 COPY dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+RUN chmod -R a+rX /usr/share/nginx/html && chmod 0644 /etc/nginx/conf.d/default.conf
 EXPOSE 80
 """,
         )
         run(["docker", "build", "-t", image, str(ctx)], cwd=ctx)
-        run(["docker", "push", image], cwd=ctx)
+        if push:
+            run(["docker", "push", image], cwd=ctx)
 
 
 def write_text(path: Path, content: str) -> None:
@@ -408,6 +457,7 @@ def deploy_remote(
         services=service_list,
         agent_image=agent_image,
         web_image=web_image,
+        pull_images=True,
     )
     encoded = base64.b64encode(remote_script.encode("utf-8")).decode("ascii")
     log(f"$ ssh {host} 'base64 -d | bash'")
@@ -420,6 +470,39 @@ def deploy_remote(
     )
     if proc.returncode != 0:
         raise SystemExit(proc.returncode)
+
+
+def deploy_local(
+    *,
+    remote_dir: str,
+    public_url: str,
+    label: str,
+    agent_image: str,
+    web_image: str,
+) -> None:
+    services = []
+    if agent_image:
+        services.append("agent-service")
+    if web_image:
+        services.append("web")
+    pull_images = any(image.startswith("ghcr.io/") for image in (agent_image, web_image) if image)
+    script = remote_deploy_script(
+        remote_dir=remote_dir,
+        public_url=public_url,
+        label=label,
+        services=" ".join(services),
+        agent_image=agent_image,
+        web_image=web_image,
+        pull_images=pull_images,
+    )
+    log("$ bash local Megumin deploy script")
+    subprocess.run(
+        resolve_command(["bash"]),
+        input=script,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
 
 
 def rollback_remote(
@@ -449,6 +532,30 @@ def rollback_remote(
         raise SystemExit(proc.returncode)
 
 
+def rollback_local(
+    *,
+    remote_dir: str,
+    public_url: str,
+    backup: str,
+    services: list[str],
+) -> None:
+    script = remote_rollback_script(
+        remote_dir=remote_dir,
+        public_url=public_url,
+        backup=backup,
+        services=" ".join(services),
+        pull_images=False,
+    )
+    log("$ bash local Megumin rollback script")
+    subprocess.run(
+        resolve_command(["bash"]),
+        input=script,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+
 def shell_single_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
@@ -465,7 +572,13 @@ def remote_deploy_script(
     services: str,
     agent_image: str,
     web_image: str,
+    pull_images: bool,
 ) -> str:
+    pull_command = (
+        "docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull $services"
+        if pull_images
+        else "echo 'SKIP_PULL=1'"
+    )
     script = f"""\
 set -euo pipefail
 cd {shell_single_quote(remote_dir)}
@@ -510,7 +623,7 @@ for image in "$agent_image" "$web_image"; do
     fi
 done
 
-docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull $services
+{pull_command}
 docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml up -d --no-build --force-recreate $services
 
 echo '--- ps ---'
@@ -569,7 +682,13 @@ def remote_rollback_script(
     public_url: str,
     backup: str,
     services: str,
+    pull_images: bool = True,
 ) -> str:
+    pull_command = (
+        "docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull $services"
+        if pull_images
+        else "echo 'SKIP_PULL=1'"
+    )
     script = f"""\
 set -euo pipefail
 cd {shell_single_quote(remote_dir)}
@@ -581,7 +700,7 @@ test -f "$backup"
 cp "$backup" docker-compose.ghcr-photo.yml
 echo "COMPOSE_RESTORED=$backup"
 
-docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull $services
+{pull_command}
 docker compose --profile default -f docker-compose.yml -f docker-compose.ghcr-photo.yml up -d --no-build --force-recreate $services
 
 echo '--- ps ---'
@@ -632,6 +751,37 @@ curl -k -fsS "$public_url" | grep -o 'assets/[^" ]*' | head -n 10 || true
 echo 'ROLLBACK_OK=1'
 """
     return script.replace("\r\n", "\n")
+
+
+def is_local_megumin(remote_dir: str) -> bool:
+    hostname = run(["hostname"], cwd=Path.cwd(), capture=True).stdout.strip().lower()
+    if hostname == "megumin":
+        return True
+    remote_path = Path(remote_dir)
+    return (
+        remote_path.exists()
+        and (remote_path / "docker-compose.yml").exists()
+        and any("agent-platform-" in line for line in docker_container_names())
+    )
+
+
+def docker_container_names() -> list[str]:
+    docker = shutil.which("docker")
+    if not docker:
+        return []
+    try:
+        result = subprocess.run(
+            resolve_command([docker, "ps", "--format", "{{.Names}}"]),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+        return result.stdout.splitlines()
+    except subprocess.CalledProcessError:
+        return []
 
 
 if __name__ == "__main__":

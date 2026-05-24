@@ -102,6 +102,49 @@ class ToolArtifactExtractorTest {
     }
 
     @Test
+    void extractsPhotoAndVideoArtifactsFromGalleryBrowseResult() throws Exception {
+        UUID sessionId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID messageId = UUID.randomUUID();
+        var result = mapper.readTree("""
+                {
+                  "tool": "media.gallery.browse",
+                  "items": [
+                    {
+                      "media_type": "photo",
+                      "id": "101",
+                      "name": "IMG_101.jpg",
+                      "bucket_name": "Camera",
+                      "media_ref": "media://photo/101",
+                      "date_taken_ms": 1710000000000
+                    },
+                    {
+                      "media_type": "video",
+                      "id": "202",
+                      "name": "VID_202.mp4",
+                      "bucket_name": "Camera",
+                      "media_ref": "media://video/202",
+                      "duration_ms": 9000
+                    }
+                  ]
+                }
+                """);
+
+        List<UpsertSessionArtifactRequest> artifacts =
+                extractor.extract(sessionId, userId, messageId, "media.gallery.browse", result);
+
+        assertThat(artifacts).hasSize(2);
+        assertThat(artifacts.get(0).artifactType()).isEqualTo("photo");
+        assertThat(artifacts.get(0).artifactKey()).isEqualTo("101");
+        assertThat(artifacts.get(0).metadata().path("photoId").asText()).isEqualTo("101");
+        assertThat(artifacts.get(1).artifactType()).isEqualTo("video");
+        assertThat(artifacts.get(1).artifactKey()).isEqualTo("202");
+        assertThat(artifacts.get(1).metadata().path("videoId").asText()).isEqualTo("202");
+        assertThat(artifacts.get(1).metadata().path("mediaType").asText()).isEqualTo("video");
+        assertThat(artifacts.get(1).metadata().path("durationMs").asLong()).isEqualTo(9000);
+    }
+
+    @Test
     void ignoresUnknownNonPhotoTools() throws Exception {
         var result = mapper.readTree("{\"id\":\"asset-1\"}");
 

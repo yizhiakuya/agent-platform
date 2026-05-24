@@ -31,6 +31,14 @@ description: Project skill for D:\agent-platform, a self-hosted mobile agent pla
 
 ## Routing — pick by the symptom
 
+**Server runtime location:** production/backend services run only on Megumin
+(`/opt/agent-platform`, LAN IP `192.168.0.109`). First check whether the
+current host is Megumin (`hostname` is `megumin`, the host has IP
+`192.168.0.109`, or `/opt/agent-platform/docker-compose.yml` exists with live
+`agent-platform-*` containers). When already on Megumin, inspect the local
+compose stack directly and do not SSH to `root@192.168.0.109`. When not on
+Megumin, SSH there first.
+
 | Problem | Files / commands |
 |---|---|
 | LLM behavior off (tone, tool use, recall) | `agent-service/.../chat/ChatService.java` + `agent-service/src/main/resources/persona/{SOUL,IDENTITY,AGENTS,TOOLS}.md` + `skills/*/SKILL.md` |
@@ -42,7 +50,7 @@ description: Project skill for D:\agent-platform, a self-hosted mobile agent pla
 | Slow repeated mobile UI tool calls | Use/extend Android `ui.run_steps` for known ordered UI workflows; keep exploratory `ui.dump_tree`/`ui.screen_capture` for unknown pages |
 | Semantic photo search noisy or wrong | `PhotosSemanticCandidatesTool.kt` + `SemanticPhotoSearchCallback.java` + `skills/photos-search/SKILL.md` + `ChatPage.tsx` |
 | Provider/model routing | `AgentBeans`, `CodexResponsesLoopRunner`, `.env`, server `agent-platform-agent` logs |
-| GHCR / megumin deploy | local Docker build + push, then `ssh root@192.168.0.109` and `/opt/agent-platform` |
+| GHCR / megumin deploy | local Docker build + push, then update `/opt/agent-platform`; SSH only when not already on Megumin |
 
 ## Adding a new device tool (the canonical workflow)
 
@@ -189,7 +197,7 @@ Web at `http://localhost` (or whatever `WEB_PUBLIC_URL` is); first user register
 
 - Before deployment or image builds, run `git status --short` and keep the worktree clean. If there are pending changes, either commit them in a named branch or intentionally stash/park them before building, so a deploy never accidentally includes unrelated dirty worktree changes.
 - If GitNexus itself has a problem (MCP/CLI call fails, tool is unavailable, index is stale/broken, or impact/change detection cannot run), stop the current business task and fix GitNexus first. Run `npx gitnexus analyze` when needed, repair/restart the MCP/CLI path if needed, and verify GitNexus works before continuing code, deploy, or debugging work.
-- Before editing code symbols, follow `AGENTS.md`: run GitNexus impact analysis and warn if risk is HIGH/CRITICAL. Before committing, run `gitnexus_detect_changes()`.
+- Before editing code symbols, follow `AGENTS.md`: run GitNexus impact analysis and warn if risk is HIGH/CRITICAL. Treat risk as advisory, not a veto; report the blast radius and continue unless the change is destructive/irreversible, crosses security/auth/payment/permissions/data-schema/deployment boundaries, or the user asks to stop. Before committing, run `gitnexus_detect_changes()` and separate whole-worktree risk from the current task's symbol-level risk.
 - Web changes: run `npm run build` in `web/`. When online deployment is available, prefer deploying and testing the live web environment directly after a successful build; use local mocked previews only when live validation is unavailable or risk isolation is needed.
 - Android ADB path on this machine is `C:\Users\admin\AppData\Local\Android\Sdk\platform-tools\adb.exe`; `adb` is not necessarily on PATH.
 - After installing the Android APK via ADB, always grant/check Agent Platform permissions before handing back. Grant runtime permissions with `pm grant com.agentplatform.android android.permission.POST_NOTIFICATIONS`, `CAMERA`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`, and `READ_MEDIA_VISUAL_USER_SELECTED`; set relevant appops to `allow` for `POST_NOTIFICATION`, `CAMERA`, media reads, `SYSTEM_ALERT_WINDOW`, `USE_FULL_SCREEN_INTENT`, `START_FOREGROUND`, background run ops, and `WAKE_LOCK`; whitelist battery with `dumpsys deviceidle whitelist +com.agentplatform.android`. Then confirm/enable accessibility (`com.agentplatform.android/com.agentplatform.android.ui.accessibility.UiAccessibilityService`), preserving existing enabled services, and verify with `settings get secure enabled_accessibility_services`, `dumpsys package com.agentplatform.android`, and `appops get com.agentplatform.android`.
@@ -233,7 +241,22 @@ docker exec agent-platform-agent curl -fsS http://localhost:8082/actuator/health
 curl -fsSI http://localhost:3000/ | head
 ```
 
-Megumin deploy shortcut when using `/opt/agent-platform/docker-compose.ghcr-photo.yml`:
+Megumin deploy shortcut when using `/opt/agent-platform/docker-compose.ghcr-photo.yml`
+and already running on Megumin:
+
+```bash
+cd /opt/agent-platform
+old='ghcr.io/yizhiakuya/agent-platform-agent-service:old-tag'
+new='ghcr.io/yizhiakuya/agent-platform-agent-service:new-tag'
+set -e
+sed -i "s#$old#$new#g" docker-compose.ghcr-photo.yml
+grep -n "$new" docker-compose.ghcr-photo.yml
+docker compose -f docker-compose.yml -f docker-compose.ghcr-photo.yml pull agent-service
+docker compose -f docker-compose.yml -f docker-compose.ghcr-photo.yml up -d --no-build --force-recreate agent-service
+docker exec agent-platform-agent curl -fsS http://localhost:8082/actuator/health
+```
+
+Remote shortcut from a non-Megumin workstation:
 
 ```powershell
 $old = 'ghcr.io/yizhiakuya/agent-platform-agent-service:old-tag'
