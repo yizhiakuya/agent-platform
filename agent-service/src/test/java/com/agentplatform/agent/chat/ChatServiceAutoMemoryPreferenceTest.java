@@ -143,17 +143,7 @@ class ChatServiceAutoMemoryPreferenceTest {
         }
 
         @Override
-        public RunResult run(ConfiguredProvider provider,
-                             UUID sessionId,
-                             UUID userId,
-                             ResolvedTools resolved,
-                             List<com.anthropic.models.messages.TextBlockParam> systemBlocks,
-                             List<com.anthropic.models.messages.ToolUnion> tools,
-                             com.anthropic.models.messages.ThinkingConfigEnabled thinking,
-                             List<com.anthropic.models.messages.MessageParam> messages,
-                             ChatEventSink sink,
-                             SseEmitter emitter,
-                             ChatCancellationToken cancellation) {
+        public RunResult run(RunRequest request) {
             return new RunResult("done", null, false);
         }
     }

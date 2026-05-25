@@ -356,9 +356,18 @@ public class ChatService {
 
     private RunResult runProvider(ConfiguredProvider provider, ProviderRunContext runContext) {
         if (provider.isAnthropicMessages()) {
-            return agentLoopRunner.run(provider, runContext.sessionId, runContext.userId, runContext.resolved,
-                    runContext.systemBlocks, runContext.tools, runContext.thinking, runContext.messages,
-                    runContext.sink, runContext.emitter, runContext.cancellation);
+            return agentLoopRunner.run(new AgentLoopRunner.RunRequest()
+                    .withProvider(provider)
+                    .withSessionId(runContext.sessionId)
+                    .withUserId(runContext.userId)
+                    .withResolved(runContext.resolved)
+                    .withSystemBlocks(runContext.systemBlocks)
+                    .withTools(runContext.tools)
+                    .withThinking(runContext.thinking)
+                    .withMessages(runContext.messages)
+                    .withSink(runContext.sink)
+                    .withEmitter(runContext.emitter)
+                    .withCancellation(runContext.cancellation));
         }
         if (provider.isCodexResponses()) {
             return codexResponsesLoopRunner.run(new CodexResponsesLoopRunner.RunRequest()

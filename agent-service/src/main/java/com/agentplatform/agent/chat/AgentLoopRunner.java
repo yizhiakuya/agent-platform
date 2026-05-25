@@ -83,171 +83,305 @@ public class AgentLoopRunner {
      * server-side timeout. Plain SSE disconnects are allowed to finish so the
      * final assistant row can be persisted for session history.
      */
-    public RunResult run(ConfiguredProvider provider,
-                         UUID sessionId,
-                         UUID userId,
-                         ResolvedTools resolved,
-                         List<TextBlockParam> systemBlocks,
-                         List<ToolUnion> tools,
-                         @Nullable ThinkingConfigEnabled thinking,
-                         List<MessageParam> messages,
-                         ChatEventSink sink,
-                         SseEmitter emitter) {
-        return run(provider, sessionId, userId, resolved, systemBlocks, tools, thinking,
-                messages, sink, emitter, new ChatCancellationToken());
-    }
-
-    public RunResult run(ConfiguredProvider provider,
-                         UUID sessionId,
-                         UUID userId,
-                         ResolvedTools resolved,
-                         List<TextBlockParam> systemBlocks,
-                         List<ToolUnion> tools,
-                         @Nullable ThinkingConfigEnabled thinking,
-                         List<MessageParam> messages,
-                         ChatEventSink sink,
-                         SseEmitter emitter,
-                         ChatCancellationToken cancellation) {
+    public RunResult run(RunRequest request) {
+        RunRequest runRequest = request == null ? new RunRequest() : request;
+        ConfiguredProvider provider = runRequest.provider;
         if (!provider.isAnthropicMessages() || provider.client() == null) {
             throw new IllegalArgumentException("AgentLoopRunner requires anthropic-messages provider");
         }
-        // Hold the active stream so explicit cancellation can close it from
-        // another thread — SDK forEach is blocking on the worker thread, the
-        // close() interrupts the iterator and forEach unwinds with an IO error
-        // which we catch and treat as a clean cancel.
-        AtomicReference<StreamResponse<RawMessageStreamEvent>> currentStream = new AtomicReference<>();
-        Runnable closeCurrentStream = () -> {
-            StreamResponse<RawMessageStreamEvent> s = currentStream.getAndSet(null);
-            if (s != null) {
-                log.info("chat run cancelled - closing SDK stream for user {}", userId);
-                try {
-                    s.close();
-                } catch (Exception ignore) {
-                    // close-on-already-closed is fine
-                }
-            }
-        };
-        cancellation.setCancelAction(closeCurrentStream);
-        emitter.onTimeout(cancellation::cancel);
 
-        StringBuilder textBuf = new StringBuilder();
-        Usage lastUsage = null;
+        AnthropicRunState state = initialRunState(runRequest, provider);
+        state.cancellation.setCancelAction(() -> closeCurrentStream(state));
+        state.emitter.onTimeout(state.cancellation::cancel);
+
         int maxIterations = props.agent().maxAgentIterations();
-        ToolCallBudget toolBudget = new ToolCallBudget(
+        for (int iter = 0; iter < maxIterations; iter++) {
+            RunResult terminal = runIteration(state);
+            if (terminal != null) {
+                return terminal;
+            }
+        }
+        return exhaustedRunResult(state, maxIterations);
+    }
+
+    private AnthropicRunState initialRunState(RunRequest request, ConfiguredProvider provider) {
+        AnthropicRunState state = new AnthropicRunState();
+        state.provider = provider;
+        state.sessionId = request.sessionId;
+        state.userId = request.userId;
+        state.resolved = request.resolved();
+        state.systemBlocks = request.systemBlocks();
+        state.tools = request.tools();
+        state.thinking = request.thinking;
+        state.messages = request.messages();
+        state.sink = request.sink();
+        state.emitter = request.emitter();
+        state.cancellation = request.cancellation();
+        state.textBuf = new StringBuilder();
+        state.currentStream = new AtomicReference<>();
+        state.toolBudget = new ToolCallBudget(
                 props.agent().maxToolCallsPerTurn(),
                 props.agent().maxConsecutiveUiToolCalls());
-        for (int iter = 0; iter < maxIterations; iter++) {
-            // If a previous iteration drained without erroring but cancel
-            // already fired, bail before opening another (billed) stream.
-            if (cancellation.isCancelled()) {
-                return new RunResult(textBuf.toString(), lastUsage, true);
-            }
-            textBuf.setLength(0);
+        return state;
+    }
 
-            MessageCreateParams.Builder pb = MessageCreateParams.builder()
-                    .model(provider.model())
-                    .maxTokens(props.agent().maxTokens())
-                    .systemOfTextBlockParams(systemBlocks)
-                    .messages(messages)
-                    .tools(tools);
-            if (thinking != null) {
-                pb.thinking(thinking);
-            }
-            MessageCreateParams params = pb.build();
-
-            Message finalMsg;
-            MessageAccumulator acc = MessageAccumulator.create();
-            try (StreamResponse<RawMessageStreamEvent> stream =
-                         provider.client().messages().createStreaming(params)) {
-                currentStream.set(stream);
-                stream.stream().forEach(event -> {
-                    acc.accumulate(event);
-                    event.contentBlockDelta().ifPresent(d -> {
-                        d.delta().text().ifPresent(t -> {
-                            String chunk = t.text();
-                            if (chunk != null && !chunk.isEmpty()) {
-                                textBuf.append(chunk);
-                                sink.emit(SseEvent.assistantMessage(mapper, chunk));
-                            }
-                        });
-                        // input_json_delta: SDK accumulator handles tool_use args.
-                        // thinking delta: hidden from the web client by design.
-                    });
-                });
-                finalMsg = acc.message();
-            } catch (RuntimeException e) {
-                if (cancellation.isCancelled()) {
-                    // Explicit cancellation interrupted the stream - normal,
-                    // not a setup/transport failure. Don't propagate (would
-                    // trigger provider failover for nothing) and don't let
-                    // the partial text get persisted downstream.
-                    return new RunResult(textBuf.toString(), lastUsage, true);
-                }
-                throw e;
-            } finally {
-                currentStream.set(null);
-            }
-            if (finalMsg.usage() != null) {
-                lastUsage = finalMsg.usage();
-            }
-
-            // Append assistant turn — Message.toParam() converts the SDK Message
-            // (List<ContentBlock>) into the MessageParam shape ready for replay.
-            messages.add(finalMsg.toParam());
-
-            Optional<StopReason> stop = finalMsg.stopReason();
-            // StopReason is an SDK value object, not an enum — must use equals(),
-            // reference compare with `!=` was never matching and aborted the
-            // agent loop on every tool_use turn, so device tools never fired.
-            if (stop.isEmpty() || !StopReason.TOOL_USE.equals(stop.get())) {
-                // Clean finish (end_turn / max_tokens / stop_sequence / refusal).
-                return new RunResult(textBuf.toString(), lastUsage, cancellation.isCancelled());
-            }
-
-            // Run every tool_use block produced by the assistant; pack results
-            // into one user-role message of tool_result blocks. Server-side
-            // tools (web_search) won't appear here — SDK already resolves them
-            // server-side and surfaces only the results in finalMsg.content().
-            List<ContentBlockParam> toolResults = new ArrayList<>();
-            for (ContentBlock cb : finalMsg.content()) {
-                Optional<ToolUseBlock> tuOpt = cb.toolUse();
-                if (tuOpt.isEmpty()) continue;
-                ToolUseBlock tu = tuOpt.get();
-                ToolCallBudget.Decision budgetDecision = toolBudget.before(tu.name());
-                if (!budgetDecision.allowed()) {
-                    log.info("agentic loop paused by tool budget user={} used={}/{} consecutiveUi={}/{} tool={}",
-                            userId, toolBudget.used(), toolBudget.maxToolCalls(),
-                            toolBudget.consecutiveUi(), toolBudget.maxConsecutiveUiToolCalls(), tu.name());
-                    return RunResult.exhausted(textBuf.toString(), lastUsage, budgetDecision.exhaustionReason());
-                }
-                ExecutionResult er;
-                try {
-                    er = executeOneToolUse(tu, resolved, userId, sessionId, budgetDecision.decorate(sink));
-                } catch (Exception t) {
-                    log.error("tool_use threw name={} err={}", tu.name(), t.toString(), t);
-                    er = ExecutionResult.error("tool execution failed: " + t.getMessage());
-                }
-                toolResults.add(ContentBlockParam.ofToolResult(buildToolResultBlock(tu, er)));
-            }
-            if (toolResults.isEmpty()) {
-                // Assistant said tool_use but emitted no tool_use blocks (rare).
-                // Bail rather than loop forever on identical request.
-                log.warn("stop_reason=tool_use but no tool_use blocks present — aborting loop");
-                return new RunResult(textBuf.toString(), lastUsage, cancellation.isCancelled());
-            }
-            messages.add(MessageParam.builder()
-                    .role(MessageParam.Role.USER)
-                    .contentOfBlockParams(toolResults)
-                    .build());
+    private void closeCurrentStream(AnthropicRunState state) {
+        StreamResponse<RawMessageStreamEvent> stream = state.currentStream.getAndSet(null);
+        if (stream == null) {
+            return;
         }
-        log.warn("agentic loop hit maxAgentIterations={} for user {}", maxIterations, userId);
+        log.info("chat run cancelled - closing SDK stream for user {}", state.userId);
+        try {
+            stream.close();
+        } catch (Exception ignore) {
+            // close-on-already-closed is fine
+        }
+    }
+
+    private RunResult runIteration(AnthropicRunState state) {
+        if (state.cancellation.isCancelled()) {
+            return new RunResult(state.textBuf.toString(), state.lastUsage, true);
+        }
+        state.textBuf.setLength(0);
+
+        Message finalMsg = streamMessage(state);
+        if (finalMsg == null) {
+            return new RunResult(state.textBuf.toString(), state.lastUsage, true);
+        }
+        if (finalMsg.usage() != null) {
+            state.lastUsage = finalMsg.usage();
+        }
+
+        state.messages.add(finalMsg.toParam());
+        if (!isToolUseTurn(finalMsg)) {
+            return new RunResult(state.textBuf.toString(), state.lastUsage, state.cancellation.isCancelled());
+        }
+        return executeToolUseTurn(state, finalMsg);
+    }
+
+    private Message streamMessage(AnthropicRunState state) {
+        MessageAccumulator acc = MessageAccumulator.create();
+        try (StreamResponse<RawMessageStreamEvent> stream =
+                     state.provider.client().messages().createStreaming(messageCreateParams(state))) {
+            state.currentStream.set(stream);
+            stream.stream().forEach(event -> handleStreamEvent(event, acc, state));
+            return acc.message();
+        } catch (RuntimeException e) {
+            if (state.cancellation.isCancelled()) {
+                return null;
+            }
+            throw e;
+        } finally {
+            state.currentStream.set(null);
+        }
+    }
+
+    private MessageCreateParams messageCreateParams(AnthropicRunState state) {
+        MessageCreateParams.Builder pb = MessageCreateParams.builder()
+                .model(state.provider.model())
+                .maxTokens(props.agent().maxTokens())
+                .systemOfTextBlockParams(state.systemBlocks)
+                .messages(state.messages)
+                .tools(state.tools);
+        if (state.thinking != null) {
+            pb.thinking(state.thinking);
+        }
+        return pb.build();
+    }
+
+    private void handleStreamEvent(RawMessageStreamEvent event,
+                                   MessageAccumulator acc,
+                                   AnthropicRunState state) {
+        acc.accumulate(event);
+        event.contentBlockDelta().ifPresent(d -> d.delta().text().ifPresent(t -> {
+            String chunk = t.text();
+            if (chunk != null && !chunk.isEmpty()) {
+                state.textBuf.append(chunk);
+                state.sink.emit(SseEvent.assistantMessage(mapper, chunk));
+            }
+        }));
+    }
+
+    private boolean isToolUseTurn(Message finalMsg) {
+        if (finalMsg == null) {
+            return false;
+        }
+        Optional<StopReason> stop = finalMsg.stopReason();
+        return stop.isPresent() && StopReason.TOOL_USE.equals(stop.get());
+    }
+
+    private RunResult executeToolUseTurn(AnthropicRunState state, Message finalMsg) {
+        List<ContentBlockParam> toolResults = new ArrayList<>();
+        for (ContentBlock cb : finalMsg.content()) {
+            Optional<ToolUseBlock> tuOpt = cb.toolUse();
+            if (tuOpt.isPresent()) {
+                RunResult exhausted = addToolResult(state, toolResults, tuOpt.get());
+                if (exhausted != null) {
+                    return exhausted;
+                }
+            }
+        }
+        if (toolResults.isEmpty()) {
+            log.warn("stop_reason=tool_use but no tool_use blocks present — aborting loop");
+            return new RunResult(state.textBuf.toString(), state.lastUsage, state.cancellation.isCancelled());
+        }
+        state.messages.add(MessageParam.builder()
+                .role(MessageParam.Role.USER)
+                .contentOfBlockParams(toolResults)
+                .build());
+        return null;
+    }
+
+    private RunResult addToolResult(AnthropicRunState state, List<ContentBlockParam> toolResults, ToolUseBlock tu) {
+        ToolCallBudget.Decision budgetDecision = state.toolBudget.before(tu.name());
+        if (!budgetDecision.allowed()) {
+            log.info("agentic loop paused by tool budget user={} used={}/{} consecutiveUi={}/{} tool={}",
+                    state.userId, state.toolBudget.used(), state.toolBudget.maxToolCalls(),
+                    state.toolBudget.consecutiveUi(), state.toolBudget.maxConsecutiveUiToolCalls(), tu.name());
+            return RunResult.exhausted(state.textBuf.toString(), state.lastUsage,
+                    budgetDecision.exhaustionReason());
+        }
+        ExecutionResult er = executeToolUseSafely(state, tu, budgetDecision);
+        toolResults.add(ContentBlockParam.ofToolResult(buildToolResultBlock(tu, er)));
+        return null;
+    }
+
+    private ExecutionResult executeToolUseSafely(AnthropicRunState state,
+                                                ToolUseBlock tu,
+                                                ToolCallBudget.Decision budgetDecision) {
+        try {
+            return executeOneToolUse(tu, state.resolved, state.userId, state.sessionId,
+                    budgetDecision.decorate(state.sink));
+        } catch (Exception t) {
+            log.error("tool_use threw name={} err={}", tu.name(), t.toString(), t);
+            return ExecutionResult.error("tool execution failed: " + t.getMessage());
+        }
+    }
+
+    private RunResult exhaustedRunResult(AnthropicRunState state, int maxIterations) {
+        log.warn("agentic loop hit maxAgentIterations={} for user {}", maxIterations, state.userId);
         return RunResult.exhausted(
-                textBuf.toString(),
-                lastUsage,
+                state.textBuf.toString(),
+                state.lastUsage,
                 "任务还没完成，但本轮思考/工具循环已达到上限（" + maxIterations + " 轮，已调用 "
-                        + toolBudget.used() + "/" + toolBudget.maxToolCalls()
+                        + state.toolBudget.used() + "/" + state.toolBudget.maxToolCalls()
                         + " 个工具）。请发送“继续”，我会接着当前页面状态往下做。"
         );
+    }
+
+    public static final class RunRequest {
+        private ConfiguredProvider provider;
+        private UUID sessionId;
+        private UUID userId;
+        private ResolvedTools resolved;
+        private List<TextBlockParam> systemBlocks;
+        private List<ToolUnion> tools;
+        private ThinkingConfigEnabled thinking;
+        private List<MessageParam> messages;
+        private ChatEventSink sink;
+        private SseEmitter emitter;
+        private ChatCancellationToken cancellation;
+
+        public RunRequest withProvider(ConfiguredProvider provider) {
+            this.provider = provider;
+            return this;
+        }
+
+        public RunRequest withSessionId(UUID sessionId) {
+            this.sessionId = sessionId;
+            return this;
+        }
+
+        public RunRequest withUserId(UUID userId) {
+            this.userId = userId;
+            return this;
+        }
+
+        public RunRequest withResolved(ResolvedTools resolved) {
+            this.resolved = resolved;
+            return this;
+        }
+
+        public RunRequest withSystemBlocks(List<TextBlockParam> systemBlocks) {
+            this.systemBlocks = systemBlocks;
+            return this;
+        }
+
+        public RunRequest withTools(List<ToolUnion> tools) {
+            this.tools = tools;
+            return this;
+        }
+
+        public RunRequest withThinking(@Nullable ThinkingConfigEnabled thinking) {
+            this.thinking = thinking;
+            return this;
+        }
+
+        public RunRequest withMessages(List<MessageParam> messages) {
+            this.messages = messages;
+            return this;
+        }
+
+        public RunRequest withSink(ChatEventSink sink) {
+            this.sink = sink;
+            return this;
+        }
+
+        public RunRequest withEmitter(SseEmitter emitter) {
+            this.emitter = emitter;
+            return this;
+        }
+
+        public RunRequest withCancellation(ChatCancellationToken cancellation) {
+            this.cancellation = cancellation;
+            return this;
+        }
+
+        private ResolvedTools resolved() {
+            return resolved == null ? new ResolvedTools(List.of(), java.util.Map.of()) : resolved;
+        }
+
+        private List<TextBlockParam> systemBlocks() {
+            return systemBlocks == null ? List.of() : systemBlocks;
+        }
+
+        private List<ToolUnion> tools() {
+            return tools == null ? List.of() : tools;
+        }
+
+        private List<MessageParam> messages() {
+            return messages == null ? new ArrayList<>() : messages;
+        }
+
+        ChatEventSink sink() {
+            return sink == null ? event -> { } : sink;
+        }
+
+        SseEmitter emitter() {
+            return emitter == null ? new SseEmitter() : emitter;
+        }
+
+        ChatCancellationToken cancellation() {
+            return cancellation == null ? new ChatCancellationToken() : cancellation;
+        }
+    }
+
+    private static final class AnthropicRunState {
+        private ConfiguredProvider provider;
+        private UUID sessionId;
+        private UUID userId;
+        private ResolvedTools resolved;
+        private List<TextBlockParam> systemBlocks;
+        private List<ToolUnion> tools;
+        private ThinkingConfigEnabled thinking;
+        private List<MessageParam> messages;
+        private ChatEventSink sink;
+        private SseEmitter emitter;
+        private ChatCancellationToken cancellation;
+        private StringBuilder textBuf;
+        private Usage lastUsage;
+        private AtomicReference<StreamResponse<RawMessageStreamEvent>> currentStream;
+        private ToolCallBudget toolBudget;
     }
 
     /**

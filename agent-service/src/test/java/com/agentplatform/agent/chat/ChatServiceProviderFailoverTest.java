@@ -278,18 +278,8 @@ class ChatServiceProviderFailoverTest {
         }
 
         @Override
-        public RunResult run(ConfiguredProvider provider,
-                             UUID sessionId,
-                             UUID userId,
-                             ResolvedTools resolved,
-                             List<com.anthropic.models.messages.TextBlockParam> systemBlocks,
-                             List<com.anthropic.models.messages.ToolUnion> tools,
-                             com.anthropic.models.messages.ThinkingConfigEnabled thinking,
-                             List<com.anthropic.models.messages.MessageParam> messages,
-                             ChatEventSink sink,
-                             SseEmitter emitter,
-                             ChatCancellationToken cancellation) {
-            sink.emit(SseEvent.assistantMessage(new ObjectMapper(), "partial"));
+        public RunResult run(RunRequest request) {
+            request.sink().emit(SseEvent.assistantMessage(new ObjectMapper(), "partial"));
             throw new RuntimeException("stream failed");
         }
     }
@@ -301,18 +291,8 @@ class ChatServiceProviderFailoverTest {
         }
 
         @Override
-        public RunResult run(ConfiguredProvider provider,
-                             UUID sessionId,
-                             UUID userId,
-                             ResolvedTools resolved,
-                             List<com.anthropic.models.messages.TextBlockParam> systemBlocks,
-                             List<com.anthropic.models.messages.ToolUnion> tools,
-                             com.anthropic.models.messages.ThinkingConfigEnabled thinking,
-                             List<com.anthropic.models.messages.MessageParam> messages,
-                             ChatEventSink sink,
-                             SseEmitter emitter,
-                             ChatCancellationToken cancellation) {
-            sink.emit(SseEvent.assistantMessage(new ObjectMapper(), "streamed but disconnected"));
+        public RunResult run(RunRequest request) {
+            request.sink().emit(SseEvent.assistantMessage(new ObjectMapper(), "streamed but disconnected"));
             return new RunResult("final after disconnect", null, false);
         }
     }
