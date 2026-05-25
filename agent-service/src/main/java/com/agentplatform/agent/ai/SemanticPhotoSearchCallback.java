@@ -249,163 +249,246 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
 
     @Override
     public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
-        if (args == null || args.isNull()) {
-            args = mapper.createObjectNode();
-        }
-        String query = args.path(QUERY_FIELD).asText("").trim();
-        if (query.isBlank()) {
+        RealtimeSearchRequest request = realtimeSearchRequest(args);
+        if (request.query().isBlank()) {
             return ExecutionResult.error("query is required");
         }
-        int limit = clamp(args.path("limit").asInt(3), 1, 12);
-        int reviewLimit = args.has(REVIEW_LIMIT_FIELD)
-                ? clamp(args.path(REVIEW_LIMIT_FIELD).asInt(limit), limit, 12)
-                : limit;
-        SearchContract contract = searchContract(args, query, limit, reviewLimit);
-        int scanLimit = clamp(
-                args.path("scan_limit").asInt(Math.max(60, contract.candidateK() * 4)),
-                contract.candidateK(),
-                200);
-
-        if (sink != null) {
-            sink.emit(SseEvent.toolCallStarted(mapper, deviceId, TOOL_NAME, args));
-        }
-
-        ExecutionResult indexed = tryIndexedSearch(query, args, userId, contract, sink);
+        emitToolCallStarted(request.args(), sink);
+        ExecutionResult indexed = tryIndexedSearch(request.query(), request.args(), userId, request.contract(), sink);
         if (indexed != null) {
             return indexed;
         }
+        return realtimeSearch(request, sink);
+    }
+
+    private RealtimeSearchRequest realtimeSearchRequest(JsonNode args) {
+        JsonNode safeArgs = args == null || args.isNull() ? mapper.createObjectNode() : args;
+        String query = safeArgs.path(QUERY_FIELD).asText("").trim();
+        int limit = clamp(safeArgs.path("limit").asInt(3), 1, 12);
+        int reviewLimit = safeArgs.has(REVIEW_LIMIT_FIELD)
+                ? clamp(safeArgs.path(REVIEW_LIMIT_FIELD).asInt(limit), limit, 12)
+                : limit;
+        SearchContract contract = searchContract(safeArgs, query, limit, reviewLimit);
+        int scanLimit = clamp(
+                safeArgs.path("scan_limit").asInt(Math.max(60, contract.candidateK() * 4)),
+                contract.candidateK(),
+                200);
+        return new RealtimeSearchRequest(safeArgs, query, limit, reviewLimit, scanLimit, contract);
+    }
+
+    private void emitToolCallStarted(JsonNode args, ChatEventSink sink) {
+        if (sink != null) {
+            sink.emit(SseEvent.toolCallStarted(mapper, deviceId, TOOL_NAME, args));
+        }
+    }
+
+    private ExecutionResult realtimeSearch(RealtimeSearchRequest request, ChatEventSink sink) {
         if (!fallbackRealtime) {
-            ObjectNode empty = mapper.createObjectNode();
-            empty.put(QUERY_FIELD, query);
-            empty.put(COUNT_FIELD, 0);
-            empty.put(SEMANTIC_ENGINE_FIELD, "photo_index_unavailable");
-            empty.put(FALLBACK_REALTIME_FIELD, false);
-            empty.set(PHOTOS_FIELD, mapper.createArrayNode());
-            if (sink != null) sink.emit(SseEvent.toolCallResult(mapper, TOOL_NAME, empty));
-            return ExecutionResult.text(empty.toString());
+            return emitTextResult(photoIndexUnavailableResult(request.query()), sink);
         }
 
-        ObjectNode candidateArgs = mapper.createObjectNode();
-        int candidateLimit = Math.min(20, Math.min(scanLimit, Math.max(contract.candidateK(), contract.reviewLimit())));
-        candidateArgs.put(QUERY_FIELD, query);
-        candidateArgs.put("limit", candidateLimit);
-        candidateArgs.put("scan_limit", scanLimit);
-        candidateArgs.put("ocr", !args.has("ocr") || args.path("ocr").asBoolean(true));
-        copyIfPresent(args, candidateArgs, BUCKET_ID_FIELD);
-        copyIfPresent(args, candidateArgs, NAME_CONTAINS_FIELD);
-        copyIfPresent(args, candidateArgs, DATE_AFTER_FIELD);
-        copyIfPresent(args, candidateArgs, DATE_BEFORE_FIELD);
-
-        ToolResult raw = dispatcher.dispatch(deviceId, boundUserId, CANDIDATE_TOOL, candidateArgs);
-        if (raw == null || raw.hasError()) {
-            String msg = raw == null || raw.error() == null ? "semantic candidate scan failed" : raw.error().message();
-            if (sink != null) sink.emit(SseEvent.error(mapper, "Tool '" + TOOL_NAME + "' failed: " + msg));
-            return ExecutionResult.error(msg);
+        ToolResult raw = dispatcher.dispatch(deviceId, boundUserId, CANDIDATE_TOOL, candidateArgs(request));
+        ExecutionResult failure = candidateScanFailure(raw, sink);
+        if (failure != null) {
+            return failure;
         }
 
         JsonNode candidateRoot = raw.value();
-        JsonNode photos = candidateRoot == null ? null : candidateRoot.path(PHOTOS_FIELD);
-        if (photos == null || !photos.isArray() || photos.isEmpty()) {
-            ObjectNode empty = mapper.createObjectNode();
-            empty.put(QUERY_FIELD, query);
-            empty.put(COUNT_FIELD, 0);
-            empty.put(SCANNED_FIELD, candidateRoot == null ? 0 : candidateRoot.path(SCANNED_FIELD).asInt(0));
-            empty.put(SEMANTIC_ENGINE_FIELD, "realtime_text_embedding");
-            empty.put(FALLBACK_REALTIME_FIELD, true);
-            empty.set(PHOTOS_FIELD, mapper.createArrayNode());
-            if (sink != null) sink.emit(SseEvent.toolCallResult(mapper, TOOL_NAME, empty));
-            return ExecutionResult.text(empty.toString());
+        JsonNode photos = candidatePhotos(candidateRoot);
+        if (photos.isEmpty()) {
+            return emitTextResult(emptyRealtimeResult(request.query(), candidateRoot), sink);
         }
+        return embeddedRealtimeSearch(request, candidateRoot, photos, sink);
+    }
 
-        float[] queryEmbedding;
+    private ObjectNode photoIndexUnavailableResult(String query) {
+        ObjectNode empty = mapper.createObjectNode();
+        empty.put(QUERY_FIELD, query);
+        empty.put(COUNT_FIELD, 0);
+        empty.put(SEMANTIC_ENGINE_FIELD, "photo_index_unavailable");
+        empty.put(FALLBACK_REALTIME_FIELD, false);
+        empty.set(PHOTOS_FIELD, mapper.createArrayNode());
+        return empty;
+    }
+
+    private ObjectNode candidateArgs(RealtimeSearchRequest request) {
+        ObjectNode candidateArgs = mapper.createObjectNode();
+        int candidateLimit = Math.min(20, Math.min(
+                request.scanLimit(),
+                Math.max(request.contract().candidateK(), request.contract().reviewLimit())));
+        candidateArgs.put(QUERY_FIELD, request.query());
+        candidateArgs.put("limit", candidateLimit);
+        candidateArgs.put("scan_limit", request.scanLimit());
+        candidateArgs.put("ocr", !request.args().has("ocr") || request.args().path("ocr").asBoolean(true));
+        copyIfPresent(request.args(), candidateArgs, BUCKET_ID_FIELD);
+        copyIfPresent(request.args(), candidateArgs, NAME_CONTAINS_FIELD);
+        copyIfPresent(request.args(), candidateArgs, DATE_AFTER_FIELD);
+        copyIfPresent(request.args(), candidateArgs, DATE_BEFORE_FIELD);
+        return candidateArgs;
+    }
+
+    private ExecutionResult candidateScanFailure(ToolResult raw, ChatEventSink sink) {
+        if (raw == null || raw.hasError()) {
+            String msg = raw == null || raw.error() == null ? "semantic candidate scan failed" : raw.error().message();
+            emitError(sink, "Tool '" + TOOL_NAME + "' failed: " + msg);
+            return ExecutionResult.error(msg);
+        }
+        return null;
+    }
+
+    private void emitError(ChatEventSink sink, String message) {
+        if (sink != null) {
+            sink.emit(SseEvent.error(mapper, message));
+        }
+    }
+
+    private JsonNode candidatePhotos(JsonNode candidateRoot) {
+        JsonNode photos = candidateRoot == null ? null : candidateRoot.path(PHOTOS_FIELD);
+        return photos != null && photos.isArray() ? photos : mapper.createArrayNode();
+    }
+
+    private ObjectNode emptyRealtimeResult(String query, JsonNode candidateRoot) {
+        ObjectNode empty = mapper.createObjectNode();
+        empty.put(QUERY_FIELD, query);
+        empty.put(COUNT_FIELD, 0);
+        empty.put(SCANNED_FIELD, candidateRoot == null ? 0 : candidateRoot.path(SCANNED_FIELD).asInt(0));
+        empty.put(SEMANTIC_ENGINE_FIELD, "realtime_text_embedding");
+        empty.put(FALLBACK_REALTIME_FIELD, true);
+        empty.set(PHOTOS_FIELD, mapper.createArrayNode());
+        return empty;
+    }
+
+    private ExecutionResult embeddedRealtimeSearch(RealtimeSearchRequest request,
+                                                   JsonNode candidateRoot,
+                                                   JsonNode photos,
+                                                   ChatEventSink sink) {
+        QueryEmbeddingResult queryEmbedding = queryEmbedding(request.query());
+        if (queryEmbedding.failed()) {
+            ObjectNode fallback = fallbackResult(
+                    request.query(), candidateRoot, photos, request.contract(), queryEmbedding.failureReason());
+            return emitVisionResult(fallback, sink);
+        }
+        List<ScoredPhoto> scored = scoreRealtimePhotos(photos, queryEmbedding.value(), tokenize(request.query()));
+        sortScoredPhotos(scored, request.contract());
+        return emitVisionResult(realtimeResult(request, candidateRoot, scored), sink);
+    }
+
+    private QueryEmbeddingResult queryEmbedding(String query) {
         try {
-            queryEmbedding = embeddingService.embed("query: " + query);
+            return new QueryEmbeddingResult(embeddingService.embed("query: " + query), null);
         } catch (Exception e) {
             log.warn("[semantic-photos] query embedding failed: {}", e.getMessage());
-            ObjectNode fallback = fallbackResult(query, candidateRoot, photos, contract, "embedding_failed: " + e.getMessage());
-            if (sink != null) sink.emit(SseEvent.toolCallResult(mapper, TOOL_NAME, fallback));
-            return textOrVision(fallback);
+            return new QueryEmbeddingResult(null, "embedding_failed: " + e.getMessage());
         }
+    }
 
-        Set<String> queryTerms = tokenize(query);
+    private List<ScoredPhoto> scoreRealtimePhotos(JsonNode photos, float[] queryEmbedding, Set<String> queryTerms) {
         List<ScoredPhoto> scored = new ArrayList<>();
         for (JsonNode photo : photos) {
-            String semanticText = photo.path("semantic_text").asText("");
-            if (semanticText.isBlank()) {
-                semanticText = photo.path("name").asText("");
-            }
-            float semanticScore = 0.0f;
-            String reason = "embedding";
-            try {
-                float[] photoEmbedding = embeddingService.embed("photo: " + semanticText);
-                semanticScore = cosine(queryEmbedding, photoEmbedding);
-            } catch (Exception e) {
-                reason = "local_score_only";
-                log.debug("[semantic-photos] candidate embedding failed id={} err={}",
-                        photo.path("id").asText(), e.getMessage());
-            }
-            int localScore = photo.path("local_score").asInt(0);
-            float recencyScore = recencyScore(photo.path(DATE_TAKEN_MS_FIELD).asLong(0L));
-            float visualScore = visualLabelScore(queryTerms, photo.path(VISUAL_LABELS_FIELD));
-            float deviceVisualScore = (float) photo.path("visual_score").asDouble(0.0);
-            float totalScore = scoreCandidate(semanticScore, localScore, visualScore, deviceVisualScore, recencyScore);
-            String matchReason = reason;
-            if (visualScore > 0.0f || deviceVisualScore > 0.0f) {
-                matchReason += "+visual_labels";
-            }
-            scored.add(new ScoredPhoto(
-                    photo,
-                    totalScore,
-                    semanticScore,
-                    localScore,
-                    visualScore,
-                    deviceVisualScore,
-                    recencyScore,
-                    matchReason));
+            scored.add(scoreRealtimePhoto(photo, queryEmbedding, queryTerms));
         }
+        return scored;
+    }
 
-        sortScoredPhotos(scored, contract);
+    private ScoredPhoto scoreRealtimePhoto(JsonNode photo, float[] queryEmbedding, Set<String> queryTerms) {
+        CandidateEmbeddingResult embedding = candidateEmbedding(photo, queryEmbedding);
+        int localScore = photo.path("local_score").asInt(0);
+        float recencyScore = recencyScore(photo.path(DATE_TAKEN_MS_FIELD).asLong(0L));
+        float visualScore = visualLabelScore(queryTerms, photo.path(VISUAL_LABELS_FIELD));
+        float deviceVisualScore = (float) photo.path("visual_score").asDouble(0.0);
+        float totalScore = scoreCandidate(embedding.score(), localScore, visualScore, deviceVisualScore, recencyScore);
+        return new ScoredPhoto(
+                photo,
+                totalScore,
+                embedding.score(),
+                localScore,
+                visualScore,
+                deviceVisualScore,
+                recencyScore,
+                matchReason(embedding.reason(), visualScore, deviceVisualScore));
+    }
 
+    private CandidateEmbeddingResult candidateEmbedding(JsonNode photo, float[] queryEmbedding) {
+        try {
+            float[] photoEmbedding = embeddingService.embed("photo: " + semanticText(photo));
+            return new CandidateEmbeddingResult(cosine(queryEmbedding, photoEmbedding), "embedding");
+        } catch (Exception e) {
+            log.debug("[semantic-photos] candidate embedding failed id={} err={}",
+                    photo.path("id").asText(), e.getMessage());
+            return new CandidateEmbeddingResult(0.0f, "local_score_only");
+        }
+    }
+
+    private static String semanticText(JsonNode photo) {
+        String semanticText = photo.path("semantic_text").asText("");
+        return semanticText.isBlank() ? photo.path("name").asText("") : semanticText;
+    }
+
+    private static String matchReason(String reason, float visualScore, float deviceVisualScore) {
+        return visualScore > 0.0f || deviceVisualScore > 0.0f ? reason + "+visual_labels" : reason;
+    }
+
+    private ObjectNode realtimeResult(RealtimeSearchRequest request, JsonNode candidateRoot, List<ScoredPhoto> scored) {
         ArrayNode outPhotos = mapper.createArrayNode();
         ArrayNode reviewCandidates = mapper.createArrayNode();
-        int take = Math.min(reviewLimit, scored.size());
-        int finalTake = Math.min(limit, scored.size());
+        int take = Math.min(request.reviewLimit(), scored.size());
+        int finalTake = Math.min(request.limit(), scored.size());
         for (int i = 0; i < take; i++) {
-            ScoredPhoto hit = scored.get(i);
-            ObjectNode copy = hit.photo().deepCopy();
-            copy.put("rank", i + 1);
-            copy.put("semantic_score", round(hit.semanticScore()));
-            copy.put("server_visual_score", round(hit.visualScore()));
-            copy.put("device_visual_score", round(hit.deviceVisualScore()));
-            copy.put("recency_score", round(hit.recencyScore()));
-            copy.put(MATCH_SCORE_FIELD, round(hit.totalScore()));
-            copy.put(MATCH_REASON_FIELD, hit.reason());
-            copy.put(CANDIDATE_ONLY_FIELD, i >= finalTake);
-            if (i < finalTake) {
-                copy.put(SOURCE_FIELD, "realtime_scan");
-                outPhotos.add(copy);
-            } else {
-                reviewCandidates.add(withoutBinaryFields(copy));
-            }
+            addRealtimePhoto(scored.get(i), i + 1, finalTake, outPhotos, reviewCandidates);
         }
 
-        ObjectNode result = selectedResult(query, outPhotos.size(), limit, reviewLimit, take, contract);
+        ObjectNode result = selectedResult(
+                request.query(), outPhotos.size(), request.limit(), request.reviewLimit(), take, request.contract());
         result.put(SCANNED_FIELD, candidateRoot.path(SCANNED_FIELD).asInt(scored.size()));
         result.put(SEMANTIC_ENGINE_FIELD, "realtime_text_embedding+visual_labels");
         result.put(FALLBACK_REALTIME_FIELD, true);
         result.put(EMBEDDING_DIM_FIELD, embeddingService.dim());
         result.set(PHOTOS_FIELD, outPhotos);
         attachDisplayMedia(result, outPhotos);
-        if (shouldExposeReviewCandidates(contract) && !reviewCandidates.isEmpty()) {
+        if (shouldExposeReviewCandidates(request.contract()) && !reviewCandidates.isEmpty()) {
             result.set(REVIEW_CANDIDATES_FIELD, reviewCandidates);
         }
         addInspectNext(result);
-        attachFullImageForSingleResult(result, contract);
+        attachFullImageForSingleResult(result, request.contract());
+        return result;
+    }
 
+    private void addRealtimePhoto(ScoredPhoto hit,
+                                  int rank,
+                                  int finalTake,
+                                  ArrayNode outPhotos,
+                                  ArrayNode reviewCandidates) {
+        ObjectNode copy = hit.photo().deepCopy();
+        copy.put("rank", rank);
+        copy.put("semantic_score", round(hit.semanticScore()));
+        copy.put("server_visual_score", round(hit.visualScore()));
+        copy.put("device_visual_score", round(hit.deviceVisualScore()));
+        copy.put("recency_score", round(hit.recencyScore()));
+        copy.put(MATCH_SCORE_FIELD, round(hit.totalScore()));
+        copy.put(MATCH_REASON_FIELD, hit.reason());
+        copy.put(CANDIDATE_ONLY_FIELD, rank > finalTake);
+        if (rank <= finalTake) {
+            copy.put(SOURCE_FIELD, "realtime_scan");
+            outPhotos.add(copy);
+        } else {
+            reviewCandidates.add(withoutBinaryFields(copy));
+        }
+    }
+
+    private ExecutionResult emitTextResult(ObjectNode result, ChatEventSink sink) {
+        emitToolCallResult(result, sink);
+        return ExecutionResult.text(result.toString());
+    }
+
+    private ExecutionResult emitVisionResult(ObjectNode result, ChatEventSink sink) {
+        emitToolCallResult(result, sink);
+        return textOrVision(result);
+    }
+
+    private void emitToolCallResult(ObjectNode result, ChatEventSink sink) {
         if (sink != null) {
             sink.emit(SseEvent.toolCallResult(mapper, TOOL_NAME, result));
         }
-        return textOrVision(result);
     }
 
     private ExecutionResult tryIndexedSearch(String query,
@@ -1292,6 +1375,21 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
                                float deviceVisualScore,
                                float recencyScore,
                                String reason) {}
+
+    private record RealtimeSearchRequest(JsonNode args,
+                                         String query,
+                                         int limit,
+                                         int reviewLimit,
+                                         int scanLimit,
+                                         SearchContract contract) {}
+
+    private record QueryEmbeddingResult(float[] value, String failureReason) {
+        private boolean failed() {
+            return failureReason != null;
+        }
+    }
+
+    private record CandidateEmbeddingResult(float score, String reason) {}
 
     private record SearchContract(int resultLimit,
                                   int reviewLimit,
