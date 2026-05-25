@@ -5,7 +5,6 @@ import com.agentplatform.api.chat.RuntimeSkillDto;
 import com.agentplatform.api.chat.UpsertRuntimeSkillRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -27,20 +26,16 @@ public final class AgentSkillTools {
     private static final String DESCRIPTION_FIELD = "description";
     private static final String ENABLED_FIELD = "enabled";
     private static final String NAME_FIELD = "name";
-    private static final String PROPERTIES_FIELD = "properties";
     private static final String STRING_TYPE = "string";
     private static final Pattern SKILL_NAME_PATTERN = Pattern.compile("[a-zA-Z0-9_-]{1,64}");
 
     private AgentSkillTools() {}
 
     @Component
-    public static class Upsert implements ServerToolCallback {
-        private final InternalChatFeignClient chatClient;
-        private final ObjectMapper mapper;
+    public static class Upsert extends JsonToolSupport implements ServerToolCallback {
 
         public Upsert(InternalChatFeignClient chatClient, ObjectMapper mapper) {
-            this.chatClient = chatClient;
-            this.mapper = mapper;
+            super(chatClient, mapper);
         }
 
         @Override
@@ -56,18 +51,12 @@ public final class AgentSkillTools {
 
         @Override
         public JsonNode schema() {
-            ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
-            props.set(NAME_FIELD, AgentMemoryTools.prop(mapper, STRING_TYPE, "Skill name, [a-zA-Z0-9_-], max 64 chars."));
-            props.set(DESCRIPTION_FIELD, AgentMemoryTools.prop(mapper, STRING_TYPE, "One-line description shown in the skill index."));
-            props.set(BODY_FIELD, AgentMemoryTools.prop(mapper, STRING_TYPE, "Markdown playbook body. Keep it concise and operational."));
-            props.set(ENABLED_FIELD, AgentMemoryTools.prop(mapper, BOOLEAN_TYPE, "Default true. Set false to keep a disabled draft."));
-            ArrayNode required = mapper.createArrayNode();
-            required.add(NAME_FIELD);
-            required.add(DESCRIPTION_FIELD);
-            required.add(BODY_FIELD);
-            schema.set("required", required);
-            return schema;
+            return schema(props -> {
+                props.set(NAME_FIELD, prop(STRING_TYPE, "Skill name, [a-zA-Z0-9_-], max 64 chars."));
+                props.set(DESCRIPTION_FIELD, prop(STRING_TYPE, "One-line description shown in the skill index."));
+                props.set(BODY_FIELD, prop(STRING_TYPE, "Markdown playbook body. Keep it concise and operational."));
+                props.set(ENABLED_FIELD, prop(BOOLEAN_TYPE, "Default true. Set false to keep a disabled draft."));
+            }, NAME_FIELD, DESCRIPTION_FIELD, BODY_FIELD);
         }
 
         @Override
@@ -95,16 +84,12 @@ public final class AgentSkillTools {
     }
 
     @Component
-    public static class Install implements ServerToolCallback {
+    public static class Install extends JsonToolSupport implements ServerToolCallback {
         private static final int MAX_SKILL_MD_CHARS = 24_000;
-
-        private final InternalChatFeignClient chatClient;
-        private final ObjectMapper mapper;
         private final WebClient webClient;
 
         public Install(InternalChatFeignClient chatClient, ObjectMapper mapper, WebClient.Builder webClientBuilder) {
-            this.chatClient = chatClient;
-            this.mapper = mapper;
+            super(chatClient, mapper);
             this.webClient = webClientBuilder.build();
         }
 
@@ -121,15 +106,14 @@ public final class AgentSkillTools {
 
         @Override
         public JsonNode schema() {
-            ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
-            props.set("skillMarkdown", AgentMemoryTools.prop(mapper, STRING_TYPE,
-                    "Full SKILL.md content, including YAML frontmatter."));
-            props.set("url", AgentMemoryTools.prop(mapper, STRING_TYPE,
-                    "HTTPS URL to a raw SKILL.md. Use only trusted sources."));
-            props.set(ENABLED_FIELD, AgentMemoryTools.prop(mapper, BOOLEAN_TYPE,
-                    "Default true. Set false to install as a disabled draft."));
-            return schema;
+            return schema(props -> {
+                props.set("skillMarkdown", prop(STRING_TYPE,
+                        "Full SKILL.md content, including YAML frontmatter."));
+                props.set("url", prop(STRING_TYPE,
+                        "HTTPS URL to a raw SKILL.md. Use only trusted sources."));
+                props.set(ENABLED_FIELD, prop(BOOLEAN_TYPE,
+                        "Default true. Set false to install as a disabled draft."));
+            });
         }
 
         @Override
@@ -235,13 +219,10 @@ public final class AgentSkillTools {
     }
 
     @Component
-    public static class ListSkills implements ServerToolCallback {
-        private final InternalChatFeignClient chatClient;
-        private final ObjectMapper mapper;
+    public static class ListSkills extends JsonToolSupport implements ServerToolCallback {
 
         public ListSkills(InternalChatFeignClient chatClient, ObjectMapper mapper) {
-            this.chatClient = chatClient;
-            this.mapper = mapper;
+            super(chatClient, mapper);
         }
 
         @Override
@@ -256,10 +237,8 @@ public final class AgentSkillTools {
 
         @Override
         public JsonNode schema() {
-            ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
-            props.set("includeDisabled", AgentMemoryTools.prop(mapper, BOOLEAN_TYPE, "When true, include disabled drafts."));
-            return schema;
+            return schema(props -> props.set("includeDisabled",
+                    prop(BOOLEAN_TYPE, "When true, include disabled drafts.")));
         }
 
         @Override
@@ -271,13 +250,10 @@ public final class AgentSkillTools {
     }
 
     @Component
-    public static class Delete implements ServerToolCallback {
-        private final InternalChatFeignClient chatClient;
-        private final ObjectMapper mapper;
+    public static class Delete extends JsonToolSupport implements ServerToolCallback {
 
         public Delete(InternalChatFeignClient chatClient, ObjectMapper mapper) {
-            this.chatClient = chatClient;
-            this.mapper = mapper;
+            super(chatClient, mapper);
         }
 
         @Override
@@ -292,13 +268,7 @@ public final class AgentSkillTools {
 
         @Override
         public JsonNode schema() {
-            ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
-            props.set(NAME_FIELD, AgentMemoryTools.prop(mapper, STRING_TYPE, "Runtime skill name."));
-            ArrayNode required = mapper.createArrayNode();
-            required.add(NAME_FIELD);
-            schema.set("required", required);
-            return schema;
+            return schema(props -> props.set(NAME_FIELD, prop(STRING_TYPE, "Runtime skill name.")), NAME_FIELD);
         }
 
         @Override
@@ -314,11 +284,6 @@ public final class AgentSkillTools {
             out.put(NAME_FIELD, name);
             return ExecutionResult.text(out.toString());
         }
-    }
-
-    private static String text(JsonNode args, String field) {
-        if (args == null || !args.has(field) || args.get(field).isNull()) return "";
-        return args.get(field).asText("").trim();
     }
 
     record ParsedSkill(String name, String description, String body) {}

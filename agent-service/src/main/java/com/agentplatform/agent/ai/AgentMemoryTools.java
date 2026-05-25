@@ -5,7 +5,6 @@ import com.agentplatform.api.chat.MemoryFactDto;
 import com.agentplatform.api.chat.SaveFactRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
 
@@ -18,39 +17,19 @@ public final class AgentMemoryTools {
     private static final int MAX_MEMORY_CONTENT_CHARS = 4_000;
     private static final int DEDUPE_SCAN_LIMIT = 100;
     private static final String CONTENT_FIELD = "content";
-    private static final String DESCRIPTION_FIELD = "description";
     private static final String INCLUDE_RAW_FIELD = "includeRaw";
     private static final String LIMIT_FIELD = "limit";
-    private static final String PROPERTIES_FIELD = "properties";
     private static final String STRING_TYPE = "string";
-    private static final String TYPE_FIELD = "type";
 
     private AgentMemoryTools() {}
 
-    static ObjectNode schema(ObjectMapper mapper) {
-        ObjectNode schema = mapper.createObjectNode();
-        schema.put(TYPE_FIELD, "object");
-        schema.set(PROPERTIES_FIELD, mapper.createObjectNode());
-        return schema;
-    }
-
-    static ObjectNode prop(ObjectMapper mapper, String type, String description) {
-        ObjectNode p = mapper.createObjectNode();
-        p.put(TYPE_FIELD, type);
-        p.put(DESCRIPTION_FIELD, description);
-        return p;
-    }
-
     @Component
-    public static class Add implements ServerToolCallback {
-        private final InternalChatFeignClient chatClient;
+    public static class Add extends JsonToolSupport implements ServerToolCallback {
         private final EmbeddingService embeddingService;
-        private final ObjectMapper mapper;
 
         public Add(InternalChatFeignClient chatClient, EmbeddingService embeddingService, ObjectMapper mapper) {
-            this.chatClient = chatClient;
+            super(chatClient, mapper);
             this.embeddingService = embeddingService;
-            this.mapper = mapper;
         }
 
         @Override
@@ -68,15 +47,10 @@ public final class AgentMemoryTools {
 
         @Override
         public JsonNode schema() {
-            ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
-            props.set("kind", prop(mapper, STRING_TYPE, "One of fact, preference, rule, lesson."));
-            props.set(CONTENT_FIELD, prop(mapper, STRING_TYPE, "Concise durable memory text. Avoid secrets and transient details."));
-            ArrayNode required = mapper.createArrayNode();
-            required.add("kind");
-            required.add(CONTENT_FIELD);
-            schema.set("required", required);
-            return schema;
+            return schema(props -> {
+                props.set("kind", prop(STRING_TYPE, "One of fact, preference, rule, lesson."));
+                props.set(CONTENT_FIELD, prop(STRING_TYPE, "Concise durable memory text. Avoid secrets and transient details."));
+            }, "kind", CONTENT_FIELD);
         }
 
         @Override
@@ -156,13 +130,10 @@ public final class AgentMemoryTools {
     }
 
     @Component
-    public static class ListMemories implements ServerToolCallback {
-        private final InternalChatFeignClient chatClient;
-        private final ObjectMapper mapper;
+    public static class ListMemories extends JsonToolSupport implements ServerToolCallback {
 
         public ListMemories(InternalChatFeignClient chatClient, ObjectMapper mapper) {
-            this.chatClient = chatClient;
-            this.mapper = mapper;
+            super(chatClient, mapper);
         }
 
         @Override
@@ -177,11 +148,10 @@ public final class AgentMemoryTools {
 
         @Override
         public JsonNode schema() {
-            ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
-            props.set(LIMIT_FIELD, prop(mapper, "integer", "Maximum rows to return, default 20, max 100."));
-            props.set(INCLUDE_RAW_FIELD, prop(mapper, "boolean", "When true, include automatically extracted raw memories too."));
-            return schema;
+            return schema(props -> {
+                props.set(LIMIT_FIELD, prop("integer", "Maximum rows to return, default 20, max 100."));
+                props.set(INCLUDE_RAW_FIELD, prop("boolean", "When true, include automatically extracted raw memories too."));
+            });
         }
 
         @Override
@@ -197,13 +167,10 @@ public final class AgentMemoryTools {
     }
 
     @Component
-    public static class Forget implements ServerToolCallback {
-        private final InternalChatFeignClient chatClient;
-        private final ObjectMapper mapper;
+    public static class Forget extends JsonToolSupport implements ServerToolCallback {
 
         public Forget(InternalChatFeignClient chatClient, ObjectMapper mapper) {
-            this.chatClient = chatClient;
-            this.mapper = mapper;
+            super(chatClient, mapper);
         }
 
         @Override
@@ -218,13 +185,8 @@ public final class AgentMemoryTools {
 
         @Override
         public JsonNode schema() {
-            ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
-            props.set("id", prop(mapper, STRING_TYPE, "Memory fact UUID from agent_memory_list."));
-            ArrayNode required = mapper.createArrayNode();
-            required.add("id");
-            schema.set("required", required);
-            return schema;
+            return schema(props -> props.set("id", prop(STRING_TYPE, "Memory fact UUID from agent_memory_list.")),
+                    "id");
         }
 
         @Override
@@ -244,11 +206,4 @@ public final class AgentMemoryTools {
             return ExecutionResult.text(out.toString());
         }
     }
-
-    private static String text(JsonNode args, String field, String fallback) {
-        if (args == null || !args.has(field)) return fallback;
-        JsonNode node = args.get(field);
-        return node == null || node.isNull() ? fallback : node.asText(fallback);
-    }
-
 }

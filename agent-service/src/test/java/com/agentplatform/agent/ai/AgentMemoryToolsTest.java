@@ -3,6 +3,7 @@ package com.agentplatform.agent.ai;
 import com.agentplatform.agent.client.InternalChatFeignClient;
 import com.agentplatform.api.chat.MemoryFactDto;
 import com.agentplatform.api.chat.SaveFactRequest;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
@@ -24,6 +25,22 @@ import static org.mockito.Mockito.when;
 class AgentMemoryToolsTest {
 
     private final ObjectMapper mapper = new ObjectMapper();
+
+    @Test
+    void schemasPreserveRequiredFields() {
+        InternalChatFeignClient chat = mock(InternalChatFeignClient.class);
+        EmbeddingService embedding = mock(EmbeddingService.class);
+
+        JsonNode addSchema = new AgentMemoryTools.Add(chat, embedding, mapper).schema();
+        JsonNode listSchema = new AgentMemoryTools.ListMemories(chat, mapper).schema();
+        JsonNode forgetSchema = new AgentMemoryTools.Forget(chat, mapper).schema();
+
+        assertThat(addSchema.path("required")).extracting(JsonNode::asText)
+                .containsExactly("kind", "content");
+        assertThat(listSchema.has("required")).isFalse();
+        assertThat(forgetSchema.path("required")).extracting(JsonNode::asText)
+                .containsExactly("id");
+    }
 
     @Test
     void addTrimsAndPersistsValidMemory() {

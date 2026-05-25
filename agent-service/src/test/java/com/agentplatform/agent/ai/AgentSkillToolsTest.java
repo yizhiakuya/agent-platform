@@ -3,6 +3,7 @@ package com.agentplatform.agent.ai;
 import com.agentplatform.agent.client.InternalChatFeignClient;
 import com.agentplatform.api.chat.RuntimeSkillDto;
 import com.agentplatform.api.chat.UpsertRuntimeSkillRequest;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
@@ -23,6 +24,23 @@ import static org.mockito.Mockito.when;
 class AgentSkillToolsTest {
 
     private final ObjectMapper mapper = new ObjectMapper();
+
+    @Test
+    void schemasPreserveRequiredFields() {
+        InternalChatFeignClient chat = mock(InternalChatFeignClient.class);
+
+        JsonNode upsertSchema = new AgentSkillTools.Upsert(chat, mapper).schema();
+        JsonNode installSchema = new AgentSkillTools.Install(chat, mapper, WebClient.builder()).schema();
+        JsonNode listSchema = new AgentSkillTools.ListSkills(chat, mapper).schema();
+        JsonNode deleteSchema = new AgentSkillTools.Delete(chat, mapper).schema();
+
+        assertThat(upsertSchema.path("required")).extracting(JsonNode::asText)
+                .containsExactly("name", "description", "body");
+        assertThat(installSchema.has("required")).isFalse();
+        assertThat(listSchema.has("required")).isFalse();
+        assertThat(deleteSchema.path("required")).extracting(JsonNode::asText)
+                .containsExactly("name");
+    }
 
     @Test
     void parseSkillMarkdownExtractsFrontmatterAndBody() {

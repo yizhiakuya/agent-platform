@@ -9,6 +9,7 @@ import com.agentplatform.agent.ai.ResolvedTools;
 import com.agentplatform.agent.ai.ServerToolCallback;
 import com.agentplatform.agent.ai.ServerToolRegistry;
 import com.agentplatform.agent.ai.SkillLoadCallback;
+import com.agentplatform.agent.ai.ToolInputParser;
 import com.agentplatform.agent.config.AgentProperties;
 import com.anthropic.core.http.StreamResponse;
 import com.anthropic.helpers.MessageAccumulator;
@@ -303,22 +304,7 @@ public class AgentLoopRunner {
     }
 
     private JsonNode parseServerToolArgs(ToolUseBlock tu) {
-        try {
-            Object raw = tu._input();
-            if (raw == null) return mapper.createObjectNode();
-            JsonNode node = mapper.valueToTree(raw);
-            if (node != null && node.isTextual()) {
-                try {
-                    return mapper.readTree(node.asText());
-                } catch (Exception ignored) {
-                    return node;
-                }
-            }
-            return node == null || node.isNull() ? mapper.createObjectNode() : node;
-        } catch (Exception e) {
-            log.warn("Failed to parse server tool input for {}: {}", tu.name(), e.getMessage());
-            return mapper.createObjectNode();
-        }
+        return ToolInputParser.parse(tu._input(), mapper, log, tu.name());
     }
 
     private JsonNode parseExecutionResult(ExecutionResult result) {
@@ -355,11 +341,4 @@ public class AgentLoopRunner {
                 .build();
     }
 
-    private void safeSend(SseEmitter emitter, SseEvent event) {
-        try {
-            emitter.send(SseEmitter.event().name(event.type()).data(event.data()));
-        } catch (Exception e) {
-            // emitter likely closed by client cancel — swallow
-        }
-    }
 }
