@@ -37,6 +37,9 @@ public class MediaGalleryBrowseController {
     private static final String PHOTO_ORIGINAL_TOOL = "photos.get_full";
     private static final String TRASH_TOOL = "media.gallery.trash";
     private static final String RESTORE_TOOL = "media.gallery.restore";
+    private static final String MEDIA_TYPE_PHOTO = "photo";
+    private static final String ERROR_FIELD = "error";
+    private static final String MESSAGE_FIELD = "message";
     private static final int DEFAULT_THUMBNAIL_MAX_DIM = 256;
     private static final int MIN_THUMBNAIL_MAX_DIM = 128;
     private static final int MAX_THUMBNAIL_MAX_DIM = 640;
@@ -128,8 +131,8 @@ public class MediaGalleryBrowseController {
         if (request == null || request.id() == null || request.id().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "媒体 id 不能为空");
         }
-        String mediaType = request.mediaType() == null ? "photo" : request.mediaType().trim().toLowerCase(Locale.ROOT);
-        if (!"photo".equals(mediaType)) {
+        String mediaType = request.mediaType() == null ? MEDIA_TYPE_PHOTO : request.mediaType().trim().toLowerCase(Locale.ROOT);
+        if (!MEDIA_TYPE_PHOTO.equals(mediaType)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前只支持照片原图预览");
         }
         int maxDim = request.maxDim() == null ? 2048 : Math.max(512, Math.min(2048, request.maxDim()));
@@ -238,19 +241,19 @@ public class MediaGalleryBrowseController {
 
     private String toolErrorMessage(JsonNode value, String fallback) {
         JsonNode detail = value.path("error_detail");
-        if (detail.path("message").isTextual() && !detail.path("message").asText().isBlank()) {
-            return detail.path("message").asText();
+        if (detail.path(MESSAGE_FIELD).isTextual() && !detail.path(MESSAGE_FIELD).asText().isBlank()) {
+            return detail.path(MESSAGE_FIELD).asText();
         }
-        if (value.path("error").isTextual() && !value.path("error").asText().isBlank()) {
-            return value.path("error").asText();
+        if (value.path(ERROR_FIELD).isTextual() && !value.path(ERROR_FIELD).asText().isBlank()) {
+            return value.path(ERROR_FIELD).asText();
         }
         return fallback;
     }
 
     private String normalizeMediaType(String mediaType) {
-        String value = mediaType == null ? "photo" : mediaType.trim().toLowerCase(Locale.ROOT);
-        if ("image".equals(value)) return "photo";
-        if (!"photo".equals(value) && !"video".equals(value)) {
+        String value = mediaType == null ? MEDIA_TYPE_PHOTO : mediaType.trim().toLowerCase(Locale.ROOT);
+        if ("image".equals(value)) return MEDIA_TYPE_PHOTO;
+        if (!MEDIA_TYPE_PHOTO.equals(value) && !"video".equals(value)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "mediaType 只支持 photo 或 video");
         }
         return value;

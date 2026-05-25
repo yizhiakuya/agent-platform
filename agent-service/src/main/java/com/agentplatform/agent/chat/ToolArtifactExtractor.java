@@ -17,6 +17,15 @@ import java.util.UUID;
 public class ToolArtifactExtractor {
 
     private static final int MAX_ARTIFACTS_PER_RESULT = 8;
+    private static final String MEDIA_STORE_ID_CAMEL = "mediaStoreId";
+    private static final String MEDIA_STORE_ID_SNAKE = "media_store_id";
+    private static final String BUCKET_NAME_CAMEL = "bucketName";
+    private static final String BUCKET_NAME_SNAKE = "bucket_name";
+    private static final String DATE_TAKEN_MS_CAMEL = "dateTakenMs";
+    private static final String DATE_TAKEN_MS_SNAKE = "date_taken_ms";
+    private static final String MIME_TYPE_CAMEL = "mimeType";
+    private static final String MIME_TYPE_SNAKE = "mime_type";
+    private static final String MEDIA_TYPE_VIDEO = "video";
 
     private final ObjectMapper mapper;
 
@@ -155,21 +164,21 @@ public class ToolArtifactExtractor {
                                     String tool,
                                     JsonNode photo,
                                     Integer resultRank) {
-        String id = firstText(photo, "id", "asset_id", "photo_id", "mediaStoreId", "media_store_id");
+        String id = firstText(photo, "id", "asset_id", "photo_id", MEDIA_STORE_ID_CAMEL, MEDIA_STORE_ID_SNAKE);
         if (id == null || id.isBlank()) return;
-        String title = firstText(photo, "name", "display_name", "filename", "bucketName", "bucket_name");
-        Long dateTakenMs = firstLong(photo, "dateTakenMs", "date_taken_ms");
-        String summary = photoSummary(title, dateTakenMs, firstText(photo, "mimeType", "mime_type"));
+        String title = firstText(photo, "name", "display_name", "filename", BUCKET_NAME_CAMEL, BUCKET_NAME_SNAKE);
+        Long dateTakenMs = firstLong(photo, DATE_TAKEN_MS_CAMEL, DATE_TAKEN_MS_SNAKE);
+        String summary = photoSummary(title, dateTakenMs, firstText(photo, MIME_TYPE_CAMEL, MIME_TYPE_SNAKE));
         ObjectNode metadata = mapper.createObjectNode();
         metadata.put("tool", tool == null ? "" : tool);
         metadata.put("photoId", id);
         if (resultRank != null) metadata.put("resultRank", resultRank);
         putIfText(metadata, "deviceId", firstText(photo, "deviceId", "device_id"));
-        putIfText(metadata, "mediaStoreId", firstText(photo, "mediaStoreId", "media_store_id"));
+        putIfText(metadata, MEDIA_STORE_ID_CAMEL, firstText(photo, MEDIA_STORE_ID_CAMEL, MEDIA_STORE_ID_SNAKE));
         putIfText(metadata, "name", title);
-        putIfText(metadata, "bucketName", firstText(photo, "bucketName", "bucket_name"));
-        putIfText(metadata, "mimeType", firstText(photo, "mimeType", "mime_type"));
-        if (dateTakenMs != null) metadata.put("dateTakenMs", dateTakenMs);
+        putIfText(metadata, BUCKET_NAME_CAMEL, firstText(photo, BUCKET_NAME_CAMEL, BUCKET_NAME_SNAKE));
+        putIfText(metadata, MIME_TYPE_CAMEL, firstText(photo, MIME_TYPE_CAMEL, MIME_TYPE_SNAKE));
+        if (dateTakenMs != null) metadata.put(DATE_TAKEN_MS_CAMEL, dateTakenMs);
         out.add(new UpsertSessionArtifactRequest(
                 sessionId,
                 userId,
@@ -191,7 +200,7 @@ public class ToolArtifactExtractor {
         int rank = 1;
         for (JsonNode item : items) {
             String mediaType = firstText(item, "media_type", "mediaType");
-            if ("video".equals(mediaType)) {
+            if (MEDIA_TYPE_VIDEO.equals(mediaType)) {
                 collectSingleVideo(out, sessionId, userId, messageId, tool, item, rank++);
             } else {
                 collectSinglePhoto(out, sessionId, userId, messageId, tool, item, rank++);
@@ -207,28 +216,28 @@ public class ToolArtifactExtractor {
                                     String tool,
                                     JsonNode video,
                                     Integer resultRank) {
-        String id = firstText(video, "id", "asset_id", "video_id", "mediaStoreId", "media_store_id");
+        String id = firstText(video, "id", "asset_id", "video_id", MEDIA_STORE_ID_CAMEL, MEDIA_STORE_ID_SNAKE);
         if (id == null || id.isBlank()) return;
-        String title = firstText(video, "name", "display_name", "filename", "bucketName", "bucket_name");
-        Long dateTakenMs = firstLong(video, "dateTakenMs", "date_taken_ms");
-        String summary = videoSummary(title, dateTakenMs, firstText(video, "mimeType", "mime_type"));
+        String title = firstText(video, "name", "display_name", "filename", BUCKET_NAME_CAMEL, BUCKET_NAME_SNAKE);
+        Long dateTakenMs = firstLong(video, DATE_TAKEN_MS_CAMEL, DATE_TAKEN_MS_SNAKE);
+        String summary = videoSummary(title, dateTakenMs, firstText(video, MIME_TYPE_CAMEL, MIME_TYPE_SNAKE));
         ObjectNode metadata = mapper.createObjectNode();
         metadata.put("tool", tool == null ? "" : tool);
         metadata.put("videoId", id);
-        metadata.put("mediaType", "video");
+        metadata.put("mediaType", MEDIA_TYPE_VIDEO);
         if (resultRank != null) metadata.put("resultRank", resultRank);
         putIfText(metadata, "name", title);
-        putIfText(metadata, "bucketName", firstText(video, "bucketName", "bucket_name"));
-        putIfText(metadata, "mimeType", firstText(video, "mimeType", "mime_type"));
+        putIfText(metadata, BUCKET_NAME_CAMEL, firstText(video, BUCKET_NAME_CAMEL, BUCKET_NAME_SNAKE));
+        putIfText(metadata, MIME_TYPE_CAMEL, firstText(video, MIME_TYPE_CAMEL, MIME_TYPE_SNAKE));
         putIfText(metadata, "mediaRef", firstText(video, "media_ref", "mediaRef"));
         Long durationMs = firstLong(video, "durationMs", "duration_ms");
-        if (dateTakenMs != null) metadata.put("dateTakenMs", dateTakenMs);
+        if (dateTakenMs != null) metadata.put(DATE_TAKEN_MS_CAMEL, dateTakenMs);
         if (durationMs != null) metadata.put("durationMs", durationMs);
         out.add(new UpsertSessionArtifactRequest(
                 sessionId,
                 userId,
                 messageId,
-                "video",
+                MEDIA_TYPE_VIDEO,
                 id,
                 title,
                 summary,

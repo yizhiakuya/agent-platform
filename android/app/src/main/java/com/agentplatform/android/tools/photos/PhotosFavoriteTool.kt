@@ -66,7 +66,7 @@ class PhotosFavoriteTool(
             throw UnsupportedOperationException("favorite requires Android 11 or newer")
         }
         val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
-        val favorite = if (args.has("favorite")) args.path("favorite").asBoolean() else true
+        val favorite = args.path("favorite").asBoolean(true)
         val uris = ids.map { PhotoMutationHelpers.photoUri(it) }
         val approved = MediaStoreRequestBridge.request(
             context,

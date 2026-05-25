@@ -49,6 +49,9 @@ class PrivilegesConfigureTool(
     override val safetyLevel: String = "sensitive_action"
     override val defaultDisplayPolicy: String = "debug_only"
 
+    private val shizukuUnavailableMessage = "Shizuku is not available or not authorized"
+    private val shizukuRetryHint = "Start Shizuku, authorize Agent Platform, then retry."
+
     override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         when (args.path("target").asText("")) {
             "manage_media" -> configureManageMedia(args)
@@ -74,9 +77,9 @@ class PrivilegesConfigureTool(
                     mapper = mapper,
                     tool = this@PrivilegesConfigureTool,
                     code = "shizuku_unavailable",
-                    message = it.message ?: "Shizuku is not available or not authorized",
+                    message = it.message ?: shizukuUnavailableMessage,
                     retryable = true,
-                    hint = "Start Shizuku, authorize Agent Platform, then retry.",
+                    hint = shizukuRetryHint,
                     request = args
                 )
             }
@@ -114,9 +117,9 @@ class PrivilegesConfigureTool(
                     mapper = mapper,
                     tool = this@PrivilegesConfigureTool,
                     code = "shizuku_unavailable",
-                    message = it.message ?: "Shizuku is not available or not authorized",
+                    message = it.message ?: shizukuUnavailableMessage,
                     retryable = true,
-                    hint = "Start Shizuku, authorize Agent Platform, then retry.",
+                    hint = shizukuRetryHint,
                     request = args
                 )
             }
@@ -161,9 +164,9 @@ class PrivilegesConfigureTool(
                     mapper = mapper,
                     tool = this@PrivilegesConfigureTool,
                     code = "shizuku_unavailable",
-                    message = it.message ?: "Shizuku is not available or not authorized",
+                    message = it.message ?: shizukuUnavailableMessage,
                     retryable = true,
-                    hint = "Start Shizuku, authorize Agent Platform, then retry.",
+                    hint = shizukuRetryHint,
                     request = args
                 )
             }
@@ -197,9 +200,9 @@ class PrivilegesConfigureTool(
                     mapper = mapper,
                     tool = this@PrivilegesConfigureTool,
                     code = "shizuku_unavailable",
-                    message = it.message ?: "Shizuku is not available or not authorized",
+                    message = it.message ?: shizukuUnavailableMessage,
                     retryable = true,
-                    hint = "Start Shizuku, authorize Agent Platform, then retry.",
+                    hint = shizukuRetryHint,
                     request = args
                 )
             }
@@ -244,9 +247,9 @@ class PrivilegesConfigureTool(
                     mapper = mapper,
                     tool = this@PrivilegesConfigureTool,
                     code = "shizuku_unavailable",
-                    message = it.message ?: "Shizuku is not available or not authorized",
+                    message = it.message ?: shizukuUnavailableMessage,
                     retryable = true,
-                    hint = "Start Shizuku, authorize Agent Platform, then retry.",
+                    hint = shizukuRetryHint,
                     request = args
                 )
             }

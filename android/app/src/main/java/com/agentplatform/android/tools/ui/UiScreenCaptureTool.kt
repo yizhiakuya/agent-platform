@@ -80,9 +80,12 @@ class UiScreenCaptureTool(
         } else {
             null
         }
-        val bitmap = accessibilityBitmap
-            ?: withContext(ioDispatcher) { UiCaptureManager.captureNow() }
-            ?: return ToolResultEnvelope.error(
+        val mediaProjectionBitmap = if (accessibilityBitmap == null) {
+            withContext(ioDispatcher) { UiCaptureManager.captureNow() }
+        } else {
+            null
+        }
+        val bitmap = accessibilityBitmap ?: mediaProjectionBitmap ?: return ToolResultEnvelope.error(
                 mapper = mapper,
                 tool = this,
                 code = "screen_capture_unavailable",
@@ -90,7 +93,7 @@ class UiScreenCaptureTool(
                 retryable = true,
                 hint = "Enable accessibility screenshots or grant MediaProjection screen capture permission.",
                 request = args
-            )
+        )
 
         val b64 = withContext(ioDispatcher) { encodeJpegBase64(bitmap, quality) }
         val capW: Int

@@ -78,7 +78,7 @@ class PhotosSaveToGalleryTool(
         val resolvedUrl = resolveUrl(imageUrl, prefs)
         val expectedMime = normalizeMime(args.path("mime_type").asText(null))
         val response = downloadImage(resolvedUrl, prefs)
-        val mime = normalizeMime(response.contentType) ?: sniffMime(response.bytes) ?: expectedMime ?: "image/jpeg"
+        val mime = normalizeMime(response.contentType) ?: sniffMime(response.bytes) ?: expectedMime ?: MIME_JPEG
         val filename = safeFilename(args.path("filename").asText(null), mime)
         val album = safeAlbum(args.path("album").asText(null))
         val saved = insertIntoGallery(response.bytes, mime, filename, album)
@@ -96,9 +96,7 @@ class PhotosSaveToGalleryTool(
 
     private fun resolveUrl(imageUrl: String, prefs: AppPrefs): String {
         if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) return imageUrl
-        if (!imageUrl.startsWith("/")) {
-            throw IllegalArgumentException("image_url must be absolute http(s) or a platform-relative path")
-        }
+        require(imageUrl.startsWith("/")) { "image_url must be absolute http(s) or a platform-relative path" }
         val serverUrl = prefs.serverUrl?.trimEnd('/')
             ?: throw IllegalStateException("device is not bound to a server")
         return serverUrl + imageUrl
@@ -162,8 +160,8 @@ class PhotosSaveToGalleryTool(
         if (value.isNullOrBlank()) return null
         val clean = value.substringBefore(';').trim().lowercase(Locale.ROOT)
         return when (clean) {
-            "image/jpg", "image/pjpeg" -> "image/jpeg"
-            "image/jpeg", "image/png", "image/webp" -> clean
+            "image/jpg", "image/pjpeg" -> MIME_JPEG
+            MIME_JPEG, MIME_PNG, MIME_WEBP -> clean
             else -> null
         }
     }
@@ -172,12 +170,12 @@ class PhotosSaveToGalleryTool(
         if (bytes.size >= 3
             && (bytes[0].toInt() and 0xff) == 0xff
             && (bytes[1].toInt() and 0xff) == 0xd8
-            && (bytes[2].toInt() and 0xff) == 0xff) return "image/jpeg"
+            && (bytes[2].toInt() and 0xff) == 0xff) return MIME_JPEG
         if (bytes.size >= 8
             && (bytes[0].toInt() and 0xff) == 0x89
             && bytes[1] == 0x50.toByte()
             && bytes[2] == 0x4e.toByte()
-            && bytes[3] == 0x47.toByte()) return "image/png"
+            && bytes[3] == 0x47.toByte()) return MIME_PNG
         if (bytes.size >= 12
             && bytes[0] == 0x52.toByte()
             && bytes[1] == 0x49.toByte()
@@ -186,14 +184,14 @@ class PhotosSaveToGalleryTool(
             && bytes[8] == 0x57.toByte()
             && bytes[9] == 0x45.toByte()
             && bytes[10] == 0x42.toByte()
-            && bytes[11] == 0x50.toByte()) return "image/webp"
+            && bytes[11] == 0x50.toByte()) return MIME_WEBP
         return null
     }
 
     private fun safeFilename(value: String?, mime: String): String {
         val extension = when (mime) {
-            "image/png" -> "png"
-            "image/webp" -> "webp"
+            MIME_PNG -> "png"
+            MIME_WEBP -> "webp"
             else -> "jpg"
         }
         val stem = value
@@ -219,5 +217,8 @@ class PhotosSaveToGalleryTool(
 
     companion object {
         private const val MAX_IMAGE_BYTES = 10 * 1024 * 1024
+        private const val MIME_JPEG = "image/jpeg"
+        private const val MIME_PNG = "image/png"
+        private const val MIME_WEBP = "image/webp"
     }
 }
