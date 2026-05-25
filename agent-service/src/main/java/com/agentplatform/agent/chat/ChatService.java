@@ -361,10 +361,18 @@ public class ChatService {
                     runContext.sink, runContext.emitter, runContext.cancellation);
         }
         if (provider.isCodexResponses()) {
-            return codexResponsesLoopRunner.run(provider, runContext.sessionId, runContext.userId,
-                    runContext.resolved, runContext.stableSystemText, runContext.historyRows,
-                    runContext.userText, runContext.attachments, runContext.sink, runContext.emitter,
-                    runContext.cancellation);
+            return codexResponsesLoopRunner.run(new CodexResponsesLoopRunner.RunRequest()
+                    .withProvider(provider)
+                    .withSessionId(runContext.sessionId)
+                    .withUserId(runContext.userId)
+                    .withResolved(runContext.resolved)
+                    .withSystemText(runContext.stableSystemText)
+                    .withHistory(runContext.historyRows)
+                    .withUserText(runContext.userText)
+                    .withAttachments(runContext.attachments)
+                    .withSink(runContext.sink)
+                    .withEmitter(runContext.emitter)
+                    .withCancellation(runContext.cancellation));
         }
         throw new IllegalArgumentException("unsupported provider kind: " + provider.kind());
     }

@@ -110,17 +110,7 @@ class CodexResponsesLoopRunnerTest {
                     new ServerToolRegistry(List.of(new ThrowingTool()), mapper),
                     WebClient.builder());
 
-            RunResult result = runner.run(
-                    new ConfiguredProvider("test", "codex-responses", null, server.baseUrl(), "token", "model"),
-                    UUID.randomUUID(),
-                    UUID.randomUUID(),
-                    new ResolvedTools(List.of(), Map.of()),
-                    "system",
-                    List.of(),
-                    "use tool",
-                    event -> {
-                    },
-                    new SseEmitter());
+            RunResult result = runner.run(runRequest(server, "use tool", event -> { }));
 
             assertThat(result.assistantText()).isEqualTo("recovered");
             JsonNode replayedInput = server.requests().get(1).path("input");
@@ -161,16 +151,7 @@ class CodexResponsesLoopRunnerTest {
             CodexResponsesLoopRunner runner = runner(memory(false));
             List<SseEvent> events = new ArrayList<>();
 
-            RunResult result = runner.run(
-                    new ConfiguredProvider("test", "codex-responses", null, server.baseUrl(), "token", "model"),
-                    UUID.randomUUID(),
-                    UUID.randomUUID(),
-                    new ResolvedTools(List.of(), Map.of()),
-                    "system",
-                    List.of(),
-                    "say hello",
-                    events::add,
-                    new SseEmitter());
+            RunResult result = runner.run(runRequest(server, "say hello", events::add));
 
             assertThat(result.assistantText()).isEqualTo("hello world");
             assertThat(events)
@@ -216,16 +197,7 @@ class CodexResponsesLoopRunnerTest {
                     WebClient.builder());
             List<SseEvent> events = new ArrayList<>();
 
-            RunResult result = runner.run(
-                    new ConfiguredProvider("test", "codex-responses", null, server.baseUrl(), "token", "model"),
-                    UUID.randomUUID(),
-                    UUID.randomUUID(),
-                    new ResolvedTools(List.of(), Map.of()),
-                    "system",
-                    List.of(),
-                    "close app",
-                    events::add,
-                    new SseEmitter());
+            RunResult result = runner.run(runRequest(server, "close app", events::add));
 
             assertThat(result.assistantText()).isEqualTo("已从最近任务关闭小黑盒。");
             assertThat(events)
@@ -246,17 +218,7 @@ class CodexResponsesLoopRunnerTest {
         try (ResponsesStubServer server = ResponsesStubServer.fromStreams(mapper, streams)) {
             CodexResponsesLoopRunner runner = runner(memory(false));
 
-            RunResult result = runner.run(
-                    new ConfiguredProvider("test", "codex-responses", null, server.baseUrl(), "token", "model"),
-                    UUID.randomUUID(),
-                    UUID.randomUUID(),
-                    new ResolvedTools(List.of(), Map.of()),
-                    "system",
-                    List.of(),
-                    "say done",
-                    event -> {
-                    },
-                    new SseEmitter());
+            RunResult result = runner.run(runRequest(server, "say done", event -> { }));
 
             assertThat(result.assistantText()).isEqualTo("done text");
         }
@@ -279,17 +241,7 @@ class CodexResponsesLoopRunnerTest {
         try (ResponsesStubServer server = ResponsesStubServer.fromStreams(mapper, streams)) {
             CodexResponsesLoopRunner runner = runner(memory(false));
 
-            RunResult result = runner.run(
-                    new ConfiguredProvider("test", "codex-responses", null, server.baseUrl(), "token", "model"),
-                    UUID.randomUUID(),
-                    UUID.randomUUID(),
-                    new ResolvedTools(List.of(), Map.of()),
-                    "system",
-                    List.of(),
-                    "say text",
-                    event -> {
-                    },
-                    new SseEmitter());
+            RunResult result = runner.run(runRequest(server, "say text", event -> { }));
 
             assertThat(result.assistantText()).isEqualTo("streamed text");
         }
@@ -343,6 +295,22 @@ class CodexResponsesLoopRunnerTest {
                 48_000,
                 1_200,
                 true);
+    }
+
+    private CodexResponsesLoopRunner.RunRequest runRequest(ResponsesStubServer server,
+                                                           String userText,
+                                                           ChatEventSink sink) {
+        return new CodexResponsesLoopRunner.RunRequest()
+                .withProvider(new ConfiguredProvider(
+                        "test", "codex-responses", null, server.baseUrl(), "token", "model"))
+                .withSessionId(UUID.randomUUID())
+                .withUserId(UUID.randomUUID())
+                .withResolved(new ResolvedTools(List.of(), Map.of()))
+                .withSystemText("system")
+                .withHistory(List.of())
+                .withUserText(userText)
+                .withSink(sink)
+                .withEmitter(new SseEmitter());
     }
 
     private ArrayNode invokeBuildTools(CodexResponsesLoopRunner runner) throws Exception {

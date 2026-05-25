@@ -326,17 +326,7 @@ class ChatServiceProviderFailoverTest {
         }
 
         @Override
-        public RunResult run(ConfiguredProvider provider,
-                             UUID sessionId,
-                             UUID userId,
-                             ResolvedTools resolved,
-                             String systemText,
-                             List<com.agentplatform.api.chat.MessageDto> history,
-                             String userText,
-                             ChatAttachmentContext attachments,
-                             ChatEventSink sink,
-                             SseEmitter emitter,
-                             ChatCancellationToken cancellation) {
+        public RunResult run(RunRequest request) {
             calls.incrementAndGet();
             return new RunResult("fallback", null, false);
         }
