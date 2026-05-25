@@ -417,28 +417,7 @@ public class RemoteToolCallback {
      * working off plain {@link JsonNode}.
      */
     private JsonNode parseArgs(ToolUseBlock tu) {
-        try {
-            Object raw = tu._input();
-            if (raw == null) return mapper.createObjectNode();
-            // SDK JsonValue serializes cleanly via the standard Jackson
-            // configuration the SDK ships; convertValue handles both cases
-            // where input() returns a JsonValue or already a Map.
-            JsonNode node = mapper.valueToTree(raw);
-            // valueToTree on a JsonValue that wraps a map produces an object
-            // node directly. If the SDK ever returns a string-encoded JSON,
-            // try to re-parse.
-            if (node != null && node.isTextual()) {
-                try {
-                    return mapper.readTree(node.asText());
-                } catch (Exception ignored) {
-                    return node;
-                }
-            }
-            return node == null ? mapper.createObjectNode() : node;
-        } catch (Exception e) {
-            log.warn("Failed to parse ToolUseBlock input for {}: {}", spec.name(), e.getMessage());
-            return mapper.createObjectNode();
-        }
+        return ToolInputParser.parse(tu._input(), mapper, log, spec.name());
     }
 
     private String wireError(ToolResult result) {
