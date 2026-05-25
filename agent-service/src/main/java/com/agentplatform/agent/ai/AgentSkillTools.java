@@ -22,6 +22,13 @@ public final class AgentSkillTools {
 
     private static final int MAX_SKILL_DESCRIPTION_CHARS = 500;
     private static final int MAX_SKILL_BODY_CHARS = 20_000;
+    private static final String BOOLEAN_TYPE = "boolean";
+    private static final String BODY_FIELD = "body";
+    private static final String DESCRIPTION_FIELD = "description";
+    private static final String ENABLED_FIELD = "enabled";
+    private static final String NAME_FIELD = "name";
+    private static final String PROPERTIES_FIELD = "properties";
+    private static final String STRING_TYPE = "string";
     private static final Pattern SKILL_NAME_PATTERN = Pattern.compile("[a-zA-Z0-9_-]{1,64}");
 
     private AgentSkillTools() {}
@@ -50,24 +57,24 @@ public final class AgentSkillTools {
         @Override
         public JsonNode schema() {
             ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get("properties");
-            props.set("name", AgentMemoryTools.prop(mapper, "string", "Skill name, [a-zA-Z0-9_-], max 64 chars."));
-            props.set("description", AgentMemoryTools.prop(mapper, "string", "One-line description shown in the skill index."));
-            props.set("body", AgentMemoryTools.prop(mapper, "string", "Markdown playbook body. Keep it concise and operational."));
-            props.set("enabled", AgentMemoryTools.prop(mapper, "boolean", "Default true. Set false to keep a disabled draft."));
+            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
+            props.set(NAME_FIELD, AgentMemoryTools.prop(mapper, STRING_TYPE, "Skill name, [a-zA-Z0-9_-], max 64 chars."));
+            props.set(DESCRIPTION_FIELD, AgentMemoryTools.prop(mapper, STRING_TYPE, "One-line description shown in the skill index."));
+            props.set(BODY_FIELD, AgentMemoryTools.prop(mapper, STRING_TYPE, "Markdown playbook body. Keep it concise and operational."));
+            props.set(ENABLED_FIELD, AgentMemoryTools.prop(mapper, BOOLEAN_TYPE, "Default true. Set false to keep a disabled draft."));
             ArrayNode required = mapper.createArrayNode();
-            required.add("name");
-            required.add("description");
-            required.add("body");
+            required.add(NAME_FIELD);
+            required.add(DESCRIPTION_FIELD);
+            required.add(BODY_FIELD);
             schema.set("required", required);
             return schema;
         }
 
         @Override
         public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
-            String name = text(args, "name");
-            String description = text(args, "description");
-            String body = text(args, "body");
+            String name = text(args, NAME_FIELD);
+            String description = text(args, DESCRIPTION_FIELD);
+            String body = text(args, BODY_FIELD);
             if (name.isBlank() || description.isBlank() || body.isBlank()) {
                 return ExecutionResult.error("name, description, and body are required");
             }
@@ -80,7 +87,7 @@ public final class AgentSkillTools {
             if (body.length() > MAX_SKILL_BODY_CHARS) {
                 return ExecutionResult.error("body too long; max " + MAX_SKILL_BODY_CHARS + " chars");
             }
-            Boolean enabled = args != null && args.has("enabled") ? args.path("enabled").asBoolean() : null;
+            Boolean enabled = args != null && args.has(ENABLED_FIELD) ? args.path(ENABLED_FIELD).asBoolean() : null;
             RuntimeSkillDto saved = chatClient.upsertRuntimeSkill(
                     new UpsertRuntimeSkillRequest(userId, name, description, body, enabled));
             return ExecutionResult.text(mapper.valueToTree(saved).toString());
@@ -115,12 +122,12 @@ public final class AgentSkillTools {
         @Override
         public JsonNode schema() {
             ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get("properties");
-            props.set("skillMarkdown", AgentMemoryTools.prop(mapper, "string",
+            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
+            props.set("skillMarkdown", AgentMemoryTools.prop(mapper, STRING_TYPE,
                     "Full SKILL.md content, including YAML frontmatter."));
-            props.set("url", AgentMemoryTools.prop(mapper, "string",
+            props.set("url", AgentMemoryTools.prop(mapper, STRING_TYPE,
                     "HTTPS URL to a raw SKILL.md. Use only trusted sources."));
-            props.set("enabled", AgentMemoryTools.prop(mapper, "boolean",
+            props.set(ENABLED_FIELD, AgentMemoryTools.prop(mapper, BOOLEAN_TYPE,
                     "Default true. Set false to install as a disabled draft."));
             return schema;
         }
@@ -136,15 +143,15 @@ public final class AgentSkillTools {
                 markdown = fetchSkillMarkdown(url);
             }
             ParsedSkill parsed = parseSkillMarkdown(markdown);
-            Boolean enabled = args != null && args.has("enabled") ? args.path("enabled").asBoolean() : null;
+            Boolean enabled = args != null && args.has(ENABLED_FIELD) ? args.path(ENABLED_FIELD).asBoolean() : null;
             RuntimeSkillDto saved = chatClient.upsertRuntimeSkill(
                     new UpsertRuntimeSkillRequest(userId, parsed.name(), parsed.description(), parsed.body(), enabled));
 
             ObjectNode out = mapper.createObjectNode();
             out.put("installed", true);
-            out.put("name", saved.name());
-            out.put("description", saved.description());
-            out.put("enabled", saved.enabled());
+            out.put(NAME_FIELD, saved.name());
+            out.put(DESCRIPTION_FIELD, saved.description());
+            out.put(ENABLED_FIELD, saved.enabled());
             out.put("bodyChars", saved.body() == null ? 0 : saved.body().length());
             return ExecutionResult.text(out.toString());
         }
@@ -189,8 +196,8 @@ public final class AgentSkillTools {
                 throw new IllegalArgumentException("SKILL.md missing closing frontmatter delimiter");
             }
             Map<String, String> meta = parseSimpleFrontmatter(normalized.substring(4, closing));
-            String name = meta.getOrDefault("name", "").trim();
-            String description = meta.getOrDefault("description", "").trim();
+            String name = meta.getOrDefault(NAME_FIELD, "").trim();
+            String description = meta.getOrDefault(DESCRIPTION_FIELD, "").trim();
             String body = normalized.substring(closing + "\n---\n".length()).stripLeading();
             if (name.isBlank() || description.isBlank() || body.isBlank()) {
                 throw new IllegalArgumentException("SKILL.md requires name, description, and body");
@@ -250,8 +257,8 @@ public final class AgentSkillTools {
         @Override
         public JsonNode schema() {
             ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get("properties");
-            props.set("includeDisabled", AgentMemoryTools.prop(mapper, "boolean", "When true, include disabled drafts."));
+            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
+            props.set("includeDisabled", AgentMemoryTools.prop(mapper, BOOLEAN_TYPE, "When true, include disabled drafts."));
             return schema;
         }
 
@@ -286,17 +293,17 @@ public final class AgentSkillTools {
         @Override
         public JsonNode schema() {
             ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get("properties");
-            props.set("name", AgentMemoryTools.prop(mapper, "string", "Runtime skill name."));
+            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
+            props.set(NAME_FIELD, AgentMemoryTools.prop(mapper, STRING_TYPE, "Runtime skill name."));
             ArrayNode required = mapper.createArrayNode();
-            required.add("name");
+            required.add(NAME_FIELD);
             schema.set("required", required);
             return schema;
         }
 
         @Override
         public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
-            String name = text(args, "name");
+            String name = text(args, NAME_FIELD);
             if (name.isBlank()) return ExecutionResult.error("name is required");
             if (!SKILL_NAME_PATTERN.matcher(name).matches()) {
                 return ExecutionResult.error("name must match [a-zA-Z0-9_-]{1,64}");
@@ -304,7 +311,7 @@ public final class AgentSkillTools {
             chatClient.deleteRuntimeSkill(name, userId);
             ObjectNode out = mapper.createObjectNode();
             out.put("deleted", true);
-            out.put("name", name);
+            out.put(NAME_FIELD, name);
             return ExecutionResult.text(out.toString());
         }
     }

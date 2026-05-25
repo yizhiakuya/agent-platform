@@ -27,18 +27,20 @@ import java.util.UUID;
  */
 public record SseEvent(String type, JsonNode data) {
 
+    private static final String CONTENT_FIELD = "content";
+
     public static SseEvent session(ObjectMapper mapper, UUID sessionId) {
         return new SseEvent("session",
                 mapper.createObjectNode().put("sessionId", sessionId == null ? null : sessionId.toString()));
     }
 
     public static SseEvent userMessage(ObjectMapper mapper, String content) {
-        return new SseEvent("user_message", mapper.createObjectNode().put("content", content));
+        return new SseEvent("user_message", mapper.createObjectNode().put(CONTENT_FIELD, content));
     }
 
     public static SseEvent userMessage(ObjectMapper mapper, String content, JsonNode attachments) {
         ObjectNode data = mapper.createObjectNode();
-        data.put("content", content == null ? "" : content);
+        data.put(CONTENT_FIELD, content == null ? "" : content);
         if (attachments != null && attachments.isArray() && !attachments.isEmpty()) {
             data.set("attachments", attachments);
         }
@@ -46,7 +48,7 @@ public record SseEvent(String type, JsonNode data) {
     }
 
     public static SseEvent assistantMessage(ObjectMapper mapper, String content) {
-        return new SseEvent("assistant_message", mapper.createObjectNode().put("content", content));
+        return new SseEvent("assistant_message", mapper.createObjectNode().put(CONTENT_FIELD, content));
     }
 
     public static SseEvent toolCallStarted(ObjectMapper mapper, UUID deviceId,

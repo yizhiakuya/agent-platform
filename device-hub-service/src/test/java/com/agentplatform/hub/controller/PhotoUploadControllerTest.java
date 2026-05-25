@@ -71,6 +71,7 @@ class PhotoUploadControllerTest {
                         try {
                             Files.deleteIfExists(path);
                         } catch (IOException ignored) {
+                            // Best-effort cleanup for temporary test files.
                         }
                     });
         }

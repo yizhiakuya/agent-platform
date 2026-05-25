@@ -65,20 +65,24 @@ class UiTypeTextTool(private val mapper: ObjectMapper) : Tool {
             put("focused_input", result.focusedInput)
             put("editable_candidates", result.editableCandidates)
             if (!result.typed) {
-                put("reason", result.reason ?: "unable to type into the current screen")
+                put("reason", result.reason ?: INPUT_UNAVAILABLE_MESSAGE)
                 put("hint", "tap the intended input field and retry ui.type_text; if the app still hides the field, ask the user to paste manually")
             }
         }
         ToolResultEnvelope.applyStandardFields(mapper, this, out, ok = result.typed, request = args)
         if (!result.typed) {
-            out.put("error", result.reason ?: "unable to type into the current screen")
+            out.put("error", result.reason ?: INPUT_UNAVAILABLE_MESSAGE)
             out.set<ObjectNode>("error_detail", mapper.createObjectNode().apply {
                 put("code", "input_unavailable")
-                put("message", result.reason ?: "unable to type into the current screen")
+                put("message", result.reason ?: INPUT_UNAVAILABLE_MESSAGE)
                 put("retryable", true)
                 put("hint", "Tap the intended input field and retry ui.type_text.")
             })
         }
         return out
+    }
+
+    companion object {
+        private const val INPUT_UNAVAILABLE_MESSAGE = "unable to type into the current screen"
     }
 }
