@@ -352,102 +352,136 @@ class AppsCloseTool(
     }
 
     private fun resolveTarget(args: JsonNode): TargetResolution {
-        val packageName = args.path("package").asText("").trim()
-        val label = args.path("label").asText("").trim()
-        val query = args.path("query").asText("").trim()
+        val request = targetRequest(args)
+        if (request.packageName.isNotBlank()) return resolvePackageTarget(request)
+        val searchTerm = request.searchTerm()
+        if (searchTerm.isBlank()) return missingTarget()
 
-        if (packageName.isNotBlank()) {
-            val resolvedLabel = if (label.isNotBlank()) label else packageLabelFromPm(packageName).orEmpty()
-            val node = mapper.createObjectNode().apply {
-                put("package", packageName)
-                if (resolvedLabel.isNotBlank()) put("label", resolvedLabel)
-                if (query.isNotBlank()) put("query", query)
-                put("resolved_by", "package")
-            }
-            return TargetResolution(
-                packageName = packageName,
+        val candidates = matchingLaunchableApps(searchTerm)
+        return targetFromCandidates(request, candidates)
+    }
+
+    private fun targetRequest(args: JsonNode): TargetRequest =
+        TargetRequest(
+            packageName = args.path("package").asText("").trim(),
+            label = args.path("label").asText("").trim(),
+            query = args.path("query").asText("").trim()
+        )
+
+    private fun resolvePackageTarget(request: TargetRequest): TargetResolution {
+        val resolvedLabel = request.label.ifBlank { packageLabelFromPm(request.packageName).orEmpty() }
+        return TargetResolution(
+            packageName = request.packageName,
+            label = resolvedLabel,
+            query = request.query,
+            target = targetNode(
+                packageName = request.packageName,
                 label = resolvedLabel,
-                query = query,
-                target = node
+                query = request.query,
+                resolvedBy = "package"
             )
-        }
+        )
+    }
 
-        val searchTerm = when {
-            label.isNotBlank() -> label
-            query.isNotBlank() -> query
-            else -> ""
-        }
-        if (searchTerm.isBlank()) {
-            return TargetResolution(
-                packageName = "",
-                label = "",
-                query = "",
-                target = mapper.createObjectNode(),
-                error = "missing_target",
-                hint = "Provide package, or label/query to resolve app."
-            )
-        }
+    private fun missingTarget(): TargetResolution =
+        TargetResolution(
+            packageName = "",
+            label = "",
+            query = "",
+            target = mapper.createObjectNode(),
+            error = "missing_target",
+            hint = "Provide package, or label/query to resolve app."
+        )
 
+    private fun matchingLaunchableApps(searchTerm: String): List<AppInfo> {
         val q = normalize(searchTerm)
-        val candidates = launchableApps()
+        return launchableApps()
             .filter { app ->
                 normalize(app.label).contains(q) || normalize(app.packageName).contains(q)
             }
             .sortedBy { it.label.lowercase(Locale.ROOT) }
+    }
 
-        if (candidates.isEmpty()) {
-            return TargetResolution(
-                packageName = "",
-                label = label,
-                query = query,
-                target = mapper.createObjectNode().apply {
-                    if (label.isNotBlank()) put("label", label)
-                    if (query.isNotBlank()) put("query", query)
-                },
+    private fun targetFromCandidates(request: TargetRequest, candidates: List<AppInfo>): TargetResolution =
+        when {
+            candidates.isEmpty() -> unresolvedSearchTarget(
+                request,
                 error = "target_not_found",
                 hint = "No installed launchable app matched label/query."
             )
+            candidates.size > 1 -> ambiguousTarget(request, candidates)
+            else -> resolvedSearchTarget(request, candidates.first())
         }
 
-        if (candidates.size > 1) {
-            val target = mapper.createObjectNode().apply {
-                if (label.isNotBlank()) put("label", label)
-                if (query.isNotBlank()) put("query", query)
-                put("resolved_by", if (label.isNotBlank()) "label" else "query")
-                set<JsonNode>("candidates", mapper.createArrayNode().apply {
-                    candidates.take(MAX_CANDIDATES_IN_ERROR).forEach { app ->
-                        addObject().apply {
-                            put("label", app.label)
-                            put("package", app.packageName)
-                        }
-                    }
-                })
+    private fun unresolvedSearchTarget(
+        request: TargetRequest,
+        error: String,
+        hint: String
+    ): TargetResolution =
+        TargetResolution(
+            packageName = "",
+            label = request.label,
+            query = request.query,
+            target = targetNode(label = request.label, query = request.query),
+            error = error,
+            hint = hint
+        )
+
+    private fun ambiguousTarget(request: TargetRequest, candidates: List<AppInfo>): TargetResolution {
+        val target = targetNode(
+            label = request.label,
+            query = request.query,
+            resolvedBy = request.resolvedBy()
+        ).apply {
+            set<JsonNode>("candidates", candidateNodes(candidates))
+        }
+        return TargetResolution(
+            packageName = "",
+            label = request.label,
+            query = request.query,
+            target = target,
+            error = "ambiguous_target",
+            hint = "Multiple apps matched. Provide package explicitly."
+        )
+    }
+
+    private fun candidateNodes(candidates: List<AppInfo>): ArrayNode =
+        mapper.createArrayNode().apply {
+            candidates.take(MAX_CANDIDATES_IN_ERROR).forEach { app ->
+                addObject().apply {
+                    put("label", app.label)
+                    put("package", app.packageName)
+                }
             }
-            return TargetResolution(
-                packageName = "",
-                label = label,
-                query = query,
-                target = target,
-                error = "ambiguous_target",
-                hint = "Multiple apps matched. Provide package explicitly."
-            )
         }
 
-        val matched = candidates.first()
-        val resolvedLabel = if (label.isNotBlank()) label else matched.label
-        val target = mapper.createObjectNode().apply {
-            put("package", matched.packageName)
-            if (resolvedLabel.isNotBlank()) put("label", resolvedLabel)
-            if (query.isNotBlank()) put("query", query)
-            put("resolved_by", if (label.isNotBlank()) "label" else "query")
-        }
+    private fun resolvedSearchTarget(request: TargetRequest, matched: AppInfo): TargetResolution {
+        val resolvedLabel = request.label.ifBlank { matched.label }
         return TargetResolution(
             packageName = matched.packageName,
             label = resolvedLabel,
-            query = query,
-            target = target
+            query = request.query,
+            target = targetNode(
+                packageName = matched.packageName,
+                label = resolvedLabel,
+                query = request.query,
+                resolvedBy = request.resolvedBy()
+            )
         )
     }
+
+    private fun targetNode(
+        packageName: String = "",
+        label: String = "",
+        query: String = "",
+        resolvedBy: String = ""
+    ): ObjectNode =
+        mapper.createObjectNode().apply {
+            if (packageName.isNotBlank()) put("package", packageName)
+            if (label.isNotBlank()) put("label", label)
+            if (query.isNotBlank()) put("query", query)
+            if (resolvedBy.isNotBlank()) put("resolved_by", resolvedBy)
+        }
 
     private fun packageLabelFromPm(packageName: String): String? {
         return runCatching {
@@ -560,6 +594,16 @@ class AppsCloseTool(
         val packageName: String,
         val isSystem: Boolean
     )
+
+    private data class TargetRequest(
+        val packageName: String,
+        val label: String,
+        val query: String
+    ) {
+        fun searchTerm(): String = label.ifBlank { query }
+
+        fun resolvedBy(): String = if (label.isNotBlank()) "label" else "query"
+    }
 
     private data class CloseRequest(
         val mode: String,
