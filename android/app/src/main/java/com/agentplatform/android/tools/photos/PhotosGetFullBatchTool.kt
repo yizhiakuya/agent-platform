@@ -115,25 +115,36 @@ class PhotosGetFullBatchTool(
     private fun displayMediaFor(photos: ArrayNode): ArrayNode {
         val media = mapper.createArrayNode()
         photos.forEach { node ->
-            if (!node.isObject || node.has("error")) return@forEach
-            val photo = node as ObjectNode
-            media.add(mapper.createObjectNode().apply {
-                put("kind", "image")
-                put("id", photo.path("id").asText(""))
-                put("media_store_id", photo.path("id").asText(""))
-                if (photo.hasNonNull("name")) set<JsonNode>("name", photo.get("name"))
-                if (photo.hasNonNull("image_url")) set<JsonNode>("image_url", photo.get("image_url"))
-                if (photo.hasNonNull("thumb_url")) set<JsonNode>("preview_url", photo.get("thumb_url"))
-                if (photo.hasNonNull("source_width")) set<JsonNode>("width", photo.get("source_width"))
-                if (photo.hasNonNull("source_height")) set<JsonNode>("height", photo.get("source_height"))
-                put("open_tool", "photos.get_full")
-                set<ObjectNode>("open_args", mapper.createObjectNode().apply {
-                    put("id", photo.path("id").asText(""))
-                    put("max_dim", 2048)
-                })
-            })
+            displayMediaItemFor(node)?.let(media::add)
         }
         return media
+    }
+
+    private fun displayMediaItemFor(node: JsonNode): ObjectNode? {
+        if (!node.isObject || node.has("error")) return null
+        val photo = node as ObjectNode
+        val id = photo.path("id").asText("")
+        return mapper.createObjectNode().apply {
+            put("kind", "image")
+            put("id", id)
+            put("media_store_id", id)
+            copyIfPresent(photo, "name", "name")
+            copyIfPresent(photo, "image_url", "image_url")
+            copyIfPresent(photo, "thumb_url", "preview_url")
+            copyIfPresent(photo, "source_width", "width")
+            copyIfPresent(photo, "source_height", "height")
+            put("open_tool", "photos.get_full")
+            set<ObjectNode>("open_args", openArgsFor(id))
+        }
+    }
+
+    private fun ObjectNode.copyIfPresent(source: ObjectNode, sourceField: String, targetField: String) {
+        if (source.hasNonNull(sourceField)) set<JsonNode>(targetField, source.get(sourceField))
+    }
+
+    private fun openArgsFor(id: String): ObjectNode = mapper.createObjectNode().apply {
+        put("id", id)
+        put("max_dim", 2048)
     }
 
     private fun fetchOne(
