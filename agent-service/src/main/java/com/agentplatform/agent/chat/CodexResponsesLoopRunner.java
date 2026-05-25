@@ -53,6 +53,13 @@ public class CodexResponsesLoopRunner {
             new ParameterizedTypeReference<>() {};
     private static final Set<String> RESPONSES_UNSUPPORTED_ROOT_SCHEMA_KEYS =
             Set.of("oneOf", "anyOf", "allOf", "enum", "not");
+    private static final String ERROR_FIELD = "error";
+    private static final String MESSAGE_FIELD = "message";
+    private static final String OBJECT_TYPE = "object";
+    private static final String OUTPUT_FIELD = "output";
+    private static final String OUTPUT_TEXT_FIELD = "output_text";
+    private static final String PROPERTIES_FIELD = "properties";
+    private static final String STATUS_FIELD = "status";
 
     private final ObjectMapper mapper;
     private final AgentProperties props;
@@ -175,7 +182,7 @@ public class CodexResponsesLoopRunner {
                 return new RunResult(textBuf.toString(), lastUsage, cancellation.isCancelled());
             }
 
-            JsonNode output = resp.path("output");
+            JsonNode output = resp.path(OUTPUT_FIELD);
             if (output.isArray()) {
                 for (JsonNode item : output) {
                     transcript.add(item.deepCopy());
@@ -255,8 +262,8 @@ public class CodexResponsesLoopRunner {
                 if (!item.isMissingNode() && !item.isNull()) {
                     outputItems.add(item.deepCopy());
                 }
-            } else if ("error".equals(type) || "response.error".equals(type)) {
-                throw new RuntimeException(streamErrorMessage(node));
+            } else if (ERROR_FIELD.equals(type) || "response.error".equals(type)) {
+                throw new IllegalStateException(streamErrorMessage(node));
             } else if ("response.completed".equals(type)
                     || "response.done".equals(type)
                     || "response.failed".equals(type)
@@ -265,7 +272,7 @@ public class CodexResponsesLoopRunner {
                 if (!response.isMissingNode() && !response.isNull()) {
                     completed = response.deepCopy();
                     lastResponse = response;
-                } else if (node.has("output") || node.has("output_text") || node.has("status")) {
+                } else if (node.has(OUTPUT_FIELD) || node.has(OUTPUT_TEXT_FIELD) || node.has(STATUS_FIELD)) {
                     completed = node.deepCopy();
                     lastResponse = node;
                 }
@@ -273,7 +280,7 @@ public class CodexResponsesLoopRunner {
                 JsonNode response = node.path("response");
                 if (!response.isMissingNode() && !response.isNull()) {
                     lastResponse = response;
-                } else if (node.has("output") || node.has("output_text")) {
+                } else if (node.has(OUTPUT_FIELD) || node.has(OUTPUT_TEXT_FIELD)) {
                     lastResponse = node;
                 }
             }
@@ -286,8 +293,8 @@ public class CodexResponsesLoopRunner {
         }
         if (!textBuf.isEmpty()) {
             ObjectNode fallback = mapper.createObjectNode();
-            fallback.put("status", "completed");
-            fallback.put("output_text", "");
+            fallback.put(STATUS_FIELD, "completed");
+            fallback.put(OUTPUT_TEXT_FIELD, "");
             return withStreamedOutput(fallback, outputItems);
         }
         return null;
@@ -297,12 +304,12 @@ public class CodexResponsesLoopRunner {
         if (!response.isObject() || outputItems == null || outputItems.isEmpty()) {
             return response;
         }
-        JsonNode output = response.path("output");
+        JsonNode output = response.path(OUTPUT_FIELD);
         if (output.isArray() && !output.isEmpty()) {
             return response;
         }
         ObjectNode copy = (ObjectNode) response.deepCopy();
-        copy.set("output", outputItems.deepCopy());
+        copy.set(OUTPUT_FIELD, outputItems.deepCopy());
         return copy;
     }
 
@@ -316,33 +323,28 @@ public class CodexResponsesLoopRunner {
     }
 
     private String streamErrorMessage(JsonNode node) {
-        JsonNode error = node.path("error");
-        String message = error.path("message").asText("");
+        JsonNode error = node.path(ERROR_FIELD);
+        String message = error.path(MESSAGE_FIELD).asText("");
         if (!message.isBlank()) {
             return message;
         }
-        message = node.path("message").asText("");
+        message = node.path(MESSAGE_FIELD).asText("");
         return message.isBlank() ? "Codex Responses stream failed" : message;
     }
 
     private void checkResponseStatus(JsonNode resp) {
-        String status = resp.path("status").asText("");
+        String status = resp.path(STATUS_FIELD).asText("");
         if (!"failed".equals(status) && !"incomplete".equals(status) && !"cancelled".equals(status)) {
             return;
         }
-        String message = resp.path("error").path("message").asText("");
+        String message = resp.path(ERROR_FIELD).path(MESSAGE_FIELD).asText("");
         if (message.isBlank()) {
             message = resp.path("incomplete_details").path("reason").asText("");
         }
         if (message.isBlank()) {
             message = "Codex Responses ended with status=" + status;
         }
-        throw new RuntimeException(message);
-    }
-
-    private List<JsonNode> buildInitialInput(List<MessageDto> history, String userText) {
-        return buildInitialInput(history, userText,
-                new ChatAttachmentContext(List.of(), List.of(), mapper.createArrayNode(), ""));
+        throw new IllegalStateException(message);
     }
 
     private List<JsonNode> buildInitialInput(List<MessageDto> history, String userText,
@@ -439,13 +441,13 @@ public class CodexResponsesLoopRunner {
 
     private JsonNode skillLoadSchema() {
         ObjectNode schema = mapper.createObjectNode();
-        schema.put("type", "object");
+        schema.put("type", OBJECT_TYPE);
         ObjectNode propsNode = mapper.createObjectNode();
         ObjectNode name = mapper.createObjectNode();
         name.put("type", "string");
         name.put("description", "Skill name from the available skills listing");
         propsNode.set("name", name);
-        schema.set("properties", propsNode);
+        schema.set(PROPERTIES_FIELD, propsNode);
         ArrayNode required = mapper.createArrayNode();
         required.add("name");
         schema.set("required", required);
@@ -455,16 +457,16 @@ public class CodexResponsesLoopRunner {
     private JsonNode normalizeSchema(@Nullable JsonNode schema) {
         if (schema == null || !schema.isObject()) {
             ObjectNode fallback = mapper.createObjectNode();
-            fallback.put("type", "object");
-            fallback.set("properties", mapper.createObjectNode());
+            fallback.put("type", OBJECT_TYPE);
+            fallback.set(PROPERTIES_FIELD, mapper.createObjectNode());
             return fallback;
         }
         ObjectNode copy = schema.deepCopy();
         if (!copy.hasNonNull("type")) {
-            copy.put("type", "object");
+            copy.put("type", OBJECT_TYPE);
         }
-        if (!copy.has("properties")) {
-            copy.set("properties", mapper.createObjectNode());
+        if (!copy.has(PROPERTIES_FIELD)) {
+            copy.set(PROPERTIES_FIELD, mapper.createObjectNode());
         }
         for (String key : RESPONSES_UNSUPPORTED_ROOT_SCHEMA_KEYS) {
             copy.remove(key);
@@ -473,19 +475,19 @@ public class CodexResponsesLoopRunner {
     }
 
     private String extractOutputText(JsonNode resp) {
-        String direct = resp.path("output_text").asText("");
+        String direct = resp.path(OUTPUT_TEXT_FIELD).asText("");
         if (!direct.isBlank()) {
             return direct;
         }
         StringBuilder out = new StringBuilder();
-        JsonNode output = resp.path("output");
+        JsonNode output = resp.path(OUTPUT_FIELD);
         if (output.isArray()) {
             for (JsonNode item : output) {
                 JsonNode content = item.path("content");
                 if (!content.isArray()) continue;
                 for (JsonNode block : content) {
                     String type = block.path("type").asText("");
-                    if ("output_text".equals(type) || "text".equals(type)) {
+                    if (OUTPUT_TEXT_FIELD.equals(type) || "text".equals(type)) {
                         out.append(block.path("text").asText(""));
                     }
                 }
@@ -496,7 +498,7 @@ public class CodexResponsesLoopRunner {
 
     private List<FunctionCall> extractFunctionCalls(JsonNode resp) {
         List<FunctionCall> calls = new ArrayList<>();
-        JsonNode output = resp.path("output");
+        JsonNode output = resp.path(OUTPUT_FIELD);
         if (!output.isArray()) return calls;
         for (JsonNode item : output) {
             String type = item.path("type").asText("");
@@ -573,7 +575,7 @@ public class CodexResponsesLoopRunner {
         ObjectNode out = mapper.createObjectNode();
         out.put("type", "function_call_output");
         out.put("call_id", call.callId());
-        out.put("output", er.jsonText());
+        out.put(OUTPUT_FIELD, er.jsonText());
         return out;
     }
 
@@ -607,14 +609,6 @@ public class CodexResponsesLoopRunner {
             out = out.substring(0, out.length() - 1);
         }
         return out;
-    }
-
-    private void safeSend(SseEmitter emitter, SseEvent event) {
-        try {
-            emitter.send(SseEmitter.event().name(event.type()).data(event.data()));
-        } catch (Exception e) {
-            // emitter likely closed by client cancel
-        }
     }
 
     private record FunctionCall(String name, String callId, String arguments) {}
