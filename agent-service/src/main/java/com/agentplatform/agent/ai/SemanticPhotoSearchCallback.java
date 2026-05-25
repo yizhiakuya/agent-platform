@@ -37,7 +37,20 @@ import java.util.UUID;
 public class SemanticPhotoSearchCallback extends RemoteToolCallback {
 
     public static final String TOOL_NAME = "photos.semantic_search";
+    private static final String CANDIDATE_K_FIELD = "candidate_k";
     private static final String CANDIDATE_TOOL = "photos.semantic_candidates";
+    private static final String DATE_TAKEN_MS_FIELD = "date_taken_ms";
+    private static final String DISPLAY_POLICY_FIELD = "display_policy";
+    private static final String FALLBACK_REALTIME_FIELD = "fallback_realtime";
+    private static final String MATCH_REASON_FIELD = "match_reason";
+    private static final String MATCH_SCORE_FIELD = "match_score";
+    private static final String MAX_DIM_FIELD = "max_dim";
+    private static final String PHOTOS_GET_FULL_TOOL = "photos.get_full";
+    private static final String QUERY_FIELD = "query";
+    private static final String REVIEW_CANDIDATES_FIELD = "review_candidates";
+    private static final String REVIEW_LIMIT_FIELD = "review_limit";
+    private static final String SEMANTIC_ENGINE_FIELD = "semantic_engine";
+    private static final String SOURCE_FIELD = "source";
     private static final Logger log = LoggerFactory.getLogger(SemanticPhotoSearchCallback.class);
 
     private final UUID deviceId;
@@ -102,13 +115,13 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         if (args == null || args.isNull()) {
             args = mapper.createObjectNode();
         }
-        String query = args.path("query").asText("").trim();
+        String query = args.path(QUERY_FIELD).asText("").trim();
         if (query.isBlank()) {
             return ExecutionResult.error("query is required");
         }
         int limit = clamp(args.path("limit").asInt(3), 1, 12);
-        int reviewLimit = args.has("review_limit")
-                ? clamp(args.path("review_limit").asInt(limit), limit, 12)
+        int reviewLimit = args.has(REVIEW_LIMIT_FIELD)
+                ? clamp(args.path(REVIEW_LIMIT_FIELD).asInt(limit), limit, 12)
                 : limit;
         SearchContract contract = searchContract(args, query, limit, reviewLimit);
         int scanLimit = clamp(
@@ -126,10 +139,10 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         }
         if (!fallbackRealtime) {
             ObjectNode empty = mapper.createObjectNode();
-            empty.put("query", query);
+            empty.put(QUERY_FIELD, query);
             empty.put("count", 0);
-            empty.put("semantic_engine", "photo_index_unavailable");
-            empty.put("fallback_realtime", false);
+            empty.put(SEMANTIC_ENGINE_FIELD, "photo_index_unavailable");
+            empty.put(FALLBACK_REALTIME_FIELD, false);
             empty.set("photos", mapper.createArrayNode());
             if (sink != null) sink.emit(SseEvent.toolCallResult(mapper, TOOL_NAME, empty));
             return ExecutionResult.text(empty.toString());
@@ -137,7 +150,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
 
         ObjectNode candidateArgs = mapper.createObjectNode();
         int candidateLimit = Math.min(20, Math.min(scanLimit, Math.max(contract.candidateK(), contract.reviewLimit())));
-        candidateArgs.put("query", query);
+        candidateArgs.put(QUERY_FIELD, query);
         candidateArgs.put("limit", candidateLimit);
         candidateArgs.put("scan_limit", scanLimit);
         candidateArgs.put("ocr", !args.has("ocr") || args.path("ocr").asBoolean(true));
@@ -157,11 +170,11 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         JsonNode photos = candidateRoot == null ? null : candidateRoot.path("photos");
         if (photos == null || !photos.isArray() || photos.isEmpty()) {
             ObjectNode empty = mapper.createObjectNode();
-            empty.put("query", query);
+            empty.put(QUERY_FIELD, query);
             empty.put("count", 0);
             empty.put("scanned", candidateRoot == null ? 0 : candidateRoot.path("scanned").asInt(0));
-            empty.put("semantic_engine", "realtime_text_embedding");
-            empty.put("fallback_realtime", true);
+            empty.put(SEMANTIC_ENGINE_FIELD, "realtime_text_embedding");
+            empty.put(FALLBACK_REALTIME_FIELD, true);
             empty.set("photos", mapper.createArrayNode());
             if (sink != null) sink.emit(SseEvent.toolCallResult(mapper, TOOL_NAME, empty));
             return ExecutionResult.text(empty.toString());
@@ -195,7 +208,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
                         photo.path("id").asText(), e.getMessage());
             }
             int localScore = photo.path("local_score").asInt(0);
-            float recencyScore = recencyScore(photo.path("date_taken_ms").asLong(0L));
+            float recencyScore = recencyScore(photo.path(DATE_TAKEN_MS_FIELD).asLong(0L));
             float visualScore = visualLabelScore(queryTerms, photo.path("visual_labels"));
             float deviceVisualScore = (float) photo.path("visual_score").asDouble(0.0);
             float totalScore = scoreCandidate(semanticScore, localScore, visualScore, deviceVisualScore, recencyScore);
@@ -228,11 +241,11 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
             copy.put("server_visual_score", round(hit.visualScore()));
             copy.put("device_visual_score", round(hit.deviceVisualScore()));
             copy.put("recency_score", round(hit.recencyScore()));
-            copy.put("match_score", round(hit.totalScore()));
-            copy.put("match_reason", hit.reason());
+            copy.put(MATCH_SCORE_FIELD, round(hit.totalScore()));
+            copy.put(MATCH_REASON_FIELD, hit.reason());
             copy.put("candidate_only", i >= finalTake);
             if (i < finalTake) {
-                copy.put("source", "realtime_scan");
+                copy.put(SOURCE_FIELD, "realtime_scan");
                 outPhotos.add(copy);
             } else {
                 reviewCandidates.add(withoutBinaryFields(copy));
@@ -244,17 +257,17 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         result.put("schema_version", "agent_tool_contract/v1");
         result.put("tool", TOOL_NAME);
         result.put("result_type", "selected");
-        result.put("query", query);
+        result.put(QUERY_FIELD, query);
         result.put("count", outPhotos.size());
         result.put("requested_limit", limit);
-        result.put("review_limit", reviewLimit);
+        result.put(REVIEW_LIMIT_FIELD, reviewLimit);
         result.put("reviewed_count", take);
-        result.put("candidate_k", contract.candidateK());
+        result.put(CANDIDATE_K_FIELD, contract.candidateK());
         result.put("candidate_only", false);
-        result.put("display_policy", resultDisplayPolicy(contract));
+        result.put(DISPLAY_POLICY_FIELD, resultDisplayPolicy(contract));
         ObjectNode ranking = mapper.createObjectNode();
         ranking.put("mode", contract.rankingMode());
-        ranking.put("candidate_k", contract.candidateK());
+        ranking.put(CANDIDATE_K_FIELD, contract.candidateK());
         ranking.put("min_score", round((float) contract.minScore()));
         result.set("ranking", ranking);
         ObjectNode sort = mapper.createObjectNode();
@@ -262,13 +275,13 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         sort.put("direction", contract.sortDirection());
         result.set("sort", sort);
         result.put("scanned", candidateRoot.path("scanned").asInt(scored.size()));
-        result.put("semantic_engine", "realtime_text_embedding+visual_labels");
-        result.put("fallback_realtime", true);
+        result.put(SEMANTIC_ENGINE_FIELD, "realtime_text_embedding+visual_labels");
+        result.put(FALLBACK_REALTIME_FIELD, true);
         result.put("embedding_dim", embeddingService.dim());
         result.set("photos", outPhotos);
         attachDisplayMedia(result, outPhotos);
         if (shouldExposeReviewCandidates(contract) && !reviewCandidates.isEmpty()) {
-            result.set("review_candidates", reviewCandidates);
+            result.set(REVIEW_CANDIDATES_FIELD, reviewCandidates);
         }
         addInspectNext(result);
         attachFullImageForSingleResult(result, contract);
@@ -339,7 +352,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
             put(photo, "name", hit.name());
             put(photo, "bucket_id", hit.bucketId());
             put(photo, "bucket_name", hit.bucketName());
-            put(photo, "date_taken_ms", hit.dateTakenMs());
+            put(photo, DATE_TAKEN_MS_FIELD, hit.dateTakenMs());
             put(photo, "date_modified_sec", hit.dateModifiedSec());
             put(photo, "size_bytes", hit.sizeBytes());
             put(photo, "width", hit.width());
@@ -351,10 +364,10 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
             put(photo, "embedding_dim", hit.embeddingDim());
             photo.put("rank", i + 1);
             photo.put("distance", round((float) hit.distance()));
-            photo.put("match_score", round((float) hit.score()));
-            photo.put("match_reason", "photo_index_embedding");
+            photo.put(MATCH_SCORE_FIELD, round((float) hit.score()));
+            photo.put(MATCH_REASON_FIELD, "photo_index_embedding");
             photo.put("candidate_only", i >= finalTake);
-            photo.put("source", "photo_index");
+            photo.put(SOURCE_FIELD, "photo_index");
             if (i < finalTake) {
                 outPhotos.add(photo);
             } else {
@@ -367,32 +380,32 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         result.put("schema_version", "agent_tool_contract/v1");
         result.put("tool", TOOL_NAME);
         result.put("result_type", "selected");
-        result.put("query", query);
+        result.put(QUERY_FIELD, query);
         result.put("count", outPhotos.size());
         result.put("requested_limit", contract.resultLimit());
-        result.put("review_limit", contract.reviewLimit());
+        result.put(REVIEW_LIMIT_FIELD, contract.reviewLimit());
         result.put("reviewed_count", take);
-        result.put("candidate_k", contract.candidateK());
+        result.put(CANDIDATE_K_FIELD, contract.candidateK());
         result.put("candidate_only", false);
-        result.put("display_policy", resultDisplayPolicy(contract));
+        result.put(DISPLAY_POLICY_FIELD, resultDisplayPolicy(contract));
         ObjectNode ranking = mapper.createObjectNode();
         ranking.put("mode", contract.rankingMode());
-        ranking.put("candidate_k", contract.candidateK());
+        ranking.put(CANDIDATE_K_FIELD, contract.candidateK());
         ranking.put("min_score", round((float) contract.minScore()));
         result.set("ranking", ranking);
         ObjectNode sort = mapper.createObjectNode();
         sort.put("by", contract.sortBy());
         sort.put("direction", contract.sortDirection());
         result.set("sort", sort);
-        result.put("semantic_engine", "photo_index");
-        result.put("fallback_realtime", false);
+        result.put(SEMANTIC_ENGINE_FIELD, "photo_index");
+        result.put(FALLBACK_REALTIME_FIELD, false);
         result.put("embedding_model", photoEmbeddingService.model());
         result.put("embedding_dim", photoEmbeddingService.dim());
         result.put("min_score", round((float) contract.minScore()));
         result.set("photos", outPhotos);
         attachDisplayMedia(result, outPhotos);
         if (shouldExposeReviewCandidates(contract) && !reviewCandidates.isEmpty()) {
-            result.set("review_candidates", reviewCandidates);
+            result.set(REVIEW_CANDIDATES_FIELD, reviewCandidates);
         }
         addInspectNext(result);
         attachFullImageForSingleResult(result, contract);
@@ -428,12 +441,12 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
             ObjectNode copy = ordered.get(i).deepCopy();
             float visualScore = visualLabelScore(queryTerms, copy.path("visual_labels"));
             copy.put("rank", i + 1);
-            copy.put("match_reason", reason);
+            copy.put(MATCH_REASON_FIELD, reason);
             copy.put("server_visual_score", round(visualScore));
-            copy.put("match_score", round((float) fallbackScore(queryTerms, copy)));
+            copy.put(MATCH_SCORE_FIELD, round((float) fallbackScore(queryTerms, copy)));
             copy.put("candidate_only", i >= finalTake);
             if (i < finalTake) {
-                copy.put("source", "realtime_fallback");
+                copy.put(SOURCE_FIELD, "realtime_fallback");
                 arr.add(copy);
             } else {
                 reviewCandidates.add(withoutBinaryFields(copy));
@@ -444,17 +457,17 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         out.put("schema_version", "agent_tool_contract/v1");
         out.put("tool", TOOL_NAME);
         out.put("result_type", "selected");
-        out.put("query", query);
+        out.put(QUERY_FIELD, query);
         out.put("count", arr.size());
         out.put("requested_limit", contract.resultLimit());
-        out.put("review_limit", contract.reviewLimit());
+        out.put(REVIEW_LIMIT_FIELD, contract.reviewLimit());
         out.put("reviewed_count", take);
-        out.put("candidate_k", contract.candidateK());
+        out.put(CANDIDATE_K_FIELD, contract.candidateK());
         out.put("candidate_only", false);
-        out.put("display_policy", resultDisplayPolicy(contract));
+        out.put(DISPLAY_POLICY_FIELD, resultDisplayPolicy(contract));
         ObjectNode ranking = mapper.createObjectNode();
         ranking.put("mode", contract.rankingMode());
-        ranking.put("candidate_k", contract.candidateK());
+        ranking.put(CANDIDATE_K_FIELD, contract.candidateK());
         ranking.put("min_score", round((float) contract.minScore()));
         out.set("ranking", ranking);
         ObjectNode sort = mapper.createObjectNode();
@@ -462,11 +475,11 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         sort.put("direction", contract.sortDirection());
         out.set("sort", sort);
         out.put("scanned", candidateRoot.path("scanned").asInt(ordered.size()));
-        out.put("semantic_engine", "local_text_visual_fallback");
+        out.put(SEMANTIC_ENGINE_FIELD, "local_text_visual_fallback");
         out.set("photos", arr);
         attachDisplayMedia(out, arr);
         if (shouldExposeReviewCandidates(contract) && !reviewCandidates.isEmpty()) {
-            out.set("review_candidates", reviewCandidates);
+            out.set(REVIEW_CANDIDATES_FIELD, reviewCandidates);
         }
         addInspectNext(out);
         attachFullImageForSingleResult(out, contract);
@@ -492,7 +505,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         result.set("display_media", media);
 
         ObjectNode display = mapper.createObjectNode();
-        display.put("policy", result.path("display_policy").asText(resultDisplayPolicyFallback(media.size())));
+        display.put("policy", result.path(DISPLAY_POLICY_FIELD).asText(resultDisplayPolicyFallback(media.size())));
         display.put("media_count", media.size());
         result.set("display", display);
     }
@@ -515,21 +528,21 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         copyField(photo, item, "mime_type");
         copyField(photo, item, "width");
         copyField(photo, item, "height");
-        copyField(photo, item, "date_taken_ms");
+        copyField(photo, item, DATE_TAKEN_MS_FIELD);
         copyField(photo, item, "date_modified_sec");
         copyField(photo, item, "rank");
-        copyField(photo, item, "match_score");
-        copyField(photo, item, "match_reason");
-        copyField(photo, item, "source");
+        copyField(photo, item, MATCH_SCORE_FIELD);
+        copyField(photo, item, MATCH_REASON_FIELD);
+        copyField(photo, item, SOURCE_FIELD);
         copyFirstText(photo, item, "preview_b64", "thumb_b64", "thumbnail_b64", "cover_thumb_b64");
         copyFirstText(photo, item, "preview_url", "thumb_url", "thumbnail_url", "cover_thumb_url");
         copyFirstText(photo, item, "image_url", "image_url", "asset_url", "url");
 
         if (id != null && !id.isBlank()) {
-            item.put("open_tool", "photos.get_full");
+            item.put("open_tool", PHOTOS_GET_FULL_TOOL);
             ObjectNode args = mapper.createObjectNode();
             args.put("id", id);
-            args.put("max_dim", 2048);
+            args.put(MAX_DIM_FIELD, 2048);
             item.set("open_args", args);
         }
         return item;
@@ -553,11 +566,11 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         }
         ObjectNode args = mapper.createObjectNode();
         args.put("id", id);
-        args.put("max_dim", 2048);
+        args.put(MAX_DIM_FIELD, 2048);
         try {
-            ToolResult full = dispatcher.dispatch(deviceId, boundUserId, "photos.get_full", args);
+            ToolResult full = dispatcher.dispatch(deviceId, boundUserId, PHOTOS_GET_FULL_TOOL, args);
             ObjectNode fullNode = mapper.createObjectNode();
-            fullNode.put("tool", "photos.get_full");
+            fullNode.put("tool", PHOTOS_GET_FULL_TOOL);
             fullNode.set("args", args);
             if (full == null) {
                 fullNode.put("ok", false);
@@ -583,9 +596,9 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         }
         ObjectNode args = mapper.createObjectNode();
         args.put("id", photos.get(0).path("id").asText(""));
-        args.put("max_dim", 2048);
+        args.put(MAX_DIM_FIELD, 2048);
         ObjectNode next = mapper.createObjectNode();
-        next.put("recommended_tool", "photos.get_full");
+        next.put("recommended_tool", PHOTOS_GET_FULL_TOOL);
         next.set("args", args);
         result.set("next", next);
     }
@@ -703,7 +716,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         }
         String normalizedDirection = normalizeSortDirection(sortDirection);
         int minCandidateK = Math.max(limit, reviewLimit);
-        int candidateK = clamp(args.path("candidate_k").asInt(minCandidateK), minCandidateK, 50);
+        int candidateK = clamp(args.path(CANDIDATE_K_FIELD).asInt(minCandidateK), minCandidateK, 50);
         double minScore = args.path("min_score").isNumber()
                 ? clampScore(args.path("min_score").asDouble())
                 : indexMinScore;
@@ -848,7 +861,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         int localScore = photo.path("local_score").asInt(0);
         float visualScore = visualLabelScore(queryTerms, photo.path("visual_labels"));
         float deviceVisualScore = (float) photo.path("visual_score").asDouble(0.0);
-        float recencyScore = recencyScore(photo.path("date_taken_ms").asLong(0L));
+        float recencyScore = recencyScore(photo.path(DATE_TAKEN_MS_FIELD).asLong(0L));
         return (localScore * 0.025d)
                 + (visualScore * 0.35d)
                 + (deviceVisualScore * 0.04d)
@@ -859,7 +872,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         Comparator<ScoredPhoto> relevance = Comparator
                 .comparing(ScoredPhoto::totalScore)
                 .reversed()
-                .thenComparing((ScoredPhoto p) -> p.photo().path("date_taken_ms").asLong(0L), Comparator.reverseOrder());
+                .thenComparing((ScoredPhoto p) -> p.photo().path(DATE_TAKEN_MS_FIELD).asLong(0L), Comparator.reverseOrder());
         if (!"semantic_then_sort".equals(contract.rankingMode()) || "relevance".equals(contract.sortBy())) {
             scored.sort(relevance);
             return;
@@ -881,7 +894,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         Comparator<ScoredPhoto> cmp = switch (contract.sortBy()) {
             case "date_modified" -> Comparator.comparing(p -> p.photo().path("date_modified_sec").asLong(0L));
             case "name" -> Comparator.comparing(p -> p.photo().path("name").asText(""));
-            default -> Comparator.comparing(p -> p.photo().path("date_taken_ms").asLong(0L));
+            default -> Comparator.comparing(p -> p.photo().path(DATE_TAKEN_MS_FIELD).asLong(0L));
         };
         return "asc".equals(contract.sortDirection()) ? cmp : cmp.reversed();
     }
@@ -890,7 +903,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         Comparator<JsonNode> relevance = Comparator
                 .comparingDouble((JsonNode n) -> fallbackScore(queryTerms, n))
                 .reversed()
-                .thenComparing(Comparator.comparingLong((JsonNode n) -> n.path("date_taken_ms").asLong(0L)).reversed());
+                .thenComparing(Comparator.comparingLong((JsonNode n) -> n.path(DATE_TAKEN_MS_FIELD).asLong(0L)).reversed());
         if (!"semantic_then_sort".equals(contract.rankingMode()) || "relevance".equals(contract.sortBy())) {
             photos.sort(relevance);
             return;
@@ -912,7 +925,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         Comparator<JsonNode> cmp = switch (contract.sortBy()) {
             case "date_modified" -> Comparator.comparingLong(n -> n.path("date_modified_sec").asLong(0L));
             case "name" -> Comparator.comparing(n -> n.path("name").asText(""));
-            default -> Comparator.comparingLong(n -> n.path("date_taken_ms").asLong(0L));
+            default -> Comparator.comparingLong(n -> n.path(DATE_TAKEN_MS_FIELD).asLong(0L));
         };
         return "asc".equals(contract.sortDirection()) ? cmp : cmp.reversed();
     }
