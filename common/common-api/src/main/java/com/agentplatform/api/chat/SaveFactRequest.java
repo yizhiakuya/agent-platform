@@ -1,5 +1,7 @@
 package com.agentplatform.api.chat;
 
+import java.util.Arrays;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -21,11 +23,48 @@ public record SaveFactRequest(
         float[] embedding,
         Boolean curated
 ) {
+    public SaveFactRequest {
+        embedding = embedding == null ? null : embedding.clone();
+    }
+
     public SaveFactRequest(UUID userId,
                            String kind,
                            String content,
                            UUID sourceMessageId,
                            float[] embedding) {
         this(userId, kind, content, sourceMessageId, embedding, null);
+    }
+
+    @Override
+    public float[] embedding() {
+        return embedding == null ? null : embedding.clone();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        return obj instanceof SaveFactRequest other
+                && Objects.equals(userId, other.userId)
+                && Objects.equals(kind, other.kind)
+                && Objects.equals(content, other.content)
+                && Objects.equals(sourceMessageId, other.sourceMessageId)
+                && Arrays.equals(embedding, other.embedding)
+                && Objects.equals(curated, other.curated);
+    }
+
+    @Override
+    public int hashCode() {
+        int result = Objects.hash(userId, kind, content, sourceMessageId, curated);
+        result = 31 * result + Arrays.hashCode(embedding);
+        return result;
+    }
+
+    @Override
+    public String toString() {
+        return "SaveFactRequest[userId=" + userId
+                + ", kind=" + kind
+                + ", content=" + content
+                + ", sourceMessageId=" + sourceMessageId
+                + ", embedding=" + Arrays.toString(embedding)
+                + ", curated=" + curated + "]";
     }
 }

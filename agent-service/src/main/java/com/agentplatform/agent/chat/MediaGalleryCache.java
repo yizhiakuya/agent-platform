@@ -3,6 +3,7 @@ package com.agentplatform.agent.chat;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -31,6 +32,25 @@ public interface MediaGalleryCache {
         @Override
         public byte[] bytes() {
             return bytes.clone();
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            return obj instanceof Thumbnail other
+                    && Arrays.equals(bytes, other.bytes)
+                    && contentType.equals(other.contentType);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = Arrays.hashCode(bytes);
+            result = 31 * result + contentType.hashCode();
+            return result;
+        }
+
+        @Override
+        public String toString() {
+            return "Thumbnail[bytes=" + Arrays.toString(bytes) + ", contentType=" + contentType + "]";
         }
     }
 }

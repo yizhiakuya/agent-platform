@@ -10,12 +10,15 @@ import android.media.ExifInterface
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Base64
+import android.util.Log
 import android.util.Size
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
 
 object PhotoToolUtils {
+    private const val TAG = "PhotoToolUtils"
+
     data class EncodedPhoto(
         val jpegBytes: ByteArray,
         val width: Int,
@@ -160,7 +163,9 @@ object PhotoToolUtils {
     private fun readCached(file: File): EncodedPhoto? {
         return try {
             if (!file.isFile) return null
-            file.setLastModified(System.currentTimeMillis())
+            if (!file.setLastModified(System.currentTimeMillis())) {
+                Log.d(TAG, "Unable to refresh display cache timestamp for ${file.name}")
+            }
             val bytes = file.readBytes()
             if (bytes.isEmpty()) return null
             val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }

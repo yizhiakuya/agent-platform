@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.Settings
+import android.util.Log
 import androidx.core.content.ContextCompat
 import rikka.shizuku.Shizuku
 import java.io.BufferedReader
@@ -18,6 +19,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 object PrivilegeManager {
+    private const val TAG = "PrivilegeManager"
     private const val SHIZUKU_PERMISSION_REQUEST_CODE = 4108
     private val XIAOMI_BACKGROUND_OPS = listOf(10004, 10017, 10018, 10020, 10021, 10022, 10045)
 
@@ -401,8 +403,12 @@ object PrivilegeManager {
         if (!finished) {
             process.destroy()
         }
-        outDone.await(500, TimeUnit.MILLISECONDS)
-        errDone.await(500, TimeUnit.MILLISECONDS)
+        if (!outDone.await(500, TimeUnit.MILLISECONDS)) {
+            Log.d(TAG, "Timed out waiting for Shizuku stdout reader")
+        }
+        if (!errDone.await(500, TimeUnit.MILLISECONDS)) {
+            Log.d(TAG, "Timed out waiting for Shizuku stderr reader")
+        }
         return CommandResult(
             exitCode = if (finished) runCatching { process.exitValue() }.getOrDefault(0) else -1,
             stdout = stdout.toString().trim(),

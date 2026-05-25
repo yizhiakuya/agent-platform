@@ -14,6 +14,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -87,5 +89,33 @@ public class DeviceToolDispatcher {
         }
     }
 
-    public record FetchedAsset(String contentType, byte[] bytes) {}
+    public record FetchedAsset(String contentType, byte[] bytes) {
+        public FetchedAsset {
+            bytes = bytes == null ? new byte[0] : bytes.clone();
+        }
+
+        @Override
+        public byte[] bytes() {
+            return bytes.clone();
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            return obj instanceof FetchedAsset other
+                    && Objects.equals(contentType, other.contentType)
+                    && Arrays.equals(bytes, other.bytes);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = Objects.hashCode(contentType);
+            result = 31 * result + Arrays.hashCode(bytes);
+            return result;
+        }
+
+        @Override
+        public String toString() {
+            return "FetchedAsset[contentType=" + contentType + ", bytes=" + Arrays.toString(bytes) + "]";
+        }
+    }
 }

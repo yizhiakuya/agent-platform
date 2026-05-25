@@ -57,6 +57,7 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.AgentPlatform"
+        android:usesCleartextTraffic="false"
         tools:targetApi="33"
         xmlns:tools="http://schemas.android.com/tools">
 
