@@ -8,12 +8,14 @@ import com.agentplatform.android.core.tool.Tool
 import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class PhotosMoveToAlbumTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     override val name: String = "photos.move_to_album"
 
@@ -60,7 +62,7 @@ class PhotosMoveToAlbumTool(
 
     override val confirmRequired: Boolean = true
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             throw UnsupportedOperationException("moving photos by album requires Android 10 or newer")
         }

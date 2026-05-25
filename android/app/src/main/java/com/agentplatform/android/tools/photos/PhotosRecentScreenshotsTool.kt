@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -22,7 +23,8 @@ import kotlinx.coroutines.withContext
  */
 class PhotosRecentScreenshotsTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
 
     override val name: String = "photos.recent_screenshots"
@@ -72,7 +74,7 @@ class PhotosRecentScreenshotsTool(
 
     override val confirmRequired: Boolean = false
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val uploader = PhotoAssetUploader(context, mapper)
         val requestedLimit = args.path("limit").asInt(DEFAULT_LIMIT).coerceAtLeast(1)
         val limit = requestedLimit.coerceAtMost(MAX_RESULTS_PER_CALL)

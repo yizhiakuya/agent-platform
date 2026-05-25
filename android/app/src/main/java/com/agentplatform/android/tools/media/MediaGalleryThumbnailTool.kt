@@ -14,6 +14,7 @@ import com.agentplatform.android.tools.photos.PhotoToolUtils
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ObjectNode
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -21,7 +22,8 @@ import java.util.Locale
 
 class MediaGalleryThumbnailTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     override val name: String = "media.gallery.thumbnail"
 
@@ -63,7 +65,7 @@ class MediaGalleryThumbnailTool(
 
     override val confirmRequired: Boolean = false
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val mediaType = args.path("media_type").asText("photo").lowercase(Locale.ROOT).trim()
         val idStr = args.path("id").asText("").trim()
         val id = idStr.toLongOrNull()

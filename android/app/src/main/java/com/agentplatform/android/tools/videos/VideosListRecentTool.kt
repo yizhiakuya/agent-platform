@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -28,7 +29,8 @@ import java.io.ByteArrayOutputStream
  */
 class VideosListRecentTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
 
     override val name: String = "videos.list_recent"
@@ -73,7 +75,7 @@ class VideosListRecentTool(
 
     override val confirmRequired: Boolean = false
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val limit = args.path("limit").asInt(10).coerceIn(1, 30)
         val nameContains = args.path("name_contains").asText("").trim().takeIf { it.isNotEmpty() }
         val dateAfter = args.path("date_after").let { if (it.isNumber && it.asLong() > 0L) it.asLong() else null }

@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -15,7 +16,8 @@ import kotlin.math.roundToInt
 
 class MediaSelectionCreateTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     override val name: String = "media.selection.create"
 
@@ -102,7 +104,7 @@ class MediaSelectionCreateTool(
         """.trimIndent()
     )
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val mediaType = args.path("media_type").asText("photo").lowercase(Locale.ROOT).trim()
         require(mediaType == "photo") { "only photo selections are supported" }
 

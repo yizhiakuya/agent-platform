@@ -7,12 +7,14 @@ import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.privilege.PrivilegeManager
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class PhotosDeleteTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     override val name: String = "photos.delete"
 
@@ -53,7 +55,7 @@ class PhotosDeleteTool(
 
     override val confirmRequired: Boolean = false
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val shellAvailable = PrivilegeManager.status(context).shellAvailable

@@ -9,12 +9,14 @@ import android.util.Log
 import com.agentplatform.android.core.tool.Tool
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class PhotosListFavoritesTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     override val name: String = "photos.list_favorites"
 
@@ -43,7 +45,7 @@ class PhotosListFavoritesTool(
 
     override val confirmRequired: Boolean = false
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             throw UnsupportedOperationException("listing favorites requires Android 11 or newer")
         }
@@ -59,7 +61,8 @@ class PhotosListFavoritesTool(
 
 class PhotosListTrashTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     override val name: String = "photos.list_trash"
 
@@ -88,7 +91,7 @@ class PhotosListTrashTool(
 
     override val confirmRequired: Boolean = false
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             throw UnsupportedOperationException("listing trash requires Android 11 or newer")
         }

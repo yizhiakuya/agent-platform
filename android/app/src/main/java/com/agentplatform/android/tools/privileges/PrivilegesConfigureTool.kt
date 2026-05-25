@@ -6,12 +6,14 @@ import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.privilege.PrivilegeManager
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class PrivilegesConfigureTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     override val name: String = "privileges.configure"
 
@@ -47,7 +49,7 @@ class PrivilegesConfigureTool(
     override val safetyLevel: String = "sensitive_action"
     override val defaultDisplayPolicy: String = "debug_only"
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         when (args.path("target").asText("")) {
             "manage_media" -> configureManageMedia(args)
             "xiaomi_background" -> configureXiaomiBackground(args)

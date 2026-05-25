@@ -6,12 +6,14 @@ import com.agentplatform.android.core.tool.Tool
 import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class PhotosCopyToAlbumTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     override val name: String = "photos.copy_to_album"
 
@@ -62,7 +64,7 @@ class PhotosCopyToAlbumTool(
 
     override val confirmRequired: Boolean = true
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
         val album = PhotoMutationHelpers.sanitizeAlbum(args.path("album").asText(""))
         val requestedFilename = args.path("filename").asText("").trim().takeIf { ids.size == 1 && it.isNotBlank() }

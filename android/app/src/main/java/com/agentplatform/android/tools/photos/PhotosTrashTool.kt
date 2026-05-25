@@ -8,12 +8,14 @@ import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.privilege.PrivilegeManager
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class PhotosTrashTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     override val name: String = "photos.trash"
 
@@ -54,7 +56,7 @@ class PhotosTrashTool(
 
     override val confirmRequired: Boolean = false
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             throw UnsupportedOperationException("trash requires Android 11 or newer")
         }

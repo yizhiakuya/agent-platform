@@ -11,6 +11,7 @@ import com.agentplatform.android.data.AppPrefs
 import com.agentplatform.android.tools.photos.PhotoToolUtils
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -22,7 +23,8 @@ import java.util.concurrent.TimeUnit
 
 internal class PhotoIndexUploader(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
     private val appPrefs = AppPrefs(context)
     private val indexPrefs = PhotoIndexPrefs(context)
@@ -32,7 +34,7 @@ internal class PhotoIndexUploader(
         .writeTimeout(45, TimeUnit.SECONDS)
         .build()
 
-    suspend fun syncOnce(maxRows: Int = 300, batchSize: Int = 20): SyncResult = withContext(Dispatchers.IO) {
+    suspend fun syncOnce(maxRows: Int = 300, batchSize: Int = 20): SyncResult = withContext(ioDispatcher) {
         val serverUrl = appPrefs.serverUrl?.trimEnd('/')
         val token = appPrefs.token
         if (serverUrl.isNullOrBlank() || token.isNullOrBlank()) {

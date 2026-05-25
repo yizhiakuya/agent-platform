@@ -13,13 +13,15 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
 class MediaGalleryBrowseTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     private val appPrefs = AppPrefs(context)
 
@@ -87,7 +89,7 @@ class MediaGalleryBrowseTool(
 
     override val confirmRequired: Boolean = false
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val view = args.path("view").asText("albums").lowercase(Locale.ROOT).trim().ifBlank { "albums" }
         val normalizedView = if (view == "timeline") "photos" else view
         val requestedLimit = args.path("limit").asInt(DEFAULT_LIMIT).coerceAtLeast(1)

@@ -6,12 +6,14 @@ import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.privilege.PrivilegeManager
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class PrivilegesStatusTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     override val name: String = "privileges.status"
 
@@ -34,7 +36,7 @@ class PrivilegesStatusTool(
     override val defaultDisplayPolicy: String = "debug_only"
     override val resultType: String = "state"
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val status = PrivilegeManager.status(context)
         val mediaWithoutSystemConfirmation = status.manageMediaGranted || status.shellAvailable
         val accessibilitySettings = PrivilegeManager.accessibilitySettingsStatus(context)

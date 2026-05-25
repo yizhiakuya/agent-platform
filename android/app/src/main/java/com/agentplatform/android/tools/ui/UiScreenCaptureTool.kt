@@ -8,6 +8,7 @@ import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.agentplatform.android.ui.capture.UiCaptureManager
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -28,7 +29,10 @@ import java.io.ByteArrayOutputStream
  * Read-only — no confirm gating. The user must have approved either the
  * AccessibilityService screenshot capability or the MediaProjection consent.
  */
-class UiScreenCaptureTool(private val mapper: ObjectMapper) : Tool {
+class UiScreenCaptureTool(
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+) : Tool {
 
     override val name = "ui.screen_capture"
 
@@ -77,7 +81,7 @@ class UiScreenCaptureTool(private val mapper: ObjectMapper) : Tool {
             null
         }
         val bitmap = accessibilityBitmap
-            ?: withContext(Dispatchers.IO) { UiCaptureManager.captureNow() }
+            ?: withContext(ioDispatcher) { UiCaptureManager.captureNow() }
             ?: return ToolResultEnvelope.error(
                 mapper = mapper,
                 tool = this,
@@ -88,7 +92,7 @@ class UiScreenCaptureTool(private val mapper: ObjectMapper) : Tool {
                 request = args
             )
 
-        val b64 = withContext(Dispatchers.IO) { encodeJpegBase64(bitmap, quality) }
+        val b64 = withContext(ioDispatcher) { encodeJpegBase64(bitmap, quality) }
         val capW: Int
         val capH: Int
         val devW: Int

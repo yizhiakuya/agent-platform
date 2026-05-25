@@ -13,12 +13,14 @@ import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.agentplatform.android.ui.capture.UiCaptureManager
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class AndroidDiagnosticsTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     override val name: String = "android.diagnostics"
 
@@ -48,7 +50,7 @@ class AndroidDiagnosticsTool(
     override val defaultDisplayPolicy: String = "debug_only"
     override val resultType: String = "state"
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val includeRecommendations = args.path("include_recommendations").asBoolean(true)
         val prefs = AppPrefs(context)
         val privilege = PrivilegeManager.status(context)

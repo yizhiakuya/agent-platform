@@ -18,6 +18,7 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.google.android.gms.tasks.Tasks
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -33,7 +34,8 @@ import java.time.format.DateTimeFormatter
  */
 class PhotosSemanticCandidatesTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
 
     override val name: String = "photos.semantic_candidates"
@@ -96,7 +98,7 @@ class PhotosSemanticCandidatesTool(
 
     override val confirmRequired: Boolean = false
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val query = args.path("query").asText("").trim()
         val limit = args.path("limit").asInt(8).coerceIn(1, 20)
         val scanLimit = args.path("scan_limit").asInt(60).coerceIn(limit, 200)

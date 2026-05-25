@@ -8,6 +8,7 @@ import com.agentplatform.android.core.tool.Tool
 import com.agentplatform.android.data.AppPrefs
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -21,7 +22,8 @@ import java.util.concurrent.TimeUnit
  */
 class PhotosSaveToGalleryTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
 
     override val name: String = "photos.save_to_gallery"
@@ -69,7 +71,7 @@ class PhotosSaveToGalleryTool(
         .readTimeout(45, TimeUnit.SECONDS)
         .build()
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val imageUrl = args.path("image_url").asText("").trim()
         require(imageUrl.isNotBlank()) { "image_url required" }
         val prefs = AppPrefs(context)

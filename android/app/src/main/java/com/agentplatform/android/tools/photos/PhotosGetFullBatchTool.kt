@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -20,7 +21,8 @@ import kotlinx.coroutines.withContext
  */
 class PhotosGetFullBatchTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
 
     override val name: String = "photos.get_full_batch"
@@ -58,7 +60,7 @@ class PhotosGetFullBatchTool(
 
     override val confirmRequired: Boolean = false
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val idsNode = args.path("ids")
         require(idsNode.isArray && idsNode.size() > 0) { "ids must be a non-empty array" }
         require(idsNode.size() <= MAX_BATCH) { "at most $MAX_BATCH photos can be fetched at once" }

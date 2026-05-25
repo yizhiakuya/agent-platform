@@ -6,12 +6,14 @@ import android.provider.MediaStore
 import com.agentplatform.android.core.tool.Tool
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class PhotosRenameTool(
     private val context: Context,
-    private val mapper: ObjectMapper
+    private val mapper: ObjectMapper,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : Tool {
     override val name: String = "photos.rename"
 
@@ -43,7 +45,7 @@ class PhotosRenameTool(
 
     override val confirmRequired: Boolean = true
 
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val id = PhotoMutationHelpers.parseIds(args).single()
         val requestedName = args.path("filename").asText("").trim()
         require(requestedName.isNotBlank()) { "filename is required" }
