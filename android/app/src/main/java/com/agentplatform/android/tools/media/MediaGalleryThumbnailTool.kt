@@ -88,15 +88,7 @@ class MediaGalleryThumbnailTool(
                 obj = result,
                 upload = upload,
                 image = image,
-                imageUrlField = "thumb_url",
-                assetIdField = "thumb_asset_id",
-                contentTypeField = "content_type",
-                bytesField = "thumb_bytes",
-                widthField = "thumb_width",
-                heightField = "thumb_height",
-                cacheHitField = "thumb_cache_hit",
-                assetCacheHitField = "asset_cache_hit",
-                errorField = "thumb_upload_error"
+                fields = PhotoAssetUploader.UploadFields.Thumbnail
             )
             if (!result.hasNonNull("thumb_url")) {
                 result.put("error", result.path("thumb_upload_error").asText("thumbnail upload failed"))

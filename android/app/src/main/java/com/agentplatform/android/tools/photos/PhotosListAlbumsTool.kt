@@ -147,15 +147,7 @@ class PhotosListAlbumsTool(
             node,
             upload,
             cover,
-            imageUrlField = "cover_image_url",
-            assetIdField = "cover_asset_id",
-            contentTypeField = "cover_content_type",
-            bytesField = "cover_image_bytes",
-            widthField = "cover_image_width",
-            heightField = "cover_image_height",
-            cacheHitField = "cover_image_cache_hit",
-            assetCacheHitField = "cover_asset_cache_hit",
-            errorField = "cover_upload_error"
+            fields = PhotoAssetUploader.UploadFields.AlbumCover
         )
     }
 

@@ -40,43 +40,70 @@ internal class PhotoAssetUploader(
         val contentHash = sha256(image.jpegBytes)
         cachedUpload(serverUrl, token, contentHash)?.let { return it }
 
-        val endpoints = listOf("$serverUrl/api/uploads/photos")
+        val upload = PendingUpload(
+            serverUrl = serverUrl,
+            token = token,
+            mediaStoreId = mediaStoreId,
+            name = name,
+            image = image,
+            contentType = contentType,
+            contentHash = contentHash
+        )
+        return uploadToFirstAvailableEndpoint(upload)
+    }
+
+    private fun uploadToFirstAvailableEndpoint(upload: PendingUpload): UploadResult {
         var lastError = "upload_failed"
-        for (endpoint in endpoints) {
+        for (endpoint in upload.endpoints) {
             try {
-                var tryNextEndpoint = false
-                val request = Request.Builder()
-                    .url(endpoint)
-                    .header("Authorization", "Bearer $token")
-                    .header("Content-Type", contentType)
-                    .header("X-Media-Store-Id", mediaStoreId.toString())
-                    .header("X-Content-Hash", contentHash)
-                    .apply {
-                        if (!name.isNullOrBlank()) header("X-Filename-Hash", sha256(name.toByteArray(Charsets.UTF_8)))
-                        header("X-Image-Width", image.width.toString())
-                        header("X-Image-Height", image.height.toString())
+                when (val attempt = uploadToEndpoint(endpoint, upload)) {
+                    is UploadAttempt.Success -> return attempt.result
+                    is UploadAttempt.Failure -> {
+                        lastError = attempt.message
+                        if (!attempt.tryNextEndpoint) break
                     }
-                    .post(image.jpegBytes.toRequestBody(JPEG))
-                    .build()
-                client.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        val body = response.body?.string().orEmpty()
-                        val success = successFromResponse(endpoint, mediaStoreId, body, contentType)
-                        rememberUpload(serverUrl, token, contentHash, success)
-                        return success
-                    }
-                    val err = response.body?.string()?.take(240).orEmpty()
-                    lastError = "HTTP ${response.code}${if (err.isBlank()) "" else ": $err"}"
-                    tryNextEndpoint = response.code == 404 || response.code == 405
                 }
-                if (!tryNextEndpoint) break
             } catch (e: Exception) {
                 lastError = e.message ?: "upload_failed"
-                Log.w(TAG, "photo asset upload failed endpoint=$endpoint id=$mediaStoreId: ${e.message}")
+                Log.w(TAG, "photo asset upload failed endpoint=$endpoint id=${upload.mediaStoreId}: ${e.message}")
             }
         }
         return UploadResult.Failure(lastError)
     }
+
+    private fun uploadToEndpoint(endpoint: String, upload: PendingUpload): UploadAttempt {
+        val request = buildUploadRequest(endpoint, upload)
+        client.newCall(request).execute().use { response ->
+            if (response.isSuccessful) {
+                val body = response.body?.string().orEmpty()
+                val success = successFromResponse(endpoint, upload.mediaStoreId, body, upload.contentType)
+                rememberUpload(upload.serverUrl, upload.token, upload.contentHash, success)
+                return UploadAttempt.Success(success)
+            }
+            val err = response.body?.string()?.take(240).orEmpty()
+            return UploadAttempt.Failure(
+                message = "HTTP ${response.code}${if (err.isBlank()) "" else ": $err"}",
+                tryNextEndpoint = response.code == 404 || response.code == 405
+            )
+        }
+    }
+
+    private fun buildUploadRequest(endpoint: String, upload: PendingUpload): Request =
+        Request.Builder()
+            .url(endpoint)
+            .header("Authorization", "Bearer ${upload.token}")
+            .header("Content-Type", upload.contentType)
+            .header("X-Media-Store-Id", upload.mediaStoreId.toString())
+            .header("X-Content-Hash", upload.contentHash)
+            .apply {
+                upload.name
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { header("X-Filename-Hash", sha256(it.toByteArray(Charsets.UTF_8))) }
+                header("X-Image-Width", upload.image.width.toString())
+                header("X-Image-Height", upload.image.height.toString())
+            }
+            .post(upload.image.jpegBytes.toRequestBody(JPEG))
+            .build()
 
     private fun successFromResponse(
         endpoint: String,
@@ -160,6 +187,24 @@ internal class PhotoAssetUploader(
         return null
     }
 
+    private data class PendingUpload(
+        val serverUrl: String,
+        val token: String,
+        val mediaStoreId: Long,
+        val name: String?,
+        val image: PhotoToolUtils.EncodedPhoto,
+        val contentType: String,
+        val contentHash: String
+    ) {
+        val endpoints: List<String>
+            get() = listOf("$serverUrl/api/uploads/photos")
+    }
+
+    private sealed class UploadAttempt {
+        data class Success(val result: UploadResult.Success) : UploadAttempt()
+        data class Failure(val message: String, val tryNextEndpoint: Boolean) : UploadAttempt()
+    }
+
     sealed class UploadResult {
         data class Success(
             val assetId: String,
@@ -169,6 +214,54 @@ internal class PhotoAssetUploader(
         ) : UploadResult()
 
         data class Failure(val message: String) : UploadResult()
+    }
+
+    sealed interface UploadFields {
+        val imageUrl: String
+        val assetId: String
+        val contentType: String
+        val bytes: String
+        val width: String
+        val height: String
+        val cacheHit: String
+        val assetCacheHit: String
+        val error: String
+
+        object Default : UploadFields {
+            override val imageUrl = "image_url"
+            override val assetId = "asset_id"
+            override val contentType = "content_type"
+            override val bytes = "image_bytes"
+            override val width = "image_width"
+            override val height = "image_height"
+            override val cacheHit = "image_cache_hit"
+            override val assetCacheHit = "asset_cache_hit"
+            override val error = "image_upload_error"
+        }
+
+        object Thumbnail : UploadFields {
+            override val imageUrl = "thumb_url"
+            override val assetId = "thumb_asset_id"
+            override val contentType = "content_type"
+            override val bytes = "thumb_bytes"
+            override val width = "thumb_width"
+            override val height = "thumb_height"
+            override val cacheHit = "thumb_cache_hit"
+            override val assetCacheHit = "asset_cache_hit"
+            override val error = "thumb_upload_error"
+        }
+
+        object AlbumCover : UploadFields {
+            override val imageUrl = "cover_image_url"
+            override val assetId = "cover_asset_id"
+            override val contentType = "cover_content_type"
+            override val bytes = "cover_image_bytes"
+            override val width = "cover_image_width"
+            override val height = "cover_image_height"
+            override val cacheHit = "cover_image_cache_hit"
+            override val assetCacheHit = "cover_asset_cache_hit"
+            override val error = "cover_upload_error"
+        }
     }
 
     companion object {
@@ -181,32 +274,24 @@ internal class PhotoAssetUploader(
             obj: ObjectNode,
             upload: UploadResult,
             image: PhotoToolUtils.EncodedPhoto,
-            imageUrlField: String = "image_url",
-            assetIdField: String = "asset_id",
-            contentTypeField: String = "content_type",
-            bytesField: String = "image_bytes",
-            widthField: String = "image_width",
-            heightField: String = "image_height",
-            cacheHitField: String = "image_cache_hit",
-            assetCacheHitField: String = "asset_cache_hit",
-            errorField: String = "image_upload_error"
+            fields: UploadFields = UploadFields.Default
         ) {
             when (upload) {
                 is UploadResult.Success -> {
-                    obj.put(imageUrlField, upload.imageUrl)
-                    obj.put(assetIdField, upload.assetId)
-                    obj.put(contentTypeField, upload.contentType)
-                    obj.put(assetCacheHitField, upload.assetCacheHit)
+                    obj.put(fields.imageUrl, upload.imageUrl)
+                    obj.put(fields.assetId, upload.assetId)
+                    obj.put(fields.contentType, upload.contentType)
+                    obj.put(fields.assetCacheHit, upload.assetCacheHit)
                 }
                 is UploadResult.Failure -> {
-                    obj.put(errorField, upload.message)
-                    obj.put(contentTypeField, JPEG.toString())
+                    obj.put(fields.error, upload.message)
+                    obj.put(fields.contentType, JPEG.toString())
                 }
             }
-            obj.put(bytesField, image.bytes)
-            obj.put(widthField, image.width)
-            obj.put(heightField, image.height)
-            obj.put(cacheHitField, image.cacheHit)
+            obj.put(fields.bytes, image.bytes)
+            obj.put(fields.width, image.width)
+            obj.put(fields.height, image.height)
+            obj.put(fields.cacheHit, image.cacheHit)
         }
 
         private fun sha256(bytes: ByteArray): String {
