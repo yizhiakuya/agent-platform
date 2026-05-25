@@ -79,6 +79,12 @@ public class ChatService {
 
     /** Hard cap matching MemoryService.MAX_TOP_K — avoids pointless inflation. */
     private static final int MAX_MEMORY_TOP_K = 50;
+    private static final String EVENT_ASSISTANT_MESSAGE = "assistant_message";
+    private static final String EVENT_TOOL_CALL_STARTED = "tool_call_started";
+    private static final String EVENT_TOOL_CALL_RESULT = "tool_call_result";
+    private static final String EVENT_TOOL_CALL_ERROR = "tool_call_error";
+    private static final String EVENT_ERROR = "error";
+    private static final String METADATA_RESULT = "result";
 
     private final RemoteDeviceToolCallbackProvider toolProvider;
     private final InternalChatFeignClient chatClientFeign;
@@ -672,7 +678,7 @@ public class ChatService {
     private JsonNode toolResultMetadata(String toolName, JsonNode result) {
         ObjectNode m = mapper.createObjectNode();
         m.put("tool", toolName);
-        m.set("result", result == null ? mapper.createObjectNode() : result);
+        m.set(METADATA_RESULT, result == null ? mapper.createObjectNode() : result);
         return m;
     }
 
@@ -685,17 +691,18 @@ public class ChatService {
     private void emitAndPersistToolEvent(SseEmitter emitter, UUID sessionId, UUID userId, SseEvent event) {
         safeSend(emitter, event);
         if (event == null || event.data() == null || event.data().isNull()) return;
-        if ("tool_call_started".equals(event.type())) {
+        if (EVENT_TOOL_CALL_STARTED.equals(event.type())) {
             JsonNode data = event.data();
             String tool = data.path("tool").asText("tool");
             UUID deviceId = parseUuid(data.path("deviceId").asText(null));
             JsonNode args = data.path("args").isMissingNode() ? mapper.createObjectNode() : data.path("args");
             persist(sessionId, userId, MessageRole.TOOL_CALL, "calling " + tool,
                     toolCallMetadata(deviceId, tool, args));
-        } else if ("tool_call_result".equals(event.type())) {
+        } else if (EVENT_TOOL_CALL_RESULT.equals(event.type())) {
             JsonNode data = event.data();
             String tool = data.path("tool").asText("tool");
-            JsonNode result = data.path("result").isMissingNode() ? mapper.createObjectNode() : data.path("result");
+            JsonNode result = data.path(METADATA_RESULT).isMissingNode()
+                    ? mapper.createObjectNode() : data.path(METADATA_RESULT);
             MessageDto saved = persist(sessionId, userId, MessageRole.TOOL_RESULT, "tool " + tool + " returned",
                     toolResultMetadata(tool, result));
             persistArtifacts(sessionId, userId, saved == null ? null : saved.id(), tool, result);
@@ -719,23 +726,23 @@ public class ChatService {
 
         @Override
         public void emit(SseEvent event) {
-            if (event != null && ("assistant_message".equals(event.type())
-                    || "tool_call_started".equals(event.type())
-                    || "tool_call_result".equals(event.type()))) {
+            if (event != null && (EVENT_ASSISTANT_MESSAGE.equals(event.type())
+                    || EVENT_TOOL_CALL_STARTED.equals(event.type())
+                    || EVENT_TOOL_CALL_RESULT.equals(event.type()))) {
                 responseStarted.set(true);
             }
             emitAndPersistToolEvent(emitter, sessionId, userId, event);
             if (event == null || event.data() == null || event.data().isNull()) return;
-            if ("tool_call_started".equals(event.type())) {
+            if (EVENT_TOOL_CALL_STARTED.equals(event.type())) {
                 pendingTools.addLast(event.data().path("tool").asText("tool"));
-            } else if ("tool_call_result".equals(event.type()) || "tool_call_error".equals(event.type())) {
+            } else if (EVENT_TOOL_CALL_RESULT.equals(event.type()) || EVENT_TOOL_CALL_ERROR.equals(event.type())) {
                 String tool = event.data().path("tool").asText(null);
                 if (tool == null) {
                     pendingTools.pollLast();
                 } else {
                     pendingTools.removeFirstOccurrence(tool);
                 }
-            } else if ("error".equals(event.type()) && !pendingTools.isEmpty()) {
+            } else if (EVENT_ERROR.equals(event.type()) && !pendingTools.isEmpty()) {
                 String tool = pendingTools.pollLast();
                 String message = event.data().path("message").asText("tool failed");
                 SseEvent terminal = SseEvent.toolCallError(mapper, tool, message);
