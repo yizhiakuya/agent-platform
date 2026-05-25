@@ -218,12 +218,7 @@ public class ChatService {
         // along on the user message instead so they don't churn the cache.
         ContextAssembler.UserContextSettings userContextSettings = loadUserContextSettings(userId);
         boolean autoMemoryEnabled = userContextSettings.autoMemoryEnabled();
-        List<MemoryFactDto> memories = autoMemoryEnabled
-                ? recallMemories(userId, req.message())
-                : List.of();
-        if (!autoMemoryEnabled) {
-            log.debug("auto memory disabled for user {}; skipping memory recall", userId);
-        }
+        List<MemoryFactDto> memories = recallMemoriesIfEnabled(userId, req.message(), autoMemoryEnabled);
         ContextBundle context = contextAssembler.assemble(
                 userId,
                 sessionId,
@@ -237,51 +232,85 @@ public class ChatService {
                 executableTools,
                 props.agent().memory());
 
-        ThinkingConfigEnabled thinking = null;
-        int budget = props.agent().memory().thinkingBudgetTokens();
-        if (budget >= 1024) {
-            thinking = ThinkingConfigEnabled.builder().budgetTokens(budget).build();
-        }
-
         List<MessageParam> messages = context.anthropicMessages();
         messages.add(buildAnthropicUserMessage(context.userText(), attachments));
 
         AtomicBoolean responseStarted = new AtomicBoolean(false);
         ChatEventSink sink = new PersistingChatEventSink(emitter, sessionId, userId, responseStarted);
-
         long t0 = System.currentTimeMillis();
 
-        // Provider failover is limited to synchronous setup. After stream
-        // events start, the current response is closed without trying another provider.
-        RunResult result = null;
+        ProviderRunContext runContext = new ProviderRunContext();
+        runContext.sessionId = sessionId;
+        runContext.userId = userId;
+        runContext.resolved = resolved;
+        runContext.stableSystemText = context.stableSystemText();
+        runContext.systemBlocks = context.systemBlocks();
+        runContext.tools = tools;
+        runContext.thinking = thinkingConfig();
+        runContext.messages = messages;
+        runContext.historyRows = context.historyRows();
+        runContext.userText = context.userText();
+        runContext.attachments = attachments;
+        runContext.sink = sink;
+        runContext.emitter = emitter;
+        runContext.cancellation = cancellation;
+
+        ProviderRunOutcome outcome = tryRunProviders(runContext, responseStarted);
+        if (outcome.terminalHandled()) {
+            return;
+        }
+        if (outcome.result() == null) {
+            handleAllProvidersFailed(userId, sessionId, emitter, outcome.lastError());
+            return;
+        }
+
+        completeProviderRun(userId, sessionId, req, emitter, autoMemoryEnabled, t0, outcome.result());
+    }
+
+    private List<MemoryFactDto> recallMemoriesIfEnabled(UUID userId, String message, boolean autoMemoryEnabled) {
+        if (autoMemoryEnabled) {
+            return recallMemories(userId, message);
+        }
+        log.debug("auto memory disabled for user {}; skipping memory recall", userId);
+        return List.of();
+    }
+
+    private ThinkingConfigEnabled thinkingConfig() {
+        int budget = props.agent().memory().thinkingBudgetTokens();
+        return budget >= 1024
+                ? ThinkingConfigEnabled.builder().budgetTokens(budget).build()
+                : null;
+    }
+
+    private ProviderRunOutcome tryRunProviders(ProviderRunContext runContext, AtomicBoolean responseStarted) {
         RuntimeException lastErr = null;
         for (ConfiguredProvider provider : chatClients) {
             try {
-                result = runProvider(provider, sessionId, userId, resolved,
-                        context.stableSystemText(), context.systemBlocks(), tools, thinking,
-                        messages, context.historyRows(), context.userText(), attachments, sink, emitter,
-                        cancellation);
-                break;
+                return ProviderRunOutcome.result(runProvider(provider, runContext));
             } catch (RuntimeException e) {
                 lastErr = e;
                 if (responseStarted.get()) {
                     log.warn("[agent] provider '{}' failed after streaming began; not failing over",
                             provider.name(), e);
-                    safeSend(emitter, SseEvent.error(mapper, userFacingProviderFailureMessage(e)));
-                    emitter.complete();
-                    return;
+                    safeSend(runContext.emitter, SseEvent.error(mapper, userFacingProviderFailureMessage(e)));
+                    runContext.emitter.complete();
+                    return ProviderRunOutcome.terminal(lastErr);
                 }
                 log.warn("[agent] provider '{}' failed: {} — trying next", provider.name(), e.getMessage());
             }
         }
-        if (result == null) {
-            log.warn("[agent] all providers failed for user {} session {}",
-                    userId, sessionId, lastErr);
-            safeSend(emitter, SseEvent.error(mapper, userFacingProviderFailureMessage(lastErr)));
-            safeComplete(emitter);
-            return;
-        }
+        return ProviderRunOutcome.failure(lastErr);
+    }
 
+    private void handleAllProvidersFailed(UUID userId, UUID sessionId, SseEmitter emitter,
+                                          RuntimeException lastErr) {
+        log.warn("[agent] all providers failed for user {} session {}", userId, sessionId, lastErr);
+        safeSend(emitter, SseEvent.error(mapper, userFacingProviderFailureMessage(lastErr)));
+        safeComplete(emitter);
+    }
+
+    private void completeProviderRun(UUID userId, UUID sessionId, ChatRequest req, SseEmitter emitter,
+                                     boolean autoMemoryEnabled, long startedAtMs, RunResult result) {
         if (result.cancelled()) {
             safeComplete(emitter);
             // Explicit stop or server-side timeout. Plain SSE disconnects are
@@ -297,7 +326,7 @@ public class ChatService {
                     : result.exhaustionReason();
             log.info("Chat exhausted tool iterations for user {} session {}: {}", userId, sessionId, message);
             safeSend(emitter, SseEvent.assistantMessage(mapper, message));
-            long durMs = System.currentTimeMillis() - t0;
+            long durMs = System.currentTimeMillis() - startedAtMs;
             persist(sessionId, userId, MessageRole.ASSISTANT, message, assistantMetadata(durMs));
             logUsage(userId, result.usage(), durMs);
             safeComplete(emitter);
@@ -305,7 +334,7 @@ public class ChatService {
         }
 
         String fullReply = result.assistantText();
-        long durMs = System.currentTimeMillis() - t0;
+        long durMs = System.currentTimeMillis() - startedAtMs;
         persist(sessionId, userId, MessageRole.ASSISTANT, fullReply, assistantMetadata(durMs));
         logUsage(userId, result.usage(), durMs);
         if (autoMemoryEnabled) {
@@ -325,30 +354,17 @@ public class ChatService {
         safeComplete(emitter);
     }
 
-    private RunResult runProvider(ConfiguredProvider provider,
-                                  UUID sessionId,
-                                  UUID userId,
-                                  ResolvedTools resolved,
-                                  String stableSystemText,
-                                  List<TextBlockParam> systemBlocks,
-                                  List<ToolUnion> tools,
-                                  ThinkingConfigEnabled thinking,
-                                  List<MessageParam> messages,
-                                  List<MessageDto> historyRows,
-                                  String userText,
-                                  ChatAttachmentContext attachments,
-                                  ChatEventSink sink,
-                                  SseEmitter emitter,
-                                  ChatCancellationToken cancellation) {
+    private RunResult runProvider(ConfiguredProvider provider, ProviderRunContext runContext) {
         if (provider.isAnthropicMessages()) {
-            return agentLoopRunner.run(provider, sessionId, userId, resolved,
-                    systemBlocks, tools, thinking, messages, sink, emitter, cancellation);
+            return agentLoopRunner.run(provider, runContext.sessionId, runContext.userId, runContext.resolved,
+                    runContext.systemBlocks, runContext.tools, runContext.thinking, runContext.messages,
+                    runContext.sink, runContext.emitter, runContext.cancellation);
         }
         if (provider.isCodexResponses()) {
-            return codexResponsesLoopRunner.run(provider, sessionId, userId, resolved,
-                    stableSystemText,
-                    historyRows,
-                    userText, attachments, sink, emitter, cancellation);
+            return codexResponsesLoopRunner.run(provider, runContext.sessionId, runContext.userId,
+                    runContext.resolved, runContext.stableSystemText, runContext.historyRows,
+                    runContext.userText, runContext.attachments, runContext.sink, runContext.emitter,
+                    runContext.cancellation);
         }
         throw new IllegalArgumentException("unsupported provider kind: " + provider.kind());
     }
@@ -529,27 +545,36 @@ public class ChatService {
         }
         List<ChatImageAttachment> out = new ArrayList<>();
         for (ChatImageAttachment att : attachments) {
-            if (att == null || att.imageUrl() == null || !att.imageUrl().startsWith("/api/uploads/photos/")) {
-                continue;
+            ChatImageAttachment normalized = normalizeAttachment(att);
+            if (normalized != null) {
+                out.add(normalized);
             }
-            out.add(new ChatImageAttachment(
-                    att.imageUrl().trim(),
-                    trimToNull(att.assetId()),
-                    defaultContentType(att.contentType()),
-                    att.bytes(),
-                    trimToNull(att.name()),
-                    att.width(),
-                    att.height(),
-                    trimToNull(att.source()),
-                    trimToNull(att.mediaRef()),
-                    trimToNull(att.mediaType()),
-                    trimToNull(att.mediaId()),
-                    trimToNull(att.sourceTool()),
-                    trimToNull(att.bucketName()),
-                    att.dateTakenMs()));
-            if (out.size() >= 4) break;
+            if (out.size() >= 4) {
+                return List.copyOf(out);
+            }
         }
         return List.copyOf(out);
+    }
+
+    private ChatImageAttachment normalizeAttachment(ChatImageAttachment att) {
+        if (att == null || att.imageUrl() == null || !att.imageUrl().startsWith("/api/uploads/photos/")) {
+            return null;
+        }
+        return new ChatImageAttachment(
+                att.imageUrl().trim(),
+                trimToNull(att.assetId()),
+                defaultContentType(att.contentType()),
+                att.bytes(),
+                trimToNull(att.name()),
+                att.width(),
+                att.height(),
+                trimToNull(att.source()),
+                trimToNull(att.mediaRef()),
+                trimToNull(att.mediaType()),
+                trimToNull(att.mediaId()),
+                trimToNull(att.sourceTool()),
+                trimToNull(att.bucketName()),
+                att.dateTakenMs());
     }
 
     private MessageParam buildAnthropicUserMessage(String userText, ChatAttachmentContext attachments) {
@@ -661,6 +686,39 @@ public class ChatService {
         ObjectNode m = mapper.createObjectNode();
         m.put("durationMs", Math.max(0L, durationMs));
         return m;
+    }
+
+    private static final class ProviderRunContext {
+        private UUID sessionId;
+        private UUID userId;
+        private ResolvedTools resolved;
+        private String stableSystemText;
+        private List<TextBlockParam> systemBlocks;
+        private List<ToolUnion> tools;
+        private ThinkingConfigEnabled thinking;
+        private List<MessageParam> messages;
+        private List<MessageDto> historyRows;
+        private String userText;
+        private ChatAttachmentContext attachments;
+        private ChatEventSink sink;
+        private SseEmitter emitter;
+        private ChatCancellationToken cancellation;
+    }
+
+    private record ProviderRunOutcome(RunResult result,
+                                      RuntimeException lastError,
+                                      boolean terminalHandled) {
+        private static ProviderRunOutcome result(RunResult result) {
+            return new ProviderRunOutcome(result, null, false);
+        }
+
+        private static ProviderRunOutcome failure(RuntimeException lastError) {
+            return new ProviderRunOutcome(null, lastError, false);
+        }
+
+        private static ProviderRunOutcome terminal(RuntimeException lastError) {
+            return new ProviderRunOutcome(null, lastError, true);
+        }
     }
 
     private class PersistingChatEventSink implements ChatEventSink {
