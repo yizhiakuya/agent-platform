@@ -1,6 +1,8 @@
 package com.agentplatform.android.tools.photos
 
+import android.content.ContentResolver
 import android.content.Context
+import android.database.Cursor
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
@@ -261,99 +263,76 @@ class PhotosSemanticCandidatesTool(
     }
 
     private fun loadRows(request: SearchRequest): List<Row> {
-        val clauses = mutableListOf<String>()
-        val params = mutableListOf<String>()
-        val filters = request.filters
-        if (filters.bucketId != null) {
-            clauses += "${MediaStore.Images.Media.BUCKET_ID} = ?"
-            params += filters.bucketId
-        }
-        if (filters.nameContains != null) {
-            clauses += "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?"
-            params += "%${filters.nameContains}%"
-        }
-        if (filters.dateAfter != null) {
-            clauses += "${MediaStore.Images.Media.DATE_TAKEN} >= ?"
-            params += filters.dateAfter.toString()
-        }
-        if (filters.dateBefore != null) {
-            clauses += "${MediaStore.Images.Media.DATE_TAKEN} <= ?"
-            params += filters.dateBefore.toString()
-        }
-
-        val selection = clauses.joinToString(" AND ").ifEmpty { null }
-        val selectionArgs = if (params.isEmpty()) null else params.toTypedArray()
-        val projection = arrayOf(
-            MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DISPLAY_NAME,
-            MediaStore.Images.Media.BUCKET_ID,
-            MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
-            MediaStore.Images.Media.DATE_TAKEN,
-            MediaStore.Images.Media.DATE_MODIFIED,
-            MediaStore.Images.Media.SIZE,
-            MediaStore.Images.Media.WIDTH,
-            MediaStore.Images.Media.HEIGHT,
-            MediaStore.Images.Media.MIME_TYPE
-        )
-        val cursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val bundle = Bundle().apply {
-                putStringArray(
-                    android.content.ContentResolver.QUERY_ARG_SORT_COLUMNS,
-                    arrayOf(MediaStore.Images.Media.DATE_TAKEN)
-                )
-                putInt(
-                    android.content.ContentResolver.QUERY_ARG_SORT_DIRECTION,
-                    android.content.ContentResolver.QUERY_SORT_DIRECTION_DESCENDING
-                )
-                putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, request.scanLimit)
-                if (selection != null) {
-                    putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
-                    putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
-                }
-            }
-            context.contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, bundle, null)
-        } else {
-            context.contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                projection,
-                selection,
-                selectionArgs,
-                "${MediaStore.Images.Media.DATE_TAKEN} DESC"
-            )
-        }
-
         val out = mutableListOf<Row>()
-        cursor?.use { c ->
-            val idIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-            val nameIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-            val bucketIdIdx = c.getColumnIndex(MediaStore.Images.Media.BUCKET_ID)
-            val bucketNameIdx = c.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-            val dateIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
-            val modifiedIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
-            val sizeIdx = c.getColumnIndex(MediaStore.Images.Media.SIZE)
-            val widthIdx = c.getColumnIndex(MediaStore.Images.Media.WIDTH)
-            val heightIdx = c.getColumnIndex(MediaStore.Images.Media.HEIGHT)
-            val mimeIdx = c.getColumnIndex(MediaStore.Images.Media.MIME_TYPE)
-            while (c.moveToNext() && out.size < request.scanLimit) {
-                val id = c.getLong(idIdx)
-                val dateTaken = l(c, dateIdx)
-                val modifiedSec = l(c, modifiedIdx)
-                val modifiedMs = modifiedSec * 1000L
-                out += Row(
-                    id = id,
-                    name = c.getString(nameIdx) ?: "image_$id",
-                    bucketId = s(c, bucketIdIdx),
-                    bucketName = s(c, bucketNameIdx),
-                    dateTakenMs = if (dateTaken > 0L) dateTaken else modifiedMs,
-                    dateModifiedSec = modifiedSec,
-                    sizeBytes = l(c, sizeIdx),
-                    width = i(c, widthIdx),
-                    height = i(c, heightIdx),
-                    mimeType = s(c, mimeIdx)
-                )
+        imageCursor(request)?.use { cursor ->
+            val columns = RowColumns(cursor)
+            while (cursor.moveToNext() && out.size < request.scanLimit) {
+                out += readRow(cursor, columns)
             }
         }
         return out
+    }
+
+    private fun imageCursor(request: SearchRequest): Cursor? {
+        val selection = imageSelection(request.filters)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                IMAGE_PROJECTION,
+                modernImageQueryArgs(request, selection),
+                null
+            )
+        } else {
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                IMAGE_PROJECTION,
+                selection.sql,
+                selection.args,
+                "${MediaStore.Images.Media.DATE_TAKEN} DESC"
+            )
+        }
+    }
+
+    private fun modernImageQueryArgs(request: SearchRequest, selection: ImageSelection): Bundle =
+        Bundle().apply {
+            putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(MediaStore.Images.Media.DATE_TAKEN))
+            putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
+            putInt(ContentResolver.QUERY_ARG_LIMIT, request.scanLimit)
+            selection.sql?.let {
+                putString(ContentResolver.QUERY_ARG_SQL_SELECTION, it)
+                putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selection.args)
+            }
+        }
+
+    private fun imageSelection(filters: SearchFilters): ImageSelection {
+        val presentFilters = listOf(
+            "${MediaStore.Images.Media.BUCKET_ID} = ?" to filters.bucketId,
+            "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?" to filters.nameContains?.let { "%$it%" },
+            "${MediaStore.Images.Media.DATE_TAKEN} >= ?" to filters.dateAfter?.toString(),
+            "${MediaStore.Images.Media.DATE_TAKEN} <= ?" to filters.dateBefore?.toString()
+        ).mapNotNull { (clause, value) -> value?.let { clause to it } }
+        return ImageSelection(
+            sql = presentFilters.joinToString(" AND ") { it.first }.ifEmpty { null },
+            args = presentFilters.map { it.second }.takeIf { it.isNotEmpty() }?.toTypedArray()
+        )
+    }
+
+    private fun readRow(cursor: Cursor, columns: RowColumns): Row {
+        val id = cursor.getLong(columns.id)
+        val dateTaken = l(cursor, columns.date)
+        val modifiedSec = l(cursor, columns.modified)
+        return Row(
+            id = id,
+            name = cursor.getString(columns.name) ?: "image_$id",
+            bucketId = s(cursor, columns.bucketId),
+            bucketName = s(cursor, columns.bucketName),
+            dateTakenMs = if (dateTaken > 0L) dateTaken else modifiedSec * 1000L,
+            dateModifiedSec = modifiedSec,
+            sizeBytes = l(cursor, columns.size),
+            width = i(cursor, columns.width),
+            height = i(cursor, columns.height),
+            mimeType = s(cursor, columns.mime)
+        )
     }
 
     private fun searchableText(row: Row, ocrText: String, visualLabels: List<String>): String = buildString {
@@ -516,6 +495,24 @@ class PhotosSemanticCandidatesTool(
         val dateBefore: Long?
     )
 
+    private class ImageSelection(
+        val sql: String?,
+        val args: Array<String>?
+    )
+
+    private class RowColumns(cursor: Cursor) {
+        val id: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+        val name: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+        val bucketId: Int = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_ID)
+        val bucketName: Int = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+        val date: Int = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+        val modified: Int = cursor.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
+        val size: Int = cursor.getColumnIndex(MediaStore.Images.Media.SIZE)
+        val width: Int = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
+        val height: Int = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
+        val mime: Int = cursor.getColumnIndex(MediaStore.Images.Media.MIME_TYPE)
+    }
+
     private class VisionClients(
         val latinRecognizer: TextRecognizer?,
         val chineseRecognizer: TextRecognizer?,
@@ -567,6 +564,18 @@ class PhotosSemanticCandidatesTool(
     companion object {
         private const val TAG = "PhotosSemanticCandidates"
         private val DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ISO_LOCAL_DATE
+        private val IMAGE_PROJECTION = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.BUCKET_ID,
+            MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
+            MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.DATE_MODIFIED,
+            MediaStore.Images.Media.SIZE,
+            MediaStore.Images.Media.WIDTH,
+            MediaStore.Images.Media.HEIGHT,
+            MediaStore.Images.Media.MIME_TYPE
+        )
         private val VISUAL_LABEL_ALIASES = mapOf(
             "cat" to listOf("猫", "猫咪", "小猫", "kitten", "kitty", "宠物", "动物"),
             "dog" to listOf("狗", "狗狗", "小狗", "puppy", "宠物", "动物"),

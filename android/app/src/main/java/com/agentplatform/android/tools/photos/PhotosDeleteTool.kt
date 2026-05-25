@@ -57,57 +57,76 @@ class PhotosDeleteTool(
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val mutation = PhotoMutationHelpers.runPrivilegedImageMutation(
-                context = context,
-                ids = ids,
-                shellMutation = { PrivilegeManager.deleteImages(it) },
-                manageMediaMutation = { id ->
-                    context.contentResolver.delete(PhotoMutationHelpers.photoUri(id), null, null)
-                }
-            )
-            if (!mutation.succeeded) {
-                return@withContext mediaAccessError(args, ids, mutation)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) privilegedDelete(args, ids) else legacyDelete(args, ids)
+    }
+
+    private fun privilegedDelete(args: JsonNode, ids: List<Long>): JsonNode {
+        val mutation = PhotoMutationHelpers.runPrivilegedImageMutation(
+            context = context,
+            ids = ids,
+            shellMutation = { PrivilegeManager.deleteImages(it) },
+            manageMediaMutation = { id ->
+                context.contentResolver.delete(PhotoMutationHelpers.photoUri(id), null, null)
             }
-            val result = PhotoMutationHelpers.privilegedMutationSuccess(
-                mapper = mapper,
-                ids = ids,
-                mutation = mutation,
-                spec = mutationSpec()
-            )
-            ToolResultEnvelope.applyStandardFields(mapper, this@PhotosDeleteTool, result, ok = true, request = args)
-        } else {
-            val failures = PhotoMutationHelpers.failuresArray(mapper)
-            var deletedCount = 0
-            for (id in ids) {
-                try {
-                    val deleted = PhotoMutationHelpers.deleteWithRecovery(
-                        context,
-                        PhotoMutationHelpers.photoUri(id)
-                    )
-                    if (deleted > 0) deletedCount += deleted else failures.addObject()
-                        .put("id", id.toString())
-                        .put("error", "photo not found or not deleted")
-                } catch (e: Exception) {
-                    PhotoMutationHelpers.addFailure(failures, id, e)
-                }
+        )
+        if (!mutation.succeeded) return mediaAccessError(args, ids, mutation)
+        val result = PhotoMutationHelpers.privilegedMutationSuccess(
+            mapper = mapper,
+            ids = ids,
+            mutation = mutation,
+            spec = mutationSpec()
+        )
+        return ToolResultEnvelope.applyStandardFields(mapper, this@PhotosDeleteTool, result, ok = true, request = args)
+    }
+
+    private suspend fun legacyDelete(args: JsonNode, ids: List<Long>): JsonNode {
+        val outcome = legacyDeleteOutcome(ids)
+        val result = legacyDeleteResult(ids, outcome)
+        return ToolResultEnvelope.applyStandardFields(
+            mapper,
+            this@PhotosDeleteTool,
+            result,
+            ok = outcome.failures.size() == 0,
+            request = args
+        )
+    }
+
+    private suspend fun legacyDeleteOutcome(ids: List<Long>): LegacyDeleteOutcome {
+        val failures = PhotoMutationHelpers.failuresArray(mapper)
+        var deletedCount = 0
+        for (id in ids) {
+            deletedCount += deleteLegacyPhoto(id, failures)
+        }
+        return LegacyDeleteOutcome(deletedCount, failures)
+    }
+
+    private suspend fun deleteLegacyPhoto(id: Long, failures: com.fasterxml.jackson.databind.node.ArrayNode): Int =
+        try {
+            val deleted = PhotoMutationHelpers.deleteWithRecovery(context, PhotoMutationHelpers.photoUri(id))
+            if (deleted > 0) deleted else {
+                failures.addObject()
+                    .put("id", id.toString())
+                    .put("error", "photo not found or not deleted")
+                0
             }
-            val result = mapper.createObjectNode().apply {
-                set<JsonNode>("ids", PhotoMutationHelpers.idsArray(mapper, ids))
-                put("deleted_count", deletedCount)
-                set<JsonNode>("failures", failures)
-                set<JsonNode>("summary", mapper.createObjectNode().apply {
-                    put("deleted_count", deletedCount)
-                    put("failure_count", failures.size())
-                })
-            }
-            ToolResultEnvelope.applyStandardFields(
-                mapper,
-                this@PhotosDeleteTool,
-                result,
-                ok = failures.size() == 0,
-                request = args
-            )
+        } catch (e: Exception) {
+            PhotoMutationHelpers.addFailure(failures, id, e)
+            0
+        }
+
+    private fun legacyDeleteResult(ids: List<Long>, outcome: LegacyDeleteOutcome): com.fasterxml.jackson.databind.node.ObjectNode {
+        return mapper.createObjectNode().apply {
+            set<JsonNode>("ids", PhotoMutationHelpers.idsArray(mapper, ids))
+            put("deleted_count", outcome.deletedCount)
+            set<JsonNode>("failures", outcome.failures)
+            set<JsonNode>("summary", legacyDeleteSummary(outcome))
+        }
+    }
+
+    private fun legacyDeleteSummary(outcome: LegacyDeleteOutcome): com.fasterxml.jackson.databind.node.ObjectNode {
+        return mapper.createObjectNode().apply {
+            put("deleted_count", outcome.deletedCount)
+            put("failure_count", outcome.failures.size())
         }
     }
 
@@ -132,5 +151,10 @@ class PhotosDeleteTool(
         deniedCode = "media_mutation_denied",
         deniedMessage = "Android denied MediaStore delete without foreground confirmation.",
         deniedHint = "Verify Shizuku is running and authorized, then run privileges.configure target=manage_media. The tool suppressed the Android confirmation dialog."
+    )
+
+    private data class LegacyDeleteOutcome(
+        val deletedCount: Int,
+        val failures: com.fasterxml.jackson.databind.node.ArrayNode
     )
 }
