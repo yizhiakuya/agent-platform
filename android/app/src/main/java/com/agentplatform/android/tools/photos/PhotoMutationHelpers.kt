@@ -1,6 +1,7 @@
 package com.agentplatform.android.tools.photos
 
 import android.app.RecoverableSecurityException
+import android.app.PendingIntent
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.ContentValues
@@ -365,6 +366,30 @@ internal object PhotoMutationHelpers {
             put("system_confirmation_suppressed", true)
         })
         return result
+    }
+
+    suspend fun confirmedMutationSuccess(
+        context: Context,
+        mapper: ObjectMapper,
+        ids: List<Long>,
+        pendingIntent: PendingIntent,
+        rejectedMessage: String,
+        countKey: String = "affected_count",
+        rootFields: List<Pair<String, Any?>> = emptyList(),
+        summaryFields: List<Pair<String, Any?>> = rootFields
+    ): ObjectNode {
+        val approved = MediaStoreRequestBridge.request(context, pendingIntent)
+        if (!approved) throw SecurityException(rejectedMessage)
+
+        return mapper.createObjectNode().apply {
+            set<JsonNode>("ids", idsArray(mapper, ids))
+            putFields(this, rootFields)
+            put(countKey, ids.size)
+            set<JsonNode>("summary", mapper.createObjectNode().apply {
+                put(countKey, ids.size)
+                putFields(this, summaryFields)
+            })
+        }
     }
 
     private fun extensionForMime(mimeType: String): String? {

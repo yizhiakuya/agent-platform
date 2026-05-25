@@ -5,7 +5,6 @@ import android.os.Build
 import android.provider.MediaStore
 import com.agentplatform.android.core.tool.Tool
 import com.agentplatform.android.core.tool.ToolResultEnvelope
-import com.agentplatform.android.media.MediaStoreRequestBridge
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.CoroutineDispatcher
@@ -68,21 +67,14 @@ class PhotosFavoriteTool(
         val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
         val favorite = args.path("favorite").asBoolean(true)
         val uris = ids.map { PhotoMutationHelpers.photoUri(it) }
-        val approved = MediaStoreRequestBridge.request(
-            context,
-            MediaStore.createFavoriteRequest(context.contentResolver, uris, favorite)
+        val result = PhotoMutationHelpers.confirmedMutationSuccess(
+            context = context,
+            mapper = mapper,
+            ids = ids,
+            pendingIntent = MediaStore.createFavoriteRequest(context.contentResolver, uris, favorite),
+            rejectedMessage = "Android media favorite confirmation rejected",
+            rootFields = listOf("favorite" to favorite)
         )
-        if (!approved) throw SecurityException("Android media favorite confirmation rejected")
-
-        val result = mapper.createObjectNode().apply {
-            set<JsonNode>("ids", PhotoMutationHelpers.idsArray(mapper, ids))
-            put("favorite", favorite)
-            put("affected_count", ids.size)
-            set<JsonNode>("summary", mapper.createObjectNode().apply {
-                put("affected_count", ids.size)
-                put("favorite", favorite)
-            })
-        }
         ToolResultEnvelope.applyStandardFields(mapper, this@PhotosFavoriteTool, result, ok = true, request = args)
     }
 }

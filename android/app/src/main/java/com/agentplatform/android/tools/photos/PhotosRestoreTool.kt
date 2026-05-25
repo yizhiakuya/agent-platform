@@ -5,7 +5,6 @@ import android.os.Build
 import android.provider.MediaStore
 import com.agentplatform.android.core.tool.Tool
 import com.agentplatform.android.core.tool.ToolResultEnvelope
-import com.agentplatform.android.media.MediaStoreRequestBridge
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.CoroutineDispatcher
@@ -62,21 +61,14 @@ class PhotosRestoreTool(
         }
         val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
         val uris = ids.map { PhotoMutationHelpers.photoUri(it) }
-        val approved = MediaStoreRequestBridge.request(
-            context,
-            MediaStore.createTrashRequest(context.contentResolver, uris, false)
+        val result = PhotoMutationHelpers.confirmedMutationSuccess(
+            context = context,
+            mapper = mapper,
+            ids = ids,
+            pendingIntent = MediaStore.createTrashRequest(context.contentResolver, uris, false),
+            rejectedMessage = "Android media restore confirmation rejected",
+            rootFields = listOf("trashed" to false)
         )
-        if (!approved) throw SecurityException("Android media restore confirmation rejected")
-
-        val result = mapper.createObjectNode().apply {
-            set<JsonNode>("ids", PhotoMutationHelpers.idsArray(mapper, ids))
-            put("trashed", false)
-            put("affected_count", ids.size)
-            set<JsonNode>("summary", mapper.createObjectNode().apply {
-                put("affected_count", ids.size)
-                put("trashed", false)
-            })
-        }
         ToolResultEnvelope.applyStandardFields(mapper, this@PhotosRestoreTool, result, ok = true, request = args)
     }
 }
