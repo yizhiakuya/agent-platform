@@ -1,8 +1,7 @@
 package com.agentplatform.android.tools.photos
 
-import android.content.ContentUris
 import android.content.Context
-import android.os.Build
+import android.database.Cursor
 import android.provider.MediaStore
 import android.util.Log
 import com.agentplatform.android.core.tool.Tool
@@ -56,22 +55,26 @@ class PhotosListAlbumsTool(
     override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val uploader = PhotoAssetUploader(context, mapper)
         val limit = args.path("limit").asInt(30).coerceIn(1, 100)
+        val albums = albumArray(loadAlbums(limit), uploader)
 
-        // Aggregate per bucket — MediaStore has no real GROUP BY surface, so we
-        // walk DATE_TAKEN-DESC and accumulate the first hit per bucket as cover,
-        // counting hits per bucket along the way.
-        data class Album(
-            val bucketId: String,
-            var name: String,
-            var coverId: Long,
-            var coverDate: Long,
-            var latestDate: Long,
-            var count: Int,
-            var coverSizeBytes: Long,
-            var coverModifiedSec: Long,
-        )
+        val result: ObjectNode = mapper.createObjectNode()
+        result.set<JsonNode>("albums", albums)
+        result.put("count", albums.size())
+        result
+    }
+
+    private fun loadAlbums(limit: Int): List<Album> {
         val byBucket = LinkedHashMap<String, Album>()
+        queryAlbums()?.use { cursor ->
+            val columns = albumColumns(cursor)
+            while (cursor.moveToNext()) {
+                readAlbumRow(cursor, columns)?.let { mergeAlbumRow(byBucket, it) }
+            }
+        }
+        return byBucket.values.sortedByDescending { it.latestDate }.take(limit)
+    }
 
+    private fun queryAlbums(): Cursor? {
         val projection = arrayOf(
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.BUCKET_ID,
@@ -80,102 +83,153 @@ class PhotosListAlbumsTool(
             MediaStore.Images.Media.DATE_MODIFIED,
             MediaStore.Images.Media.SIZE
         )
-        val cursor = context.contentResolver.query(
+        return context.contentResolver.query(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            projection, null, null,
+            projection,
+            null,
+            null,
             "${MediaStore.Images.Media.DATE_TAKEN} DESC"
         )
+    }
 
-        cursor?.use { c ->
-            val idIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-            val bIdIdx = c.getColumnIndex(MediaStore.Images.Media.BUCKET_ID)
-            val bNameIdx = c.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-            val dateIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
-            val modIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
-            val sizeIdx = c.getColumnIndex(MediaStore.Images.Media.SIZE)
-            while (c.moveToNext()) {
-                if (bIdIdx < 0 || c.isNull(bIdIdx)) continue
-                val bucketId = c.getString(bIdIdx) ?: continue
-                val bucketName = if (bNameIdx >= 0) c.getString(bNameIdx) ?: "(未命名)" else "(未命名)"
-                val date = if (dateIdx >= 0 && !c.isNull(dateIdx)) c.getLong(dateIdx) else 0L
-                val modSec = if (modIdx >= 0 && !c.isNull(modIdx)) c.getLong(modIdx) else 0L
-                val size = if (sizeIdx >= 0 && !c.isNull(sizeIdx)) c.getLong(sizeIdx) else 0L
-                val id = c.getLong(idIdx)
+    private fun albumColumns(cursor: Cursor) = AlbumColumns(
+        id = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID),
+        bucketId = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_ID),
+        bucketName = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME),
+        dateTaken = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN),
+        dateModified = cursor.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED),
+        size = cursor.getColumnIndex(MediaStore.Images.Media.SIZE)
+    )
 
-                val existing = byBucket[bucketId]
-                if (existing == null) {
-                    byBucket[bucketId] = Album(
-                        bucketId = bucketId,
-                        name = bucketName,
-                        coverId = id,
-                        coverDate = date,
-                        latestDate = maxOf(date, modSec * 1000L),
-                        count = 1,
-                        coverSizeBytes = size,
-                        coverModifiedSec = modSec
-                    )
-                } else {
-                    existing.count += 1
-                    val lm = maxOf(date, modSec * 1000L)
-                    if (lm > existing.latestDate) existing.latestDate = lm
-                    if (date > existing.coverDate) {
-                        existing.coverId = id
-                        existing.coverDate = date
-                        existing.coverSizeBytes = size
-                        existing.coverModifiedSec = modSec
-                    }
-                }
+    private fun readAlbumRow(cursor: Cursor, columns: AlbumColumns): AlbumRow? {
+        val bucketId = stringOrNull(cursor, columns.bucketId) ?: return null
+        return AlbumRow(
+            bucketId = bucketId,
+            name = stringOrNull(cursor, columns.bucketName) ?: "(未命名)",
+            cover = CoverPhoto(
+                id = cursor.getLong(columns.id),
+                date = longOrZero(cursor, columns.dateTaken),
+                sizeBytes = longOrZero(cursor, columns.size),
+                modifiedSec = longOrZero(cursor, columns.dateModified)
+            )
+        )
+    }
+
+    private fun mergeAlbumRow(albums: MutableMap<String, Album>, row: AlbumRow) {
+        val existing = albums[row.bucketId]
+        if (existing == null) {
+            albums[row.bucketId] = row.toAlbum()
+        } else {
+            existing.add(row)
+        }
+    }
+
+    private fun albumArray(albums: List<Album>, uploader: PhotoAssetUploader): ArrayNode {
+        val array = mapper.createArrayNode()
+        albums.forEach { array.add(albumNode(it, uploader)) }
+        return array
+    }
+
+    private fun albumNode(album: Album, uploader: PhotoAssetUploader): ObjectNode {
+        return mapper.createObjectNode().apply {
+            put("bucket_id", album.bucketId)
+            put("name", album.name)
+            put("photo_count", album.count)
+            put("latest_date_ms", album.latestDate)
+            addCoverFields(this, album, uploader)
+        }
+    }
+
+    private fun addCoverFields(node: ObjectNode, album: Album, uploader: PhotoAssetUploader) {
+        val cover = loadCover(album) ?: return
+        val upload = uploader.uploadDisplayJpeg(album.cover.id, album.name, cover)
+        PhotoAssetUploader.putUploadFields(
+            node,
+            upload,
+            cover,
+            imageUrlField = "cover_image_url",
+            assetIdField = "cover_asset_id",
+            contentTypeField = "cover_content_type",
+            bytesField = "cover_image_bytes",
+            widthField = "cover_image_width",
+            heightField = "cover_image_height",
+            cacheHitField = "cover_image_cache_hit",
+            assetCacheHitField = "cover_asset_cache_hit",
+            errorField = "cover_upload_error"
+        )
+    }
+
+    private fun loadCover(album: Album): PhotoToolUtils.EncodedPhoto? {
+        return try {
+            PhotoToolUtils.encodedDisplayPhoto(
+                context = context,
+                id = album.cover.id,
+                maxDim = 2048,
+                quality = 85,
+                sourceModifiedSec = album.cover.modifiedSec,
+                sourceSizeBytes = album.cover.sizeBytes
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "cover image failed for bucket=${album.bucketId}: ${e.message}")
+            null
+        }
+    }
+
+    private fun stringOrNull(cursor: Cursor, index: Int): String? {
+        return if (index >= 0 && !cursor.isNull(index)) cursor.getString(index) else null
+    }
+
+    private fun longOrZero(cursor: Cursor, index: Int): Long {
+        return if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index) else 0L
+    }
+
+    private data class AlbumColumns(
+        val id: Int,
+        val bucketId: Int,
+        val bucketName: Int,
+        val dateTaken: Int,
+        val dateModified: Int,
+        val size: Int
+    )
+
+    private data class CoverPhoto(
+        val id: Long,
+        val date: Long,
+        val sizeBytes: Long,
+        val modifiedSec: Long
+    ) {
+        val latestDate: Long
+            get() = maxOf(date, modifiedSec * 1000L)
+    }
+
+    private data class AlbumRow(
+        val bucketId: String,
+        val name: String,
+        val cover: CoverPhoto
+    ) {
+        fun toAlbum() = Album(
+            bucketId = bucketId,
+            name = name,
+            cover = cover,
+            latestDate = cover.latestDate,
+            count = 1
+        )
+    }
+
+    private data class Album(
+        val bucketId: String,
+        val name: String,
+        var cover: CoverPhoto,
+        var latestDate: Long,
+        var count: Int
+    ) {
+        fun add(row: AlbumRow) {
+            count += 1
+            latestDate = maxOf(latestDate, row.cover.latestDate)
+            if (row.cover.date > cover.date) {
+                cover = row.cover
             }
         }
-
-        // Sort by latestDate DESC, take limit.
-        val ordered = byBucket.values.sortedByDescending { it.latestDate }.take(limit)
-
-        val albums: ArrayNode = mapper.createArrayNode()
-        for (a in ordered) {
-            val obj: ObjectNode = mapper.createObjectNode()
-            obj.put("bucket_id", a.bucketId)
-            obj.put("name", a.name)
-            obj.put("photo_count", a.count)
-            obj.put("latest_date_ms", a.latestDate)
-
-            val cover = try {
-                PhotoToolUtils.encodedDisplayPhoto(
-                    context = context,
-                    id = a.coverId,
-                    maxDim = 2048,
-                    quality = 85,
-                    sourceModifiedSec = a.coverModifiedSec,
-                    sourceSizeBytes = a.coverSizeBytes
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "cover image failed for bucket=${a.bucketId}: ${e.message}")
-                null
-            }
-            if (cover != null) {
-                val upload = uploader.uploadDisplayJpeg(a.coverId, a.name, cover)
-                PhotoAssetUploader.putUploadFields(
-                    obj,
-                    upload,
-                    cover,
-                    imageUrlField = "cover_image_url",
-                    assetIdField = "cover_asset_id",
-                    contentTypeField = "cover_content_type",
-                    bytesField = "cover_image_bytes",
-                    widthField = "cover_image_width",
-                    heightField = "cover_image_height",
-                    cacheHitField = "cover_image_cache_hit",
-                    assetCacheHitField = "cover_asset_cache_hit",
-                    errorField = "cover_upload_error"
-                )
-            }
-            albums.add(obj)
-        }
-
-        val result: ObjectNode = mapper.createObjectNode()
-        result.set<JsonNode>("albums", albums)
-        result.put("count", albums.size())
-        result
     }
 
     companion object {
