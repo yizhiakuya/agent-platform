@@ -77,7 +77,7 @@ public class MemoryExtractor {
         if ((userMsg == null || userMsg.isBlank()) && (assistantMsg == null || assistantMsg.isBlank())) return;
 
         int batchSize = props.agent().memory().factBatchSize();
-        String turn = "USER: %s\nASSISTANT: %s".formatted(safe(userMsg), safe(assistantMsg));
+        String turn = "USER: %s%nASSISTANT: %s".formatted(safe(userMsg), safe(assistantMsg));
 
         List<String> drained = null;
         synchronized (pending) {
@@ -98,7 +98,7 @@ public class MemoryExtractor {
         try {
             StringBuilder body = new StringBuilder();
             for (int i = 0; i < turns.size(); i++) {
-                body.append("Exchange ").append(i + 1).append(":\n").append(turns.get(i)).append("\n\n");
+                body.append("Exchange %d:%n%s%n%n".formatted(i + 1, turns.get(i)));
             }
             String reply;
             try {

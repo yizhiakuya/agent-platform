@@ -86,10 +86,8 @@ public class EmbeddingService {
             source = "dedicated";
         } else {
             AgentProperties.Provider primary = primaryProvider(props);
-            baseUrl = primary == null || primary.baseUrl() == null || primary.baseUrl().isBlank()
-                    ? "https://api.openai.com"
-                    : primary.baseUrl();
-            this.apiKey = primary == null ? "" : (primary.apiKey() == null ? "" : primary.apiKey());
+            baseUrl = resolveFallbackBaseUrl(primary);
+            this.apiKey = resolveFallbackApiKey(primary);
             source = "fallback-to-chat-provider";
         }
 
@@ -122,6 +120,25 @@ public class EmbeddingService {
         List<AgentProperties.Provider> all = props.agent().providers();
         if (all == null || all.isEmpty()) return null;
         return all.get(0);
+    }
+
+    private static String resolveFallbackBaseUrl(AgentProperties.Provider provider) {
+        if (provider == null) {
+            return "https://api.openai.com";
+        }
+        String baseUrl = provider.baseUrl();
+        if (baseUrl == null || baseUrl.isBlank()) {
+            return "https://api.openai.com";
+        }
+        return baseUrl;
+    }
+
+    private static String resolveFallbackApiKey(AgentProperties.Provider provider) {
+        if (provider == null) {
+            return "";
+        }
+        String apiKey = provider.apiKey();
+        return apiKey == null ? "" : apiKey;
     }
 
     /**

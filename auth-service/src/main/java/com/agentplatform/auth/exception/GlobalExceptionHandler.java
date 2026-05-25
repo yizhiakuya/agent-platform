@@ -14,12 +14,18 @@ import java.util.Map;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    private static final String STATUS_FIELD = "status";
+    private static final String MESSAGE_FIELD = "message";
+    private static final String ERRORS_FIELD = "errors";
+    private static final String VALIDATION_FAILED_MESSAGE = "Validation failed";
+    private static final int BAD_REQUEST_STATUS = 400;
+    private static final int UNAUTHORIZED_STATUS = 401;
+    private static final int INTERNAL_ERROR_STATUS = 500;
+
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<Map<String, Object>> handleResponseStatus(ResponseStatusException e) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("status", e.getStatusCode().value());
-        body.put("message", e.getReason());
-        return ResponseEntity.status(e.getStatusCode()).body(body);
+        return ResponseEntity.status(e.getStatusCode())
+                .body(responseBody(e.getStatusCode().value(), e.getReason()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -28,23 +34,25 @@ public class GlobalExceptionHandler {
         for (FieldError fe : e.getBindingResult().getFieldErrors()) {
             errors.put(fe.getField(), fe.getDefaultMessage());
         }
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("status", 400);
-        body.put("message", "Validation failed");
-        body.put("errors", errors);
+        Map<String, Object> body = responseBody(BAD_REQUEST_STATUS, VALIDATION_FAILED_MESSAGE);
+        body.put(ERRORS_FIELD, errors);
         return ResponseEntity.badRequest().body(body);
     }
 
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Map<String, Object>> handleIllegalState(IllegalStateException e) {
-        Map<String, Object> body = new LinkedHashMap<>();
         if (e.getMessage() != null && e.getMessage().contains("authenticated principal")) {
-            body.put("status", 401);
-            body.put("message", e.getMessage());
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(body);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(responseBody(UNAUTHORIZED_STATUS, e.getMessage()));
         }
-        body.put("status", 500);
-        body.put("message", e.getMessage());
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(responseBody(INTERNAL_ERROR_STATUS, e.getMessage()));
+    }
+
+    private static Map<String, Object> responseBody(int status, String message) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put(STATUS_FIELD, status);
+        body.put(MESSAGE_FIELD, message);
+        return body;
     }
 }
