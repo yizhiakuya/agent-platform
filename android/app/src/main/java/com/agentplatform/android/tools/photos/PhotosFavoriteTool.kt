@@ -71,9 +71,11 @@ class PhotosFavoriteTool(
             context = context,
             mapper = mapper,
             ids = ids,
-            pendingIntent = MediaStore.createFavoriteRequest(context.contentResolver, uris, favorite),
-            rejectedMessage = "Android media favorite confirmation rejected",
-            rootFields = listOf("favorite" to favorite)
+            spec = PhotoMutationHelpers.ConfirmedMutationSpec(
+                pendingIntent = MediaStore.createFavoriteRequest(context.contentResolver, uris, favorite),
+                rejectedMessage = "Android media favorite confirmation rejected",
+                rootFields = listOf("favorite" to favorite)
+            )
         )
         ToolResultEnvelope.applyStandardFields(mapper, this@PhotosFavoriteTool, result, ok = true, request = args)
     }

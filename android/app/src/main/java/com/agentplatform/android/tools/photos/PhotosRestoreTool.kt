@@ -65,9 +65,11 @@ class PhotosRestoreTool(
             context = context,
             mapper = mapper,
             ids = ids,
-            pendingIntent = MediaStore.createTrashRequest(context.contentResolver, uris, false),
-            rejectedMessage = "Android media restore confirmation rejected",
-            rootFields = listOf("trashed" to false)
+            spec = PhotoMutationHelpers.ConfirmedMutationSpec(
+                pendingIntent = MediaStore.createTrashRequest(context.contentResolver, uris, false),
+                rejectedMessage = "Android media restore confirmation rejected",
+                rootFields = listOf("trashed" to false)
+            )
         )
         ToolResultEnvelope.applyStandardFields(mapper, this@PhotosRestoreTool, result, ok = true, request = args)
     }

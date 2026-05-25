@@ -56,6 +56,14 @@ internal object PhotoMutationHelpers {
         val errorSummaryFields: List<Pair<String, Any?>> = emptyList()
     )
 
+    data class ConfirmedMutationSpec(
+        val pendingIntent: PendingIntent,
+        val rejectedMessage: String,
+        val countKey: String = "affected_count",
+        val rootFields: List<Pair<String, Any?>> = emptyList(),
+        val summaryFields: List<Pair<String, Any?>> = rootFields
+    )
+
     fun parseIds(args: JsonNode): List<Long> {
         return parseIds(args, emptyList())
     }
@@ -372,22 +380,18 @@ internal object PhotoMutationHelpers {
         context: Context,
         mapper: ObjectMapper,
         ids: List<Long>,
-        pendingIntent: PendingIntent,
-        rejectedMessage: String,
-        countKey: String = "affected_count",
-        rootFields: List<Pair<String, Any?>> = emptyList(),
-        summaryFields: List<Pair<String, Any?>> = rootFields
+        spec: ConfirmedMutationSpec
     ): ObjectNode {
-        val approved = MediaStoreRequestBridge.request(context, pendingIntent)
-        if (!approved) throw SecurityException(rejectedMessage)
+        val approved = MediaStoreRequestBridge.request(context, spec.pendingIntent)
+        if (!approved) throw SecurityException(spec.rejectedMessage)
 
         return mapper.createObjectNode().apply {
             set<JsonNode>("ids", idsArray(mapper, ids))
-            putFields(this, rootFields)
-            put(countKey, ids.size)
+            putFields(this, spec.rootFields)
+            put(spec.countKey, ids.size)
             set<JsonNode>("summary", mapper.createObjectNode().apply {
-                put(countKey, ids.size)
-                putFields(this, summaryFields)
+                put(spec.countKey, ids.size)
+                putFields(this, spec.summaryFields)
             })
         }
     }
