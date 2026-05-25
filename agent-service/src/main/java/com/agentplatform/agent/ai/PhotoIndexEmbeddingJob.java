@@ -43,45 +43,73 @@ public class PhotoIndexEmbeddingJob {
         if (!photoEmbeddingService.enabled()) {
             return;
         }
-        List<PendingPhotoAssetDto> pending;
-        try {
-            pending = chat.listPendingPhotos(batchSize);
-        } catch (Exception e) {
-            log.debug("[photo-index] pending fetch failed: {}", e.getMessage());
-            return;
-        }
+        List<PendingPhotoAssetDto> pending = fetchPending();
         if (pending == null || pending.isEmpty()) {
             return;
         }
 
-        List<PendingPhotoAssetDto> batch = new ArrayList<>(pending.size());
-        List<String> thumbs = new ArrayList<>(pending.size());
-        for (PendingPhotoAssetDto asset : pending) {
-            if (asset != null && asset.id() != null && asset.thumbB64() != null && !asset.thumbB64().isBlank()) {
-                batch.add(asset);
-                thumbs.add(asset.thumbB64());
-            }
-        }
+        EmbeddingBatch batch = collectEmbeddableAssets(pending);
         if (batch.isEmpty()) {
             return;
         }
 
-        List<float[]> embeddings;
-        try {
-            embeddings = photoEmbeddingService.embedImages(thumbs);
-        } catch (Exception e) {
-            log.warn("[photo-index] embedding batch failed count={} err={}", batch.size(), e.getMessage());
+        List<float[]> embeddings = embedImages(batch);
+        if (embeddings == null) {
             return;
         }
-        if (embeddings == null || embeddings.size() != batch.size()) {
+        if (embeddings.size() != batch.size()) {
             log.warn("[photo-index] embedding batch size mismatch requested={} returned={}",
-                    batch.size(), embeddings == null ? 0 : embeddings.size());
+                    batch.size(), embeddings.size());
             return;
         }
 
+        int ok = saveEmbeddings(batch, embeddings);
+        if (ok > 0) {
+            log.info("[photo-index] embedded {}/{} pending photo asset(s)", ok, pending.size());
+        }
+    }
+
+    private List<PendingPhotoAssetDto> fetchPending() {
+        try {
+            return chat.listPendingPhotos(batchSize);
+        } catch (Exception e) {
+            log.debug("[photo-index] pending fetch failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    private static EmbeddingBatch collectEmbeddableAssets(List<PendingPhotoAssetDto> pending) {
+        List<PendingPhotoAssetDto> assets = new ArrayList<>(pending.size());
+        List<String> thumbs = new ArrayList<>(pending.size());
+        for (PendingPhotoAssetDto asset : pending) {
+            if (hasEmbeddableThumb(asset)) {
+                assets.add(asset);
+                thumbs.add(asset.thumbB64());
+            }
+        }
+        return new EmbeddingBatch(assets, thumbs);
+    }
+
+    private static boolean hasEmbeddableThumb(PendingPhotoAssetDto asset) {
+        return asset != null
+                && asset.id() != null
+                && asset.thumbB64() != null
+                && !asset.thumbB64().isBlank();
+    }
+
+    private List<float[]> embedImages(EmbeddingBatch batch) {
+        try {
+            return photoEmbeddingService.embedImages(batch.thumbs());
+        } catch (Exception e) {
+            log.warn("[photo-index] embedding batch failed count={} err={}", batch.size(), e.getMessage());
+            return null;
+        }
+    }
+
+    private int saveEmbeddings(EmbeddingBatch batch, List<float[]> embeddings) {
         int ok = 0;
         for (int i = 0; i < batch.size(); i++) {
-            PendingPhotoAssetDto asset = batch.get(i);
+            PendingPhotoAssetDto asset = batch.asset(i);
             try {
                 chat.savePhotoEmbedding(new PhotoAssetEmbeddingRequest(
                         asset.id(),
@@ -94,8 +122,20 @@ public class PhotoIndexEmbeddingJob {
                         asset.id(), asset.name(), e.getMessage());
             }
         }
-        if (ok > 0) {
-            log.info("[photo-index] embedded {}/{} pending photo asset(s)", ok, pending.size());
+        return ok;
+    }
+
+    private record EmbeddingBatch(List<PendingPhotoAssetDto> assets, List<String> thumbs) {
+        boolean isEmpty() {
+            return assets.isEmpty();
+        }
+
+        int size() {
+            return assets.size();
+        }
+
+        PendingPhotoAssetDto asset(int index) {
+            return assets.get(index);
         }
     }
 }

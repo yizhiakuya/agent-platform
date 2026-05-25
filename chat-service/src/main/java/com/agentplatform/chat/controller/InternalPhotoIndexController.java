@@ -33,19 +33,7 @@ public class InternalPhotoIndexController {
         if (req == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body required");
         }
-        return photoIndexService.search(
-                req.userId(),
-                req.queryEmbedding(),
-                req.topK(),
-                req.bucketId(),
-                req.nameContains(),
-                req.dateAfter(),
-                req.dateBefore(),
-                req.minScore(),
-                req.resultLimit(),
-                req.rankingMode(),
-                req.sortBy(),
-                req.sortDirection());
+        return photoIndexService.search(req);
     }
 
     @GetMapping("/pending")

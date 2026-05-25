@@ -200,7 +200,7 @@ public class CodexResponsesLoopRunner {
                 ExecutionResult er;
                 try {
                     er = executeFunctionCall(call, resolved, userId, sessionId, budgetDecision.decorate(sink));
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     log.error("codex function_call threw name={} err={}", call.name(), t.toString(), t);
                     er = ExecutionResult.error("tool execution failed: " + t.getMessage());
                 }

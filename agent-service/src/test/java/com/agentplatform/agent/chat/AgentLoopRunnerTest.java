@@ -29,7 +29,7 @@ class AgentLoopRunnerTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test
-    void executeOneToolUseConvertsServerToolThrowablesToErrorResult() throws Exception {
+    void executeOneToolUseConvertsServerToolExceptionsToErrorResult() throws Exception {
         AgentLoopRunner runner = new AgentLoopRunner(
                 mapper,
                 props(),
@@ -136,7 +136,7 @@ class AgentLoopRunnerTest {
 
         @Override
         public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
-            throw new AssertionError("unexpected boom");
+            throw new RuntimeException("unexpected boom");
         }
     }
 }

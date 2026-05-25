@@ -52,7 +52,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Throws {@code RuntimeException} on setup failure so {@code ChatService}
  * can fail over to the next {@link ConfiguredProvider}; once the stream is
  * flowing mid-turn errors propagate to the SSE emitter and re-throw (no
- * mid-stream failover — see {@code ChatService} TODO P2).
+ * mid-stream failover — see {@code ChatService} future provider-retry work).
  */
 @Service
 public class AgentLoopRunner {
@@ -223,7 +223,7 @@ public class AgentLoopRunner {
                 ExecutionResult er;
                 try {
                     er = executeOneToolUse(tu, resolved, userId, sessionId, budgetDecision.decorate(sink));
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     log.error("tool_use threw name={} err={}", tu.name(), t.toString(), t);
                     er = ExecutionResult.error("tool execution failed: " + t.getMessage());
                 }
@@ -284,7 +284,7 @@ public class AgentLoopRunner {
             ExecutionResult result;
             try {
                 result = serverTool.executeJsonToolUse(args, userId, sessionId, sink);
-            } catch (Throwable e) {
+            } catch (Exception e) {
                 if (sink != null) {
                     sink.emit(SseEvent.toolCallError(mapper, name, e.getMessage()));
                     sink.emit(SseEvent.error(mapper, "Tool '" + name + "' failed: " + e.getMessage()));

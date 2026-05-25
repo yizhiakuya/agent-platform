@@ -258,9 +258,8 @@ public class MemoryService {
     /**
      * Demote curated facts older than {@code daysOld} back to raw.
      *
-     * <p>v0 implementation: pure age-based demotion. TODO P2: combine with a
-     * "no recall hits in N days" signal so we don't demote curated facts that
-     * are still actively being retrieved.
+     * <p>v0 implementation: pure age-based demotion. A later recall signal can
+     * keep actively retrieved curated facts from being demoted.
      */
     @Transactional
     public void demoteStaleCurated(UUID userId, int daysOld) {
@@ -268,8 +267,8 @@ public class MemoryService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId is required");
         }
         int days = Math.max(1, daysOld);
-        // TODO: factor in last-recall-hit timestamp once we track it; for now,
-        // age of the curated_at field alone is the demotion signal.
+        // The curated_at age is the demotion signal until recall-hit timestamps
+        // are tracked.
         int demoted = jdbc.update("""
                 UPDATE memory_facts
                 SET is_curated = false, curated_at = NULL

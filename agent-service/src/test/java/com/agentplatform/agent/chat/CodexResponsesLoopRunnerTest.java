@@ -129,8 +129,7 @@ class CodexResponsesLoopRunnerTest {
                         assertThat(item.path("type").asText()).isEqualTo("function_call_output");
                         assertThat(item.path("call_id").asText()).isEqualTo("call_1");
                         JsonNode output = mapper.readTree(item.path("output").asText());
-                        assertThat(output.path("error").asText())
-                                .isEqualTo("tool execution failed: unexpected boom");
+                        assertThat(output.path("error").asText()).isEqualTo("unexpected boom");
                     });
         }
     }
@@ -421,7 +420,7 @@ class CodexResponsesLoopRunnerTest {
 
         @Override
         public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
-            throw new AssertionError("unexpected boom");
+            throw new RuntimeException("unexpected boom");
         }
     }
 

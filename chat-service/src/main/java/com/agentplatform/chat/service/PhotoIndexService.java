@@ -4,6 +4,7 @@ import com.agentplatform.api.chat.PendingPhotoAssetDto;
 import com.agentplatform.api.chat.PhotoAssetBatchResponse;
 import com.agentplatform.api.chat.PhotoAssetDto;
 import com.agentplatform.api.chat.PhotoAssetReconcileResponse;
+import com.agentplatform.api.chat.PhotoAssetSearchRequest;
 import com.agentplatform.api.chat.PhotoAssetSearchResult;
 import com.agentplatform.api.chat.PhotoAssetUpsertRequest;
 import org.slf4j.Logger;
@@ -72,82 +73,103 @@ public class PhotoIndexService {
 
         int upserted = 0;
         for (PhotoAssetUpsertRequest req : assets) {
-            if (req == null) continue;
-            String mediaStoreId = clean(req.mediaStoreId());
-            if (mediaStoreId == null) continue;
-            String name = clean(req.name());
-            if (name == null) name = "image_" + mediaStoreId;
-            String thumb = clean(req.thumbB64());
-            UUID assetId = UUID.randomUUID();
-            List<UUID> staleEmbeddingIds = jdbc.queryForList("""
-                    SELECT id
-                    FROM photo_assets
-                    WHERE device_id = ?
-                      AND media_store_id = ?
-                      AND (
-                          content_hash IS DISTINCT FROM ?
-                          OR thumb_b64 IS DISTINCT FROM ?
-                      )
-                    """,
-                    UUID.class,
-                    deviceId,
-                    mediaStoreId,
-                    clean(req.contentHash()),
-                    thumb);
-            int rows = jdbc.update("""
-                    INSERT INTO photo_assets (
-                        id, user_id, device_id, media_store_id, name,
-                        bucket_id, bucket_name, date_taken_ms, date_modified_sec,
-                        size_bytes, width, height, mime_type, content_hash,
-                        thumb_b64, indexed_at, updated_at, deleted_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now(), NULL)
-                    ON CONFLICT (device_id, media_store_id) DO UPDATE SET
-                        user_id = EXCLUDED.user_id,
-                        name = EXCLUDED.name,
-                        bucket_id = EXCLUDED.bucket_id,
-                        bucket_name = EXCLUDED.bucket_name,
-                        date_taken_ms = EXCLUDED.date_taken_ms,
-                        date_modified_sec = EXCLUDED.date_modified_sec,
-                        size_bytes = EXCLUDED.size_bytes,
-                        width = EXCLUDED.width,
-                        height = EXCLUDED.height,
-                        mime_type = EXCLUDED.mime_type,
-                        content_hash = EXCLUDED.content_hash,
-                        thumb_b64 = EXCLUDED.thumb_b64,
-                        updated_at = now(),
-                        deleted_at = NULL
-                    """,
-                    assetId,
-                    userId,
-                    deviceId,
-                    mediaStoreId,
-                    name,
-                    clean(req.bucketId()),
-                    clean(req.bucketName()),
-                    req.dateTakenMs(),
-                    req.dateModifiedSec(),
-                    req.sizeBytes(),
-                    req.width(),
-                    req.height(),
-                    clean(req.mimeType()),
-                    clean(req.contentHash()),
-                    thumb);
-            upserted += rows;
-            if (!staleEmbeddingIds.isEmpty()) {
-                int deleted = 0;
-                for (UUID staleEmbeddingId : staleEmbeddingIds) {
-                    deleted += jdbc.update("DELETE FROM photo_asset_embeddings WHERE asset_id = ?", staleEmbeddingId);
-                }
-                log.debug("Invalidated {} stale photo embedding row(s) for device {} mediaStoreId {}",
-                        deleted, deviceId, mediaStoreId);
-            }
+            upserted += upsertAsset(userId, deviceId, req);
         }
 
         int pending = pendingCount(userId);
         log.debug("Upserted {} photo asset row(s) for user {} device {} (pending={})",
                 upserted, userId, deviceId, pending);
         return new PhotoAssetBatchResponse(assets.size(), upserted, pending);
+    }
+
+    private int upsertAsset(UUID userId, UUID deviceId, PhotoAssetUpsertRequest req) {
+        if (req == null) {
+            return 0;
+        }
+        String mediaStoreId = clean(req.mediaStoreId());
+        if (mediaStoreId == null) {
+            return 0;
+        }
+
+        String thumb = clean(req.thumbB64());
+        String contentHash = clean(req.contentHash());
+        List<UUID> staleEmbeddingIds = staleEmbeddingIds(deviceId, mediaStoreId, contentHash, thumb);
+        int rows = jdbc.update("""
+                INSERT INTO photo_assets (
+                    id, user_id, device_id, media_store_id, name,
+                    bucket_id, bucket_name, date_taken_ms, date_modified_sec,
+                    size_bytes, width, height, mime_type, content_hash,
+                    thumb_b64, indexed_at, updated_at, deleted_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now(), NULL)
+                ON CONFLICT (device_id, media_store_id) DO UPDATE SET
+                    user_id = EXCLUDED.user_id,
+                    name = EXCLUDED.name,
+                    bucket_id = EXCLUDED.bucket_id,
+                    bucket_name = EXCLUDED.bucket_name,
+                    date_taken_ms = EXCLUDED.date_taken_ms,
+                    date_modified_sec = EXCLUDED.date_modified_sec,
+                    size_bytes = EXCLUDED.size_bytes,
+                    width = EXCLUDED.width,
+                    height = EXCLUDED.height,
+                    mime_type = EXCLUDED.mime_type,
+                    content_hash = EXCLUDED.content_hash,
+                    thumb_b64 = EXCLUDED.thumb_b64,
+                    updated_at = now(),
+                    deleted_at = NULL
+                """,
+                UUID.randomUUID(),
+                userId,
+                deviceId,
+                mediaStoreId,
+                assetName(req, mediaStoreId),
+                clean(req.bucketId()),
+                clean(req.bucketName()),
+                req.dateTakenMs(),
+                req.dateModifiedSec(),
+                req.sizeBytes(),
+                req.width(),
+                req.height(),
+                clean(req.mimeType()),
+                contentHash,
+                thumb);
+        invalidateStaleEmbeddings(deviceId, mediaStoreId, staleEmbeddingIds);
+        return rows;
+    }
+
+    private List<UUID> staleEmbeddingIds(UUID deviceId, String mediaStoreId, String contentHash, String thumb) {
+        return jdbc.queryForList("""
+                SELECT id
+                FROM photo_assets
+                WHERE device_id = ?
+                  AND media_store_id = ?
+                  AND (
+                      content_hash IS DISTINCT FROM ?
+                      OR thumb_b64 IS DISTINCT FROM ?
+                  )
+                """,
+                UUID.class,
+                deviceId,
+                mediaStoreId,
+                contentHash,
+                thumb);
+    }
+
+    private void invalidateStaleEmbeddings(UUID deviceId, String mediaStoreId, List<UUID> staleEmbeddingIds) {
+        if (staleEmbeddingIds.isEmpty()) {
+            return;
+        }
+        int deleted = 0;
+        for (UUID staleEmbeddingId : staleEmbeddingIds) {
+            deleted += jdbc.update("DELETE FROM photo_asset_embeddings WHERE asset_id = ?", staleEmbeddingId);
+        }
+        log.debug("Invalidated {} stale photo embedding row(s) for device {} mediaStoreId {}",
+                deleted, deviceId, mediaStoreId);
+    }
+
+    private static String assetName(PhotoAssetUpsertRequest req, String mediaStoreId) {
+        String name = clean(req.name());
+        return name == null ? "image_" + mediaStoreId : name;
     }
 
     @Transactional
@@ -256,34 +278,23 @@ public class PhotoIndexService {
                                                Long dateAfter,
                                                Long dateBefore,
                                                Double minScore) {
-        return search(userId, queryEmbedding, topK, bucketId, null, dateAfter, dateBefore, minScore,
-                null, null, null, null);
+        return search(new PhotoAssetSearchRequest(userId, queryEmbedding, topK, bucketId,
+                dateAfter, dateBefore, minScore));
     }
 
-    public List<PhotoAssetSearchResult> search(UUID userId,
-                                               float[] queryEmbedding,
-                                               int topK,
-                                               String bucketId,
-                                               String nameContains,
-                                               Long dateAfter,
-                                               Long dateBefore,
-                                               Double minScore,
-                                               Integer resultLimit,
-                                               String rankingMode,
-                                               String sortBy,
-                                               String sortDirection) {
-        if (userId == null || queryEmbedding == null || queryEmbedding.length == 0) {
+    public List<PhotoAssetSearchResult> search(PhotoAssetSearchRequest request) {
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request is required");
+        }
+        float[] queryEmbedding = request.queryEmbedding();
+        if (request.userId() == null || queryEmbedding == null || queryEmbedding.length == 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId and queryEmbedding are required");
         }
-        int candidateK = Math.max(1, Math.min(topK <= 0 ? 8 : topK, MAX_TOP_K));
-        int finalLimit = Math.max(1, Math.min(resultLimit == null || resultLimit <= 0 ? candidateK : resultLimit, MAX_TOP_K));
-        String ranking = normalizeRankingMode(rankingMode);
-        String sort = normalizeSortBy(sortBy);
-        String direction = normalizeSortDirection(sortDirection);
+        SearchOptions options = SearchOptions.from(request);
         String vec = MemoryService.toVectorLiteral(queryEmbedding);
         List<Object> args = new ArrayList<>();
         args.add(vec);
-        args.add(userId);
+        args.add(request.userId());
 
         StringBuilder sql = new StringBuilder("""
                 SELECT pa.id, pa.device_id, pa.media_store_id, pa.name,
@@ -298,67 +309,14 @@ public class PhotoIndexService {
                 WHERE pa.user_id = ?
                   AND pa.deleted_at IS NULL
                 """);
-        String cleanBucket = clean(bucketId);
-        if (cleanBucket != null) {
-            sql.append(" AND pa.bucket_id = ?");
-            args.add(cleanBucket);
-        }
-        String cleanNameContains = clean(nameContains);
-        if (cleanNameContains != null) {
-            sql.append(" AND lower(pa.name) LIKE ?");
-            args.add("%" + cleanNameContains.toLowerCase(Locale.ROOT) + "%");
-        }
-        if (dateAfter != null && dateAfter > 0L) {
-            sql.append(" AND pa.date_taken_ms >= ?");
-            args.add(dateAfter);
-        }
-        if (dateBefore != null && dateBefore > 0L) {
-            sql.append(" AND pa.date_taken_ms <= ?");
-            args.add(dateBefore);
-        }
-        double threshold = minScore == null ? 0.0d : Math.max(0.0d, Math.min(0.99d, minScore));
-        if (threshold > 0.0d) {
-            sql.append(" AND 1.0 - (pe.embedding OPERATOR(public.<=>) ?::public.vector) >= ?");
-            args.add(vec);
-            args.add(threshold);
-        }
-        if (RANKING_SORT_THEN_SEMANTIC.equals(ranking)) {
-            sql.append(metadataOrderClause(sort, direction));
-        } else {
-            sql.append(" ORDER BY pe.embedding OPERATOR(public.<=>) ?::public.vector");
-            args.add(vec);
-        }
+        appendSearchFilters(sql, args, request, options, vec);
+        appendCandidateOrder(sql, args, options, vec);
         sql.append(" LIMIT ?");
-        args.add(candidateK);
+        args.add(options.candidateK());
 
-        boolean qualifyBeforeSort = shouldQualifyBeforeMetadataSort(ranking, sort);
-        String sourceCte = qualifyBeforeSort ? "qualified_photo_assets" : "ranked_photo_assets";
-        String qualificationCte = "";
-        if (qualifyBeforeSort) {
-            qualificationCte = """
-                    ,
-                    qualified_photo_assets AS (
-                        SELECT *
-                        FROM (
-                            SELECT ranked_photo_assets.*,
-                                   max(1.0 - distance) OVER () AS best_score
-                            FROM ranked_photo_assets
-                        ) scored
-                        WHERE 1.0 - distance >= GREATEST(
-                            ?::double precision,
-                            best_score - ?::double precision,
-                            best_score * ?::double precision
-                        )
-                    )
-                    """;
-            args.add(threshold);
-            args.add(SEMANTIC_THEN_SORT_MAX_SCORE_DROP);
-            args.add(SEMANTIC_THEN_SORT_MIN_SCORE_RATIO);
-        }
-
-        String finalOrder = RANKING_SORT_THEN_SEMANTIC.equals(ranking)
-                ? " ORDER BY distance ASC, date_taken_ms DESC NULLS LAST"
-                : finalOrderClause(sort, direction);
+        String qualificationCte = qualificationCte(options, args);
+        String sourceCte = options.qualifyBeforeSort() ? "qualified_photo_assets" : "ranked_photo_assets";
+        String finalOrder = finalSearchOrder(options);
         String wrapped = """
                 WITH ranked_photo_assets AS (
                 %s
@@ -368,9 +326,80 @@ public class PhotoIndexService {
                 %s
                 LIMIT ?
                 """.formatted(sql, qualificationCte, sourceCte, finalOrder);
-        args.add(finalLimit);
+        args.add(options.finalLimit());
 
         return jdbc.query(wrapped, SEARCH_ROW_MAPPER, args.toArray());
+    }
+
+    private static void appendSearchFilters(StringBuilder sql,
+                                            List<Object> args,
+                                            PhotoAssetSearchRequest request,
+                                            SearchOptions options,
+                                            String vec) {
+        String cleanBucket = clean(request.bucketId());
+        if (cleanBucket != null) {
+            sql.append(" AND pa.bucket_id = ?");
+            args.add(cleanBucket);
+        }
+        String cleanNameContains = clean(request.nameContains());
+        if (cleanNameContains != null) {
+            sql.append(" AND lower(pa.name) LIKE ?");
+            args.add("%" + cleanNameContains.toLowerCase(Locale.ROOT) + "%");
+        }
+        if (request.dateAfter() != null && request.dateAfter() > 0L) {
+            sql.append(" AND pa.date_taken_ms >= ?");
+            args.add(request.dateAfter());
+        }
+        if (request.dateBefore() != null && request.dateBefore() > 0L) {
+            sql.append(" AND pa.date_taken_ms <= ?");
+            args.add(request.dateBefore());
+        }
+        if (options.threshold() > 0.0d) {
+            sql.append(" AND 1.0 - (pe.embedding OPERATOR(public.<=>) ?::public.vector) >= ?");
+            args.add(vec);
+            args.add(options.threshold());
+        }
+    }
+
+    private static void appendCandidateOrder(StringBuilder sql, List<Object> args, SearchOptions options, String vec) {
+        if (RANKING_SORT_THEN_SEMANTIC.equals(options.ranking())) {
+            sql.append(metadataOrderClause(options.sort(), options.direction()));
+            return;
+        }
+        sql.append(" ORDER BY pe.embedding OPERATOR(public.<=>) ?::public.vector");
+        args.add(vec);
+    }
+
+    private static String qualificationCte(SearchOptions options, List<Object> args) {
+        if (!options.qualifyBeforeSort()) {
+            return "";
+        }
+        args.add(options.threshold());
+        args.add(SEMANTIC_THEN_SORT_MAX_SCORE_DROP);
+        args.add(SEMANTIC_THEN_SORT_MIN_SCORE_RATIO);
+        return """
+                ,
+                qualified_photo_assets AS (
+                    SELECT *
+                    FROM (
+                        SELECT ranked_photo_assets.*,
+                               max(1.0 - distance) OVER () AS best_score
+                        FROM ranked_photo_assets
+                    ) scored
+                    WHERE 1.0 - distance >= GREATEST(
+                        ?::double precision,
+                        best_score - ?::double precision,
+                        best_score * ?::double precision
+                    )
+                )
+                """;
+    }
+
+    private static String finalSearchOrder(SearchOptions options) {
+        if (RANKING_SORT_THEN_SEMANTIC.equals(options.ranking())) {
+            return " ORDER BY distance ASC, date_taken_ms DESC NULLS LAST";
+        }
+        return finalOrderClause(options.sort(), options.direction());
     }
 
     public PhotoAssetDto get(UUID userId, UUID assetId) {
@@ -447,6 +476,31 @@ public class PhotoIndexService {
         return Math.max(floor, Math.max(
                 bestScore - SEMANTIC_THEN_SORT_MAX_SCORE_DROP,
                 bestScore * SEMANTIC_THEN_SORT_MIN_SCORE_RATIO));
+    }
+
+    private record SearchOptions(int candidateK,
+                                 int finalLimit,
+                                 double threshold,
+                                 String ranking,
+                                 String sort,
+                                 String direction) {
+        static SearchOptions from(PhotoAssetSearchRequest request) {
+            int candidateK = Math.max(1, Math.min(request.topK() <= 0 ? 8 : request.topK(), MAX_TOP_K));
+            int finalLimit = Math.max(1, Math.min(
+                    request.resultLimit() == null || request.resultLimit() <= 0 ? candidateK : request.resultLimit(),
+                    MAX_TOP_K));
+            double threshold = request.minScore() == null
+                    ? 0.0d
+                    : Math.max(0.0d, Math.min(0.99d, request.minScore()));
+            String ranking = normalizeRankingMode(request.rankingMode());
+            String sort = normalizeSortBy(request.sortBy());
+            String direction = normalizeSortDirection(request.sortDirection());
+            return new SearchOptions(candidateK, finalLimit, threshold, ranking, sort, direction);
+        }
+
+        boolean qualifyBeforeSort() {
+            return shouldQualifyBeforeMetadataSort(ranking, sort);
+        }
     }
 
     private static String finalOrderClause(String sortBy, String direction) {
