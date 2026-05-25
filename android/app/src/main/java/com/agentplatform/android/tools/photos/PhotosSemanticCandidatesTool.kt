@@ -12,9 +12,11 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.label.ImageLabeler
 import com.google.mlkit.vision.label.ImageLabeling
 import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.google.android.gms.tasks.Tasks
@@ -99,146 +101,184 @@ class PhotosSemanticCandidatesTool(
     override val confirmRequired: Boolean = false
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
-        val query = args.path("query").asText("").trim()
+        val request = parseSearchRequest(args)
+        val rows = loadRows(request)
+        val candidates = collectCandidates(rows, tokenize(request.query), request.runOcr)
+        val photos = candidateArray(orderedCandidates(candidates, request.limit))
+        resultNode(request, rows.size, photos)
+    }
+
+    private fun parseSearchRequest(args: JsonNode): SearchRequest {
         val limit = args.path("limit").asInt(8).coerceIn(1, 20)
-        val scanLimit = args.path("scan_limit").asInt(60).coerceIn(limit, 200)
-        val bucketId = args.path("bucket_id").asText("").trim().takeIf { it.isNotEmpty() }
-        val nameContains = args.path("name_contains").asText("").trim().takeIf { it.isNotEmpty() }
-        val dateAfter = args.path("date_after").let { if (it.isNumber) it.asLong() else null }
-        val dateBefore = args.path("date_before").let { if (it.isNumber) it.asLong() else null }
-        val runOcr = args.path("ocr").let { !it.isBoolean || it.asBoolean(true) }
-
-        val rows = loadRows(scanLimit, bucketId, nameContains, dateAfter, dateBefore)
-        val queryTerms = tokenize(query)
-        val latinRecognizer = if (runOcr) TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) else null
-        val chineseRecognizer = if (runOcr) TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build()) else null
-        val imageLabeler = ImageLabeling.getClient(
-            ImageLabelerOptions.Builder()
-                .setConfidenceThreshold(0.55f)
-                .build()
+        return SearchRequest(
+            query = args.path("query").asText("").trim(),
+            limit = limit,
+            scanLimit = args.path("scan_limit").asInt(60).coerceIn(limit, 200),
+            filters = SearchFilters(
+                bucketId = args.path("bucket_id").asText("").trim().takeIf { it.isNotEmpty() },
+                nameContains = args.path("name_contains").asText("").trim().takeIf { it.isNotEmpty() },
+                dateAfter = longArg(args, "date_after"),
+                dateBefore = longArg(args, "date_before")
+            ),
+            runOcr = args.path("ocr").let { !it.isBoolean || it.asBoolean(true) }
         )
+    }
 
-        val candidates = mutableListOf<Candidate>()
-        for (row in rows) {
-            var bitmap: Bitmap? = null
-            try {
-                bitmap = PhotoToolUtils.loadThumbnail(context.contentResolver, row.id, 384)
-                val ocrText = if (latinRecognizer != null && chineseRecognizer != null) {
-                    ocrText(bitmap, row.id, latinRecognizer, chineseRecognizer)
-                } else {
-                    ""
-                }
-                val labels = visualLabels(bitmap, row.id, imageLabeler)
-                val text = searchableText(row, ocrText, labels)
-                val localScore = localScore(text, queryTerms)
-                val visualScore = visualScore(labels, queryTerms)
-                val recencyScore = recencyScore(row.dateTakenMs)
-                val candidateScore = localScore + (visualScore * 3.0) + (recencyScore * 0.5)
-                candidates += Candidate(
-                    row = row,
-                    ocrText = ocrText,
-                    visualLabels = labels,
-                    semanticText = text,
-                    localScore = localScore,
-                    visualScore = visualScore,
-                    recencyScore = recencyScore,
-                    candidateScore = candidateScore
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "semantic candidate failed for id=${row.id}: ${e.message}")
-            } finally {
-                bitmap?.recycle()
-            }
+    private fun longArg(args: JsonNode, name: String): Long? {
+        val node = args.path(name)
+        return if (node.isNumber) node.asLong() else null
+    }
+
+    private fun collectCandidates(rows: List<Row>, queryTerms: Set<String>, runOcr: Boolean): List<Candidate> {
+        val clients = VisionClients.create(runOcr)
+        return try {
+            rows.mapNotNull { candidateForRow(it, queryTerms, clients) }
+        } finally {
+            clients.close()
         }
-        latinRecognizer?.close()
-        chineseRecognizer?.close()
-        imageLabeler.close()
+    }
 
-        val ordered = candidates
+    private fun candidateForRow(row: Row, queryTerms: Set<String>, clients: VisionClients): Candidate? {
+        var bitmap: Bitmap? = null
+        return try {
+            bitmap = PhotoToolUtils.loadThumbnail(context.contentResolver, row.id, 384)
+            buildCandidate(row, bitmap, queryTerms, clients)
+        } catch (e: Exception) {
+            Log.w(TAG, "semantic candidate failed for id=${row.id}: ${e.message}")
+            null
+        } finally {
+            bitmap?.recycle()
+        }
+    }
+
+    private fun buildCandidate(
+        row: Row,
+        bitmap: Bitmap,
+        queryTerms: Set<String>,
+        clients: VisionClients
+    ): Candidate {
+        val ocrText = if (clients.hasOcr) {
+            ocrText(bitmap, row.id, clients.latinRecognizer!!, clients.chineseRecognizer!!)
+        } else {
+            ""
+        }
+        val labels = visualLabels(bitmap, row.id, clients.imageLabeler)
+        val text = searchableText(row, ocrText, labels)
+        val localScore = localScore(text, queryTerms)
+        val visualScore = visualScore(labels, queryTerms)
+        val recencyScore = recencyScore(row.dateTakenMs)
+        return Candidate(
+            row = row,
+            ocrText = ocrText,
+            visualLabels = labels,
+            semanticText = text,
+            localScore = localScore,
+            visualScore = visualScore,
+            recencyScore = recencyScore,
+            candidateScore = localScore + (visualScore * 3.0) + (recencyScore * 0.5)
+        )
+    }
+
+    private fun orderedCandidates(candidates: List<Candidate>, limit: Int): List<Candidate> {
+        return candidates
             .sortedWith(
                 compareByDescending<Candidate> { it.candidateScore }
                     .thenByDescending { it.localScore }
                     .thenByDescending { it.row.dateTakenMs }
             )
             .take(limit)
-
-        val arr: ArrayNode = mapper.createArrayNode()
-        for (c in ordered) {
-            val obj: ObjectNode = mapper.createObjectNode()
-            obj.put("id", c.row.id.toString())
-            obj.put("name", c.row.name)
-            obj.put("bucket_id", c.row.bucketId)
-            obj.put("bucket_name", c.row.bucketName)
-            obj.put("date_taken_ms", c.row.dateTakenMs)
-            obj.put("date_text", dateText(c.row.dateTakenMs))
-            obj.put("size_bytes", c.row.sizeBytes)
-            obj.put("width", c.row.width)
-            obj.put("height", c.row.height)
-            obj.put("mime_type", c.row.mimeType)
-            obj.put("ocr_text", c.ocrText)
-            obj.set<ArrayNode>("visual_labels", mapper.createArrayNode().apply {
-                c.visualLabels.forEach { add(it) }
-            })
-            obj.put("semantic_text", c.semanticText)
-            obj.put("local_score", c.localScore)
-            obj.put("visual_score", c.visualScore)
-            obj.put("recency_score", c.recencyScore)
-            obj.put("candidate_score", c.candidateScore)
-            val image = try {
-                PhotoToolUtils.encodedDisplayPhoto(
-                    context = context,
-                    id = c.row.id,
-                    maxDim = 2048,
-                    quality = 85,
-                    sourceModifiedSec = c.row.dateModifiedSec,
-                    sourceSizeBytes = c.row.sizeBytes
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "semantic result image encode failed for id=${c.row.id}: ${e.message}")
-                null
-            }
-            if (image != null) {
-                obj.put("image_b64", image.b64)
-                obj.put("image_bytes", image.bytes)
-                obj.put("image_width", image.width)
-                obj.put("image_height", image.height)
-                obj.put("image_cache_hit", image.cacheHit)
-            }
-            arr.add(obj)
-        }
-
-        val result: ObjectNode = mapper.createObjectNode()
-        result.put("query", query)
-        result.put("scanned", rows.size)
-        result.put("count", arr.size())
-        result.set<JsonNode>("photos", arr)
-        result
     }
 
-    private fun loadRows(
-        scanLimit: Int,
-        bucketId: String?,
-        nameContains: String?,
-        dateAfter: Long?,
-        dateBefore: Long?
-    ): List<Row> {
+    private fun candidateArray(candidates: List<Candidate>): ArrayNode {
+        val photos = mapper.createArrayNode()
+        candidates.forEach { photos.add(candidateNode(it)) }
+        return photos
+    }
+
+    private fun candidateNode(candidate: Candidate): ObjectNode {
+        val obj = mapper.createObjectNode()
+        addCandidateMetadata(obj, candidate)
+        addCandidateImage(obj, candidate)
+        return obj
+    }
+
+    private fun addCandidateMetadata(obj: ObjectNode, candidate: Candidate) {
+        val row = candidate.row
+        obj.put("id", row.id.toString())
+        obj.put("name", row.name)
+        obj.put("bucket_id", row.bucketId)
+        obj.put("bucket_name", row.bucketName)
+        obj.put("date_taken_ms", row.dateTakenMs)
+        obj.put("date_text", dateText(row.dateTakenMs))
+        obj.put("size_bytes", row.sizeBytes)
+        obj.put("width", row.width)
+        obj.put("height", row.height)
+        obj.put("mime_type", row.mimeType)
+        obj.put("ocr_text", candidate.ocrText)
+        obj.set<ArrayNode>("visual_labels", mapper.createArrayNode().apply {
+            candidate.visualLabels.forEach { add(it) }
+        })
+        obj.put("semantic_text", candidate.semanticText)
+        obj.put("local_score", candidate.localScore)
+        obj.put("visual_score", candidate.visualScore)
+        obj.put("recency_score", candidate.recencyScore)
+        obj.put("candidate_score", candidate.candidateScore)
+    }
+
+    private fun addCandidateImage(obj: ObjectNode, candidate: Candidate) {
+        val image = displayImage(candidate) ?: return
+        obj.put("image_b64", image.b64)
+        obj.put("image_bytes", image.bytes)
+        obj.put("image_width", image.width)
+        obj.put("image_height", image.height)
+        obj.put("image_cache_hit", image.cacheHit)
+    }
+
+    private fun displayImage(candidate: Candidate): PhotoToolUtils.EncodedPhoto? {
+        val row = candidate.row
+        return try {
+            PhotoToolUtils.encodedDisplayPhoto(
+                context = context,
+                id = row.id,
+                maxDim = 2048,
+                quality = 85,
+                sourceModifiedSec = row.dateModifiedSec,
+                sourceSizeBytes = row.sizeBytes
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "semantic result image encode failed for id=${row.id}: ${e.message}")
+            null
+        }
+    }
+
+    private fun resultNode(request: SearchRequest, scanned: Int, photos: ArrayNode): ObjectNode {
+        return mapper.createObjectNode().apply {
+            put("query", request.query)
+            put("scanned", scanned)
+            put("count", photos.size())
+            set<JsonNode>("photos", photos)
+        }
+    }
+
+    private fun loadRows(request: SearchRequest): List<Row> {
         val clauses = mutableListOf<String>()
         val params = mutableListOf<String>()
-        if (bucketId != null) {
+        val filters = request.filters
+        if (filters.bucketId != null) {
             clauses += "${MediaStore.Images.Media.BUCKET_ID} = ?"
-            params += bucketId
+            params += filters.bucketId
         }
-        if (nameContains != null) {
+        if (filters.nameContains != null) {
             clauses += "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?"
-            params += "%$nameContains%"
+            params += "%${filters.nameContains}%"
         }
-        if (dateAfter != null) {
+        if (filters.dateAfter != null) {
             clauses += "${MediaStore.Images.Media.DATE_TAKEN} >= ?"
-            params += dateAfter.toString()
+            params += filters.dateAfter.toString()
         }
-        if (dateBefore != null) {
+        if (filters.dateBefore != null) {
             clauses += "${MediaStore.Images.Media.DATE_TAKEN} <= ?"
-            params += dateBefore.toString()
+            params += filters.dateBefore.toString()
         }
 
         val selection = clauses.joinToString(" AND ").ifEmpty { null }
@@ -265,7 +305,7 @@ class PhotosSemanticCandidatesTool(
                     android.content.ContentResolver.QUERY_ARG_SORT_DIRECTION,
                     android.content.ContentResolver.QUERY_SORT_DIRECTION_DESCENDING
                 )
-                putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, scanLimit)
+                putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, request.scanLimit)
                 if (selection != null) {
                     putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
                     putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
@@ -294,7 +334,7 @@ class PhotosSemanticCandidatesTool(
             val widthIdx = c.getColumnIndex(MediaStore.Images.Media.WIDTH)
             val heightIdx = c.getColumnIndex(MediaStore.Images.Media.HEIGHT)
             val mimeIdx = c.getColumnIndex(MediaStore.Images.Media.MIME_TYPE)
-            while (c.moveToNext() && out.size < scanLimit) {
+            while (c.moveToNext() && out.size < request.scanLimit) {
                 val id = c.getLong(idIdx)
                 val dateTaken = l(c, dateIdx)
                 val modifiedSec = l(c, modifiedIdx)
@@ -460,6 +500,58 @@ class PhotosSemanticCandidatesTool(
         val height: Int,
         val mimeType: String,
     )
+
+    private data class SearchRequest(
+        val query: String,
+        val limit: Int,
+        val scanLimit: Int,
+        val filters: SearchFilters,
+        val runOcr: Boolean
+    )
+
+    private data class SearchFilters(
+        val bucketId: String?,
+        val nameContains: String?,
+        val dateAfter: Long?,
+        val dateBefore: Long?
+    )
+
+    private class VisionClients(
+        val latinRecognizer: TextRecognizer?,
+        val chineseRecognizer: TextRecognizer?,
+        val imageLabeler: ImageLabeler
+    ) : AutoCloseable {
+        val hasOcr: Boolean
+            get() = latinRecognizer != null && chineseRecognizer != null
+
+        override fun close() {
+            latinRecognizer?.close()
+            chineseRecognizer?.close()
+            imageLabeler.close()
+        }
+
+        companion object {
+            fun create(runOcr: Boolean): VisionClients {
+                return VisionClients(
+                    latinRecognizer = if (runOcr) {
+                        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                    } else {
+                        null
+                    },
+                    chineseRecognizer = if (runOcr) {
+                        TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+                    } else {
+                        null
+                    },
+                    imageLabeler = ImageLabeling.getClient(
+                        ImageLabelerOptions.Builder()
+                            .setConfidenceThreshold(0.55f)
+                            .build()
+                    )
+                )
+            }
+        }
+    }
 
     private data class Candidate(
         val row: Row,
