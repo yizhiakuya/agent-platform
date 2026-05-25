@@ -2,6 +2,7 @@ package com.agentplatform.android.tools.photos
 
 import android.content.ContentUris
 import android.content.Context
+import android.database.Cursor
 import android.provider.MediaStore
 import android.util.Log
 import com.agentplatform.android.core.tool.Tool
@@ -150,52 +151,66 @@ class PhotosGetFullBatchTool(
             return result.withError("invalid id: $idStr", "invalid_id")
         }
 
-        var modifiedSec = 0L
-        var sizeBytes = 0L
-        var name = "image_$id"
+        val metadata = readPhotoMetadata(id, result)
+        return uploadPhoto(id, maxDim, metadata, uploader, result)
+    }
+
+    private fun readPhotoMetadata(id: Long, result: ObjectNode): PhotoMetadata {
+        var metadata = PhotoMetadata.default(id)
         val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-        val projection = arrayOf(
-            MediaStore.Images.Media.DISPLAY_NAME,
-            MediaStore.Images.Media.DATE_MODIFIED,
-            MediaStore.Images.Media.SIZE,
-            MediaStore.Images.Media.WIDTH,
-            MediaStore.Images.Media.HEIGHT
-        )
-
-        context.contentResolver.query(uri, projection, null, null, null)?.use { c ->
-            if (c.moveToFirst()) {
-                c.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME).takeIf { it >= 0 }
-                    ?.let {
-                        name = c.getString(it) ?: "image_$id"
-                        result.put("name", name)
-                    }
-                c.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED).takeIf { it >= 0 && !c.isNull(it) }
-                    ?.let {
-                        modifiedSec = c.getLong(it)
-                        result.put("date_modified_sec", modifiedSec)
-                    }
-                c.getColumnIndex(MediaStore.Images.Media.SIZE).takeIf { it >= 0 && !c.isNull(it) }
-                    ?.let {
-                        sizeBytes = c.getLong(it)
-                        result.put("size_bytes", sizeBytes)
-                    }
-                c.getColumnIndex(MediaStore.Images.Media.WIDTH).takeIf { it >= 0 && !c.isNull(it) }
-                    ?.let { result.put("source_width", c.getInt(it)) }
-                c.getColumnIndex(MediaStore.Images.Media.HEIGHT).takeIf { it >= 0 && !c.isNull(it) }
-                    ?.let { result.put("source_height", c.getInt(it)) }
-            }
+        context.contentResolver.query(uri, PHOTO_PROJECTION, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) metadata = cursor.readPhotoMetadata(id, result)
         }
+        return metadata
+    }
 
+    private fun Cursor.readPhotoMetadata(id: Long, result: ObjectNode): PhotoMetadata {
+        val name = putStringField(MediaStore.Images.Media.DISPLAY_NAME, "name", result) ?: "image_$id"
+        val modifiedSec = putLongField(MediaStore.Images.Media.DATE_MODIFIED, "date_modified_sec", result)
+        val sizeBytes = putLongField(MediaStore.Images.Media.SIZE, "size_bytes", result)
+        putIntField(MediaStore.Images.Media.WIDTH, "source_width", result)
+        putIntField(MediaStore.Images.Media.HEIGHT, "source_height", result)
+        return PhotoMetadata(
+            name = name,
+            modifiedSec = modifiedSec ?: 0L,
+            sizeBytes = sizeBytes ?: 0L
+        )
+    }
+
+    private fun Cursor.putStringField(column: String, field: String, result: ObjectNode): String? =
+        columnIndex(column).takeIf { it >= 0 }
+            ?.let { getString(it) }
+            ?.also { result.put(field, it) }
+
+    private fun Cursor.putLongField(column: String, field: String, result: ObjectNode): Long? =
+        columnIndex(column).takeIf { it >= 0 && !isNull(it) }
+            ?.let { getLong(it) }
+            ?.also { result.put(field, it) }
+
+    private fun Cursor.putIntField(column: String, field: String, result: ObjectNode) {
+        columnIndex(column).takeIf { it >= 0 && !isNull(it) }
+            ?.let { result.put(field, getInt(it)) }
+    }
+
+    private fun Cursor.columnIndex(column: String): Int = getColumnIndex(column)
+
+    private fun uploadPhoto(
+        id: Long,
+        maxDim: Int,
+        metadata: PhotoMetadata,
+        uploader: PhotoAssetUploader,
+        result: ObjectNode
+    ): ObjectNode {
         try {
             val image = PhotoToolUtils.encodedDisplayPhoto(
                 context = context,
                 id = id,
                 maxDim = maxDim,
                 quality = 85,
-                sourceModifiedSec = modifiedSec,
-                sourceSizeBytes = sizeBytes
+                sourceModifiedSec = metadata.modifiedSec,
+                sourceSizeBytes = metadata.sizeBytes
             )
-            val upload = uploader.uploadDisplayJpeg(id, name, image)
+            val upload = uploader.uploadDisplayJpeg(id, metadata.name, image)
             PhotoAssetUploader.putUploadFields(result, upload, image)
         } catch (e: Exception) {
             Log.w(TAG, "photo batch fetch failed for id=$id: ${e.message}", e)
@@ -214,8 +229,29 @@ class PhotosGetFullBatchTool(
         return this
     }
 
+    private data class PhotoMetadata(
+        val name: String,
+        val modifiedSec: Long,
+        val sizeBytes: Long
+    ) {
+        companion object {
+            fun default(id: Long): PhotoMetadata = PhotoMetadata(
+                name = "image_$id",
+                modifiedSec = 0L,
+                sizeBytes = 0L
+            )
+        }
+    }
+
     companion object {
         private const val TAG = "PhotosGetFullBatchTool"
         private const val MAX_BATCH = 8
+        private val PHOTO_PROJECTION = arrayOf(
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.DATE_MODIFIED,
+            MediaStore.Images.Media.SIZE,
+            MediaStore.Images.Media.WIDTH,
+            MediaStore.Images.Media.HEIGHT
+        )
     }
 }
