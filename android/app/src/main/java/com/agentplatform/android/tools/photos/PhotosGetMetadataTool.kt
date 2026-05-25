@@ -2,8 +2,8 @@ package com.agentplatform.android.tools.photos
 
 import android.content.ContentUris
 import android.content.Context
-import android.os.Build
-import android.os.Bundle
+import android.database.Cursor
+import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import androidx.exifinterface.media.ExifInterface
@@ -54,108 +54,145 @@ class PhotosGetMetadataTool(
     override val confirmRequired: Boolean = false
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
-        val idStr = args.path("id").asText("").trim()
-        val id = idStr.toLongOrNull()
-            ?: throw IllegalArgumentException("invalid id: $idStr")
-
+        val id = parsePhotoId(args)
         val result: ObjectNode = mapper.createObjectNode()
-        result.put("id", idStr)
-
-        val projection = arrayOf(
-            MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DISPLAY_NAME,
-            MediaStore.Images.Media.SIZE,
-            MediaStore.Images.Media.WIDTH,
-            MediaStore.Images.Media.HEIGHT,
-            MediaStore.Images.Media.MIME_TYPE,
-            MediaStore.Images.Media.DATE_TAKEN,
-            MediaStore.Images.Media.ORIENTATION
-        )
+        result.put("id", id.toString())
         val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+        addMediaStoreFields(result, uri)
+        addExifFields(result, uri, id)
+        result
+    }
 
-        // Step 1: MediaStore columns (cheap, always present).
+    private fun parsePhotoId(args: JsonNode): Long {
+        val id = args.path("id").asText("").trim()
+        return id.toLongOrNull() ?: throw IllegalArgumentException("invalid id: $id")
+    }
+
+    private fun addMediaStoreFields(result: ObjectNode, uri: Uri) {
         context.contentResolver.query(
-            uri, projection, null, null, null
+            uri,
+            MEDIA_STORE_PROJECTION,
+            null,
+            null,
+            null
         )?.use { c ->
             if (c.moveToFirst()) {
-                fun s(col: String) = c.getColumnIndex(col).takeIf { it >= 0 && !c.isNull(it) }
-                    ?.let { c.getString(it) }
-                fun l(col: String) = c.getColumnIndex(col).takeIf { it >= 0 && !c.isNull(it) }
-                    ?.let { c.getLong(it) }
-                fun i(col: String) = c.getColumnIndex(col).takeIf { it >= 0 && !c.isNull(it) }
-                    ?.let { c.getInt(it) }
-
-                s(MediaStore.Images.Media.DISPLAY_NAME)?.let { result.put("name", it) }
-                l(MediaStore.Images.Media.SIZE)?.let { result.put("size_bytes", it) }
-                i(MediaStore.Images.Media.WIDTH)?.let { result.put("width", it) }
-                i(MediaStore.Images.Media.HEIGHT)?.let { result.put("height", it) }
-                s(MediaStore.Images.Media.MIME_TYPE)?.let { result.put("mime_type", it) }
-                l(MediaStore.Images.Media.DATE_TAKEN)?.let { result.put("date_taken_ms", it) }
-                i(MediaStore.Images.Media.ORIENTATION)?.let { result.put("orientation", it) }
+                addCursorFields(result, c)
             }
         }
+    }
 
-        // Step 2: EXIF (richer fields). Open InputStream because file path may
-        // not be reachable on scoped storage.
+    private fun addCursorFields(result: ObjectNode, cursor: Cursor) {
+        stringValue(cursor, MediaStore.Images.Media.DISPLAY_NAME)?.let { result.put("name", it) }
+        longValue(cursor, MediaStore.Images.Media.SIZE)?.let { result.put("size_bytes", it) }
+        intValue(cursor, MediaStore.Images.Media.WIDTH)?.let { result.put("width", it) }
+        intValue(cursor, MediaStore.Images.Media.HEIGHT)?.let { result.put("height", it) }
+        stringValue(cursor, MediaStore.Images.Media.MIME_TYPE)?.let { result.put("mime_type", it) }
+        longValue(cursor, MediaStore.Images.Media.DATE_TAKEN)?.let { result.put("date_taken_ms", it) }
+        intValue(cursor, MediaStore.Images.Media.ORIENTATION)?.let { result.put("orientation", it) }
+    }
+
+    private fun addExifFields(result: ObjectNode, uri: Uri, id: Long) {
         try {
             context.contentResolver.openInputStream(uri)?.use { input ->
                 val exif = ExifInterface(input)
-
-                exif.getAttribute(ExifInterface.TAG_MAKE)
-                    ?.takeIf { it.isNotBlank() }?.let { result.put("camera_make", it.trim()) }
-                exif.getAttribute(ExifInterface.TAG_MODEL)
-                    ?.takeIf { it.isNotBlank() }?.let { result.put("camera_model", it.trim()) }
-
-                // Focal length (mm). Stored as rational e.g. "26/1".
-                exif.getAttribute(ExifInterface.TAG_FOCAL_LENGTH)
-                    ?.takeIf { it.isNotBlank() }?.let { raw ->
-                        rationalToDouble(raw)?.let { result.put("focal_length_mm", it) }
-                            ?: result.put("focal_length", raw)
-                    }
-
-                // Aperture: F number. May be absent on screenshots.
-                exif.getAttribute(ExifInterface.TAG_F_NUMBER)
-                    ?.takeIf { it.isNotBlank() }?.let { raw ->
-                        raw.toDoubleOrNull()?.let { result.put("aperture", it) }
-                            ?: result.put("aperture", raw)
-                    }
-
-                exif.getAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY)
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { it.toIntOrNull()?.let { v -> result.put("iso", v) } ?: result.put("iso", it) }
-
-                exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME)
-                    ?.takeIf { it.isNotBlank() }?.let { raw ->
-                        // EXIF exposure time is in seconds (decimal). Format as
-                        // "1/250" if < 1s for human readability.
-                        val sec = raw.toDoubleOrNull()
-                        if (sec != null && sec > 0) {
-                            val formatted = if (sec < 1.0) "1/${(1.0 / sec).toInt()}s" else "${sec}s"
-                            result.put("shutter_speed", formatted)
-                        } else {
-                            result.put("shutter_speed", raw)
-                        }
-                    }
-
-                exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
-                    ?.takeIf { it.isNotBlank() }?.let { result.put("datetime_original", it) }
-
-                // GPS (rare; only present if user enabled location for camera).
-                val latLong = FloatArray(2)
-                if (exif.getLatLong(latLong)) {
-                    result.put("gps_latitude", latLong[0].toDouble())
-                    result.put("gps_longitude", latLong[1].toDouble())
-                }
-                val altitude = exif.getAltitude(Double.NaN)
-                if (!altitude.isNaN()) {
-                    result.put("gps_altitude_m", altitude)
-                }
+                addCameraFields(result, exif)
+                addExposureFields(result, exif)
+                addDateTimeField(result, exif)
+                addGpsFields(result, exif)
             }
         } catch (e: Exception) {
             Log.w(TAG, "EXIF read failed for id=$id: ${e.message}")
         }
+    }
 
-        result
+    private fun addCameraFields(result: ObjectNode, exif: ExifInterface) {
+        exif.nonBlank(ExifInterface.TAG_MAKE)?.let { result.put("camera_make", it.trim()) }
+        exif.nonBlank(ExifInterface.TAG_MODEL)?.let { result.put("camera_model", it.trim()) }
+    }
+
+    private fun addExposureFields(result: ObjectNode, exif: ExifInterface) {
+        addFocalLength(result, exif)
+        addAperture(result, exif)
+        addIso(result, exif)
+        addShutterSpeed(result, exif)
+    }
+
+    private fun addFocalLength(result: ObjectNode, exif: ExifInterface) {
+        exif.nonBlank(ExifInterface.TAG_FOCAL_LENGTH)?.let { raw ->
+            rationalToDouble(raw)?.let { result.put("focal_length_mm", it) }
+                ?: result.put("focal_length", raw)
+        }
+    }
+
+    private fun addAperture(result: ObjectNode, exif: ExifInterface) {
+        exif.nonBlank(ExifInterface.TAG_F_NUMBER)?.let { raw ->
+            raw.toDoubleOrNull()?.let { result.put("aperture", it) }
+                ?: result.put("aperture", raw)
+        }
+    }
+
+    private fun addIso(result: ObjectNode, exif: ExifInterface) {
+        exif.nonBlank(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY)?.let { raw ->
+            raw.toIntOrNull()?.let { result.put("iso", it) }
+                ?: result.put("iso", raw)
+        }
+    }
+
+    private fun addShutterSpeed(result: ObjectNode, exif: ExifInterface) {
+        exif.nonBlank(ExifInterface.TAG_EXPOSURE_TIME)?.let { raw ->
+            result.put("shutter_speed", shutterSpeed(raw))
+        }
+    }
+
+    private fun addDateTimeField(result: ObjectNode, exif: ExifInterface) {
+        exif.nonBlank(ExifInterface.TAG_DATETIME_ORIGINAL)?.let {
+            result.put("datetime_original", it)
+        }
+    }
+
+    private fun addGpsFields(result: ObjectNode, exif: ExifInterface) {
+        val latLong = FloatArray(2)
+        if (exif.getLatLong(latLong)) {
+            result.put("gps_latitude", latLong[0].toDouble())
+            result.put("gps_longitude", latLong[1].toDouble())
+        }
+        val altitude = exif.getAltitude(Double.NaN)
+        if (!altitude.isNaN()) {
+            result.put("gps_altitude_m", altitude)
+        }
+    }
+
+    private fun ExifInterface.nonBlank(tag: String): String? {
+        return getAttribute(tag)?.takeIf { it.isNotBlank() }
+    }
+
+    private fun shutterSpeed(raw: String): String {
+        val sec = raw.toDoubleOrNull()
+        return if (sec != null && sec > 0) {
+            if (sec < 1.0) "1/${(1.0 / sec).toInt()}s" else "${sec}s"
+        } else {
+            raw
+        }
+    }
+
+    private fun stringValue(cursor: Cursor, column: String): String? {
+        val index = cursor.validIndex(column) ?: return null
+        return cursor.getString(index)
+    }
+
+    private fun longValue(cursor: Cursor, column: String): Long? {
+        val index = cursor.validIndex(column) ?: return null
+        return cursor.getLong(index)
+    }
+
+    private fun intValue(cursor: Cursor, column: String): Int? {
+        val index = cursor.validIndex(column) ?: return null
+        return cursor.getInt(index)
+    }
+
+    private fun Cursor.validIndex(column: String): Int? {
+        return getColumnIndex(column).takeIf { it >= 0 && !isNull(it) }
     }
 
     /** Convert "26/1" / "11/10" rational EXIF strings to Double. */
@@ -170,5 +207,15 @@ class PhotosGetMetadataTool(
 
     companion object {
         private const val TAG = "PhotosGetMetadataTool"
+        private val MEDIA_STORE_PROJECTION = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.SIZE,
+            MediaStore.Images.Media.WIDTH,
+            MediaStore.Images.Media.HEIGHT,
+            MediaStore.Images.Media.MIME_TYPE,
+            MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.ORIENTATION
+        )
     }
 }
