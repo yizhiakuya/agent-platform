@@ -75,7 +75,11 @@ public class DeviceWsHandler extends TextWebSocketHandler {
         UUID userId = (UUID) rawSession.getAttributes().get(DeviceHandshakeInterceptor.ATTR_USER_ID);
         if (deviceId == null || userId == null) {
             // should never happen — interceptor guarantees both attrs
-            try { rawSession.close(CloseStatus.SERVER_ERROR); } catch (Exception ignored) {}
+            try {
+                rawSession.close(CloseStatus.SERVER_ERROR);
+            } catch (Exception e) {
+                log.debug("Failed to close unauthenticated WS session", e);
+            }
             return;
         }
         WebSocketSession decorated =
@@ -126,10 +130,8 @@ public class DeviceWsHandler extends TextWebSocketHandler {
     private void handleNotification(UUID deviceId, JsonRpcNotification note) {
         switch (note.method()) {
             case JsonRpcMethods.TOOL_MANIFEST -> handleToolManifest(deviceId, note);
-            case JsonRpcMethods.HEARTBEAT, JsonRpcMethods.PROGRESS, JsonRpcMethods.CONFIRM_ACK -> {
-                // Bookkeeping / future fan-out to agent-service.
-                log.debug("Notification {} from {}", note.method(), deviceId);
-            }
+            case JsonRpcMethods.HEARTBEAT, JsonRpcMethods.PROGRESS, JsonRpcMethods.CONFIRM_ACK ->
+                    log.debug("Notification {} from {}", note.method(), deviceId);
             default -> log.debug("Ignored notification method '{}' from {}", note.method(), deviceId);
         }
     }

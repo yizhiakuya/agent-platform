@@ -76,7 +76,8 @@ public class WsDeviceSession implements DeviceSession {
             if (ws.isOpen()) {
                 ws.close(CloseStatus.NORMAL.withReason(reason == null ? "" : reason));
             }
-        } catch (IOException ignored) {
+        } catch (IOException e) {
+            log.debug("WS→{} close failed: {}", deviceId, e.getMessage(), e);
         }
     }
 }
