@@ -187,15 +187,15 @@ object UiCaptureManager {
     private fun readDisplayMetrics(ctx: Context): Triple<Int, Int, Int> {
         val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val metrics = DisplayMetrics()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val bounds = wm.currentWindowMetrics.bounds
             // densityDpi pulled from resources; ImageReader needs DPI in addition to size.
             val dpi = ctx.resources.displayMetrics.densityDpi
-            return Triple(bounds.width(), bounds.height(), dpi)
+            Triple(bounds.width(), bounds.height(), dpi)
         } else {
             @Suppress("DEPRECATION")
             wm.defaultDisplay.getRealMetrics(metrics)
-            return Triple(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi)
+            Triple(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi)
         }
     }
 }
