@@ -1,7 +1,9 @@
 package com.agentplatform.android.tools.videos
 
 import android.content.ContentUris
+import android.content.ContentResolver
 import android.content.Context
+import android.database.Cursor
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
@@ -76,114 +78,183 @@ class VideosListRecentTool(
     override val confirmRequired: Boolean = false
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
-        val limit = args.path("limit").asInt(10).coerceIn(1, 30)
-        val nameContains = args.path("name_contains").asText("").trim().takeIf { it.isNotEmpty() }
-        val dateAfter = args.path("date_after").let { if (it.isNumber && it.asLong() > 0L) it.asLong() else null }
-        val dateBefore = args.path("date_before").let { if (it.isNumber && it.asLong() > 0L) it.asLong() else null }
+        val request = parseRequest(args)
+        val videos = queryVideos(request)
+        resultNode(videos)
+    }
 
-        val clauses = mutableListOf<String>()
-        val params = mutableListOf<String>()
-        if (nameContains != null) {
-            clauses += "${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?"
-            params += "%$nameContains%"
-        }
-        if (dateAfter != null) {
-            clauses += "${MediaStore.Video.Media.DATE_TAKEN} >= ?"
-            params += dateAfter.toString()
-        }
-        if (dateBefore != null) {
-            clauses += "${MediaStore.Video.Media.DATE_TAKEN} <= ?"
-            params += dateBefore.toString()
-        }
-        val selection = clauses.joinToString(" AND ").ifEmpty { null }
-        val selectionArgs = if (params.isEmpty()) null else params.toTypedArray()
+    private fun parseRequest(args: JsonNode): VideoListRequest =
+        VideoListRequest(
+            limit = args.path("limit").asInt(10).coerceIn(1, 30),
+            nameContains = args.path("name_contains").asText("").trim().takeIf { it.isNotEmpty() },
+            dateAfter = positiveLong(args, "date_after"),
+            dateBefore = positiveLong(args, "date_before")
+        )
 
-        val videos: ArrayNode = mapper.createArrayNode()
-        val projection = arrayOf(
+    private fun positiveLong(args: JsonNode, field: String): Long? =
+        args.path(field).let { if (it.isNumber && it.asLong() > 0L) it.asLong() else null }
+
+    private fun queryVideos(request: VideoListRequest): ArrayNode {
+        val videos = mapper.createArrayNode()
+        videoCursor(request, videoSelection(request))?.use { cursor ->
+            val columns = VideoColumns.from(cursor)
+            while (cursor.moveToNext() && videos.size() < request.limit) {
+                videos.add(videoNode(VideoRow.from(cursor, columns)))
+            }
+        }
+        return videos
+    }
+
+    private fun videoCursor(request: VideoListRequest, selection: VideoSelection): Cursor? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.contentResolver.query(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                VIDEO_PROJECTION,
+                modernQueryArgs(request, selection),
+                null
+            )
+        } else {
+            context.contentResolver.query(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                VIDEO_PROJECTION,
+                selection.sql,
+                selection.args,
+                "${MediaStore.Video.Media.DATE_TAKEN} DESC"
+            )
+        }
+    }
+
+    private fun modernQueryArgs(request: VideoListRequest, selection: VideoSelection): Bundle =
+        Bundle().apply {
+            putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(MediaStore.Video.Media.DATE_TAKEN))
+            putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
+            putInt(ContentResolver.QUERY_ARG_LIMIT, request.limit)
+            selection.sql?.let {
+                putString(ContentResolver.QUERY_ARG_SQL_SELECTION, it)
+                putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selection.args)
+            }
+        }
+
+    private fun videoSelection(request: VideoListRequest): VideoSelection {
+        val filters = listOf(
+            "${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?" to request.nameContains?.let { "%$it%" },
+            "${MediaStore.Video.Media.DATE_TAKEN} >= ?" to request.dateAfter?.toString(),
+            "${MediaStore.Video.Media.DATE_TAKEN} <= ?" to request.dateBefore?.toString()
+        ).mapNotNull { (clause, value) -> value?.let { clause to it } }
+        return VideoSelection(
+            sql = filters.joinToString(" AND ") { it.first }.ifEmpty { null },
+            args = filters.map { it.second }.takeIf { it.isNotEmpty() }?.toTypedArray()
+        )
+    }
+
+    private fun videoNode(row: VideoRow): ObjectNode {
+        val video = mapper.createObjectNode()
+        video.put("id", row.id.toString())
+        video.put("name", row.name)
+        video.put("date_taken_ms", row.dateTakenMs)
+        video.put("size_bytes", row.sizeBytes)
+        video.put("duration_ms", row.durationMs)
+        video.put("thumb_b64", thumbnailBase64(row.id))
+        return video
+    }
+
+    private fun thumbnailBase64(id: Long): String =
+        try {
+            val bitmap = videoThumbnail(id)
+            val baos = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+            Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+        } catch (e: Exception) {
+            Log.w(TAG, "video thumbnail generation failed for id=$id: ${e.message}")
+            ""
+        }
+
+    private fun videoThumbnail(id: Long): Bitmap {
+        val uri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            context.contentResolver.loadThumbnail(uri, Size(256, 256), null)
+        } else {
+            @Suppress("DEPRECATION")
+            MediaStore.Video.Thumbnails.getThumbnail(
+                context.contentResolver,
+                id,
+                MediaStore.Video.Thumbnails.MINI_KIND,
+                null
+            ) ?: throw RuntimeException("no thumb")
+        }
+    }
+
+    private fun resultNode(videos: ArrayNode): ObjectNode {
+        val result: ObjectNode = mapper.createObjectNode()
+        result.set<JsonNode>("videos", videos)
+        result.put("count", videos.size())
+        return result
+    }
+
+    companion object {
+        private const val TAG = "VideosListRecentTool"
+
+        private val VIDEO_PROJECTION = arrayOf(
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DISPLAY_NAME,
             MediaStore.Video.Media.DATE_TAKEN,
             MediaStore.Video.Media.SIZE,
             MediaStore.Video.Media.DURATION
         )
-        val cursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val args2 = Bundle().apply {
-                putStringArray(
-                    android.content.ContentResolver.QUERY_ARG_SORT_COLUMNS,
-                    arrayOf(MediaStore.Video.Media.DATE_TAKEN)
-                )
-                putInt(
-                    android.content.ContentResolver.QUERY_ARG_SORT_DIRECTION,
-                    android.content.ContentResolver.QUERY_SORT_DIRECTION_DESCENDING
-                )
-                putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, limit)
-                if (selection != null) {
-                    putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
-                    putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
-                }
-            }
-            context.contentResolver.query(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                projection, args2, null
-            )
-        } else {
-            context.contentResolver.query(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                projection, selection, selectionArgs,
-                "${MediaStore.Video.Media.DATE_TAKEN} DESC"
-            )
-        }
-
-        cursor?.use { c ->
-            val idIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-            val nameIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
-            val dateIdx = c.getColumnIndex(MediaStore.Video.Media.DATE_TAKEN)
-            val sizeIdx = c.getColumnIndex(MediaStore.Video.Media.SIZE)
-            val durIdx = c.getColumnIndex(MediaStore.Video.Media.DURATION)
-            while (c.moveToNext() && videos.size() < limit) {
-                val id = c.getLong(idIdx)
-                val name = c.getString(nameIdx) ?: "video_$id"
-                val date = if (dateIdx >= 0 && !c.isNull(dateIdx)) c.getLong(dateIdx) else 0L
-                val size = if (sizeIdx >= 0 && !c.isNull(sizeIdx)) c.getLong(sizeIdx) else 0L
-                val duration = if (durIdx >= 0 && !c.isNull(durIdx)) c.getLong(durIdx) else 0L
-
-                val uri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
-                val thumbB64: String = try {
-                    val bmp: Bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        context.contentResolver.loadThumbnail(uri, Size(256, 256), null)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        MediaStore.Video.Thumbnails.getThumbnail(
-                            context.contentResolver, id,
-                            MediaStore.Video.Thumbnails.MINI_KIND, null
-                        ) ?: throw RuntimeException("no thumb")
-                    }
-                    val baos = ByteArrayOutputStream()
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 70, baos)
-                    Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
-                } catch (e: Exception) {
-                    Log.w(TAG, "video thumbnail generation failed for id=$id: ${e.message}")
-                    ""
-                }
-
-                val video: ObjectNode = mapper.createObjectNode()
-                video.put("id", id.toString())
-                video.put("name", name)
-                video.put("date_taken_ms", date)
-                video.put("size_bytes", size)
-                video.put("duration_ms", duration)
-                video.put("thumb_b64", thumbB64)
-                videos.add(video)
-            }
-        }
-
-        val result: ObjectNode = mapper.createObjectNode()
-        result.set<JsonNode>("videos", videos)
-        result.put("count", videos.size())
-        result
     }
 
-    companion object {
-        private const val TAG = "VideosListRecentTool"
+    private data class VideoListRequest(
+        val limit: Int,
+        val nameContains: String?,
+        val dateAfter: Long?,
+        val dateBefore: Long?
+    )
+
+    private class VideoSelection(
+        val sql: String?,
+        val args: Array<String>?
+    )
+
+    private data class VideoColumns(
+        val id: Int,
+        val name: Int,
+        val date: Int,
+        val size: Int,
+        val duration: Int
+    ) {
+        companion object {
+            fun from(cursor: Cursor): VideoColumns =
+                VideoColumns(
+                    id = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID),
+                    name = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME),
+                    date = cursor.getColumnIndex(MediaStore.Video.Media.DATE_TAKEN),
+                    size = cursor.getColumnIndex(MediaStore.Video.Media.SIZE),
+                    duration = cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
+                )
+        }
+    }
+
+    private data class VideoRow(
+        val id: Long,
+        val name: String,
+        val dateTakenMs: Long,
+        val sizeBytes: Long,
+        val durationMs: Long
+    ) {
+        companion object {
+            fun from(cursor: Cursor, columns: VideoColumns): VideoRow {
+                val id = cursor.getLong(columns.id)
+                return VideoRow(
+                    id = id,
+                    name = cursor.getString(columns.name) ?: "video_$id",
+                    dateTakenMs = optionalLong(cursor, columns.date),
+                    sizeBytes = optionalLong(cursor, columns.size),
+                    durationMs = optionalLong(cursor, columns.duration)
+                )
+            }
+
+            private fun optionalLong(cursor: Cursor, column: Int): Long =
+                if (column >= 0 && !cursor.isNull(column)) cursor.getLong(column) else 0L
+        }
     }
 }
