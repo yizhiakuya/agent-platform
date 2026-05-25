@@ -27,37 +27,17 @@ class PhotosMoveToAlbumTool(
         media confirmation UI.
     """.trimIndent()
 
-    override val schema: JsonNode = mapper.readTree(
-        """
-        {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string",
-              "description": "Single photo id to move."
-            },
-            "ids": {
-              "type": "array",
-              "items": { "type": "string" },
-              "description": "Photo ids to move. Maximum 100."
-            },
-            "selection_id": {
-              "type": "string",
-              "description": "Reusable photo selection id from media.selection.create."
-            },
-            "album": {
-              "type": "string",
-              "description": "Album/folder name under Pictures. Created by the gallery when the first image is moved there."
-            }
-          },
-          "required": ["album"],
-          "anyOf": [
-            { "required": ["id"] },
-            { "required": ["ids"] },
-            { "required": ["selection_id"] }
-          ]
-        }
-        """.trimIndent()
+    override val schema: JsonNode = PhotoMutationHelpers.mediaSelectionSchema(
+        mapper = mapper,
+        idDescription = "Single photo id to move.",
+        idsDescription = "Photo ids to move. Maximum 100.",
+        additionalProperties = listOf(
+            "album" to PhotoMutationHelpers.stringProperty(
+                mapper,
+                "Album/folder name under Pictures. Created by the gallery when the first image is moved there."
+            )
+        ),
+        required = listOf("album")
     )
 
     override val confirmRequired: Boolean = true

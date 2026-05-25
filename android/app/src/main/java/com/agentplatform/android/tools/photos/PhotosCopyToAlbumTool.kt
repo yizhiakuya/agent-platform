@@ -25,41 +25,18 @@ class PhotosCopyToAlbumTool(
         non-empty album from existing photos.
     """.trimIndent()
 
-    override val schema: JsonNode = mapper.readTree(
-        """
-        {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string",
-              "description": "Single source photo id to copy."
-            },
-            "ids": {
-              "type": "array",
-              "items": { "type": "string" },
-              "description": "Source photo ids to copy. Maximum 100."
-            },
-            "selection_id": {
-              "type": "string",
-              "description": "Reusable photo selection id from media.selection.create."
-            },
-            "album": {
-              "type": "string",
-              "description": "Album/folder name under Pictures."
-            },
-            "filename": {
-              "type": "string",
-              "description": "Optional filename for single-photo copy. Ignored for batch copies."
-            }
-          },
-          "required": ["album"],
-          "anyOf": [
-            { "required": ["id"] },
-            { "required": ["ids"] },
-            { "required": ["selection_id"] }
-          ]
-        }
-        """.trimIndent()
+    override val schema: JsonNode = PhotoMutationHelpers.mediaSelectionSchema(
+        mapper = mapper,
+        idDescription = "Single source photo id to copy.",
+        idsDescription = "Source photo ids to copy. Maximum 100.",
+        additionalProperties = listOf(
+            "album" to PhotoMutationHelpers.stringProperty(mapper, "Album/folder name under Pictures."),
+            "filename" to PhotoMutationHelpers.stringProperty(
+                mapper,
+                "Optional filename for single-photo copy. Ignored for batch copies."
+            )
+        ),
+        required = listOf("album")
     )
 
     override val confirmRequired: Boolean = true

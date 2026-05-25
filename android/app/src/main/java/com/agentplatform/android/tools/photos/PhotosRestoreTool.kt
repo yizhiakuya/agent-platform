@@ -1,7 +1,6 @@
 package com.agentplatform.android.tools.photos
 
 import android.content.Context
-import android.os.Build
 import android.provider.MediaStore
 import com.agentplatform.android.core.tool.Tool
 import com.agentplatform.android.core.tool.ToolResultEnvelope
@@ -25,40 +24,16 @@ class PhotosRestoreTool(
         Android's system media confirmation UI.
     """.trimIndent()
 
-    override val schema: JsonNode = mapper.readTree(
-        """
-        {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string",
-              "description": "Single trashed photo id."
-            },
-            "ids": {
-              "type": "array",
-              "items": { "type": "string" },
-              "description": "Trashed photo ids. Maximum 100."
-            },
-            "selection_id": {
-              "type": "string",
-              "description": "Reusable photo selection id from media.selection.create."
-            }
-          },
-          "anyOf": [
-            { "required": ["id"] },
-            { "required": ["ids"] },
-            { "required": ["selection_id"] }
-          ]
-        }
-        """.trimIndent()
+    override val schema: JsonNode = PhotoMutationHelpers.mediaSelectionSchema(
+        mapper = mapper,
+        idDescription = "Single trashed photo id.",
+        idsDescription = "Trashed photo ids. Maximum 100."
     )
 
     override val confirmRequired: Boolean = true
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            throw UnsupportedOperationException("restore requires Android 11 or newer")
-        }
+        PhotoMutationHelpers.requireAndroidR("restore")
         val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
         val uris = ids.map { PhotoMutationHelpers.photoUri(it) }
         val result = PhotoMutationHelpers.confirmedMutationSuccess(

@@ -72,6 +72,51 @@ internal object PhotoMutationHelpers {
         val summaryFields: List<Pair<String, Any?>> = rootFields
     )
 
+    fun requireAndroidR(action: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            throw UnsupportedOperationException("$action requires Android 11 or newer")
+        }
+    }
+
+    fun mediaSelectionSchema(
+        mapper: ObjectMapper,
+        idDescription: String,
+        idsDescription: String,
+        additionalProperties: List<Pair<String, ObjectNode>> = emptyList(),
+        required: List<String> = emptyList()
+    ): ObjectNode {
+        val properties = mapper.createObjectNode().apply {
+            set<ObjectNode>("id", stringProperty(mapper, idDescription))
+            set<ObjectNode>(
+                "ids",
+                mapper.createObjectNode().apply {
+                    put("type", "array")
+                    set<ObjectNode>("items", mapper.createObjectNode().put("type", "string"))
+                    put("description", idsDescription)
+                }
+            )
+            set<ObjectNode>(
+                "selection_id",
+                stringProperty(mapper, "Reusable photo selection id from media.selection.create.")
+            )
+            additionalProperties.forEach { (name, property) -> set<ObjectNode>(name, property) }
+        }
+        return mapper.createObjectNode().apply {
+            put("type", "object")
+            set<ObjectNode>("properties", properties)
+            if (required.isNotEmpty()) {
+                set<ArrayNode>("required", mapper.createArrayNode().apply { required.forEach(::add) })
+            }
+            set<ArrayNode>("anyOf", mediaIdAnyOf(mapper))
+        }
+    }
+
+    fun stringProperty(mapper: ObjectMapper, description: String): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("type", "string")
+            put("description", description)
+        }
+
     fun parseIds(args: JsonNode): List<Long> {
         return parseIds(args, emptyList())
     }
@@ -256,6 +301,39 @@ internal object PhotoMutationHelpers {
 
     fun failuresArray(mapper: ObjectMapper): ArrayNode = mapper.createArrayNode()
 
+    fun specialListResult(
+        context: Context,
+        mapper: ObjectMapper,
+        limit: Int,
+        matchArg: String
+    ): ObjectNode {
+        val photos = PhotoListQueryHelper.querySpecialImages(context, mapper, limit, matchArg, "PhotosListSpecial")
+        return mapper.createObjectNode().apply {
+            set<JsonNode>("photos", photos)
+            put("count", photos.size())
+        }
+    }
+
+    fun specialListSchema(mapper: ObjectMapper, limitDescription: String): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("type", "object")
+            set<ObjectNode>(
+                "properties",
+                mapper.createObjectNode().apply {
+                    set<ObjectNode>(
+                        "limit",
+                        mapper.createObjectNode().apply {
+                            put("type", "integer")
+                            put("minimum", 1)
+                            put("maximum", 50)
+                            put("default", 20)
+                            put("description", limitDescription)
+                        }
+                    )
+                }
+            )
+        }
+
     fun addFailure(failures: ArrayNode, id: Long, error: Throwable) {
         failures.addObject()
             .put("id", id.toString())
@@ -428,4 +506,11 @@ internal object PhotoMutationHelpers {
             }
         }
     }
+
+    private fun mediaIdAnyOf(mapper: ObjectMapper): ArrayNode =
+        mapper.createArrayNode().apply {
+            addObject().set<ArrayNode>("required", mapper.createArrayNode().add("id"))
+            addObject().set<ArrayNode>("required", mapper.createArrayNode().add("ids"))
+            addObject().set<ArrayNode>("required", mapper.createArrayNode().add("selection_id"))
+        }
 }

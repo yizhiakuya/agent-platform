@@ -25,32 +25,10 @@ class PhotosDeleteTool(
         for a previously reviewed set.
     """.trimIndent()
 
-    override val schema: JsonNode = mapper.readTree(
-        """
-        {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string",
-              "description": "Single photo id."
-            },
-            "ids": {
-              "type": "array",
-              "items": { "type": "string" },
-              "description": "Photo ids. Maximum 100."
-            },
-            "selection_id": {
-              "type": "string",
-              "description": "Reusable photo selection id from media.selection.create."
-            }
-          },
-          "anyOf": [
-            { "required": ["id"] },
-            { "required": ["ids"] },
-            { "required": ["selection_id"] }
-          ]
-        }
-        """.trimIndent()
+    override val schema: JsonNode = PhotoMutationHelpers.mediaSelectionSchema(
+        mapper = mapper,
+        idDescription = "Single photo id.",
+        idsDescription = "Photo ids. Maximum 100."
     )
 
     override val confirmRequired: Boolean = false
