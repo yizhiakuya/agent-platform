@@ -6,6 +6,7 @@ import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -23,6 +24,13 @@ import java.util.Locale
 
 internal object PhotoMutationHelpers {
     private const val MAX_BATCH = 100
+    private val PHOTO_PROJECTION = arrayOf(
+        MediaStore.Images.Media._ID,
+        MediaStore.Images.Media.DISPLAY_NAME,
+        MediaStore.Images.Media.MIME_TYPE,
+        MediaStore.Images.Media.DATE_TAKEN,
+        MediaStore.Images.Media.SIZE
+    )
 
     data class PhotoRecord(
         val id: Long,
@@ -97,31 +105,30 @@ internal object PhotoMutationHelpers {
 
     fun queryPhoto(context: Context, id: Long): PhotoRecord {
         val uri = photoUri(id)
-        val projection = arrayOf(
-            MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DISPLAY_NAME,
-            MediaStore.Images.Media.MIME_TYPE,
-            MediaStore.Images.Media.DATE_TAKEN,
-            MediaStore.Images.Media.SIZE
-        )
-        context.contentResolver.query(uri, projection, null, null, null)?.use { c ->
-            if (c.moveToFirst()) {
-                val nameIdx = c.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
-                val mimeIdx = c.getColumnIndex(MediaStore.Images.Media.MIME_TYPE)
-                val dateIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
-                val sizeIdx = c.getColumnIndex(MediaStore.Images.Media.SIZE)
-                return PhotoRecord(
-                    id = id,
-                    uri = uri,
-                    name = if (nameIdx >= 0 && !c.isNull(nameIdx)) c.getString(nameIdx) else "image_$id",
-                    mimeType = if (mimeIdx >= 0 && !c.isNull(mimeIdx)) c.getString(mimeIdx) else "image/jpeg",
-                    dateTakenMs = if (dateIdx >= 0 && !c.isNull(dateIdx)) c.getLong(dateIdx) else 0L,
-                    sizeBytes = if (sizeIdx >= 0 && !c.isNull(sizeIdx)) c.getLong(sizeIdx) else 0L
-                )
-            }
+        context.contentResolver.query(uri, PHOTO_PROJECTION, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) return cursor.toPhotoRecord(id, uri)
         }
         throw IllegalArgumentException("photo not found: $id")
     }
+
+    private fun Cursor.toPhotoRecord(id: Long, uri: Uri): PhotoRecord =
+        PhotoRecord(
+            id = id,
+            uri = uri,
+            name = stringValue(MediaStore.Images.Media.DISPLAY_NAME) ?: "image_$id",
+            mimeType = stringValue(MediaStore.Images.Media.MIME_TYPE) ?: "image/jpeg",
+            dateTakenMs = longValue(MediaStore.Images.Media.DATE_TAKEN) ?: 0L,
+            sizeBytes = longValue(MediaStore.Images.Media.SIZE) ?: 0L
+        )
+
+    private fun Cursor.stringValue(column: String): String? =
+        valueIndex(column)?.let { getString(it) }
+
+    private fun Cursor.longValue(column: String): Long? =
+        valueIndex(column)?.let { getLong(it) }
+
+    private fun Cursor.valueIndex(column: String): Int? =
+        getColumnIndex(column).takeIf { it >= 0 && !isNull(it) }
 
     suspend fun ensureWriteAccess(context: Context, ids: List<Long>) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
