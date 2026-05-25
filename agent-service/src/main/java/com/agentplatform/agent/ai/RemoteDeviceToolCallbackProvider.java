@@ -112,8 +112,17 @@ public class RemoteDeviceToolCallbackProvider {
         }
         if (hasSemanticCandidates) {
             SemanticPhotoSearchCallback cb = new SemanticPhotoSearchCallback(
-                    selected.deviceId(), userId, dispatcher, mapper, embeddingService,
-                    photoEmbeddingService, internalChatClient, events, visionToolResults, props);
+                    new SemanticPhotoSearchCallback.SemanticSearchContext()
+                            .withDeviceId(selected.deviceId())
+                            .withUserId(userId)
+                            .withDispatcher(dispatcher)
+                            .withMapper(mapper)
+                            .withEmbeddingService(embeddingService)
+                            .withPhotoEmbeddingService(photoEmbeddingService)
+                            .withInternalChatClient(internalChatClient)
+                            .withEvents(events)
+                            .withVisionEnabled(visionToolResults)
+                            .withProps(props));
             defs.add(cb.toAnthropicTool());
             dispatch.put(cb.name(), cb);
         }

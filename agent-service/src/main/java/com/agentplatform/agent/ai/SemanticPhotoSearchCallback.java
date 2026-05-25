@@ -92,33 +92,28 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
     private final boolean photoIndexEnabled;
     private final boolean fallbackRealtime;
 
-    public SemanticPhotoSearchCallback(UUID deviceId,
-                                       UUID userId,
-                                       DeviceToolDispatcher dispatcher,
-                                       ObjectMapper mapper,
-                                       EmbeddingService embeddingService,
-                                       PhotoEmbeddingService photoEmbeddingService,
-                                       InternalChatFeignClient internalChatClient,
-	                                       ApplicationEventPublisher events,
-	                                       boolean visionEnabled,
-	                                       AgentProperties props) {
-	        super(remoteToolContext(deviceId, userId, dispatcher, mapper, events, visionEnabled));
-        this.deviceId = deviceId;
-        this.boundUserId = userId;
-        this.dispatcher = dispatcher;
-        this.mapper = mapper;
-        this.embeddingService = embeddingService;
-        this.photoEmbeddingService = photoEmbeddingService;
-        this.internalChatClient = internalChatClient;
-        this.visionEnabled = visionEnabled;
-        AgentProperties.Photos photos = props == null || props.agent() == null ? null : props.agent().photos();
+    public SemanticPhotoSearchCallback(SemanticSearchContext context) {
+        super(remoteToolContext(context));
+        this.deviceId = context.deviceId();
+        this.boundUserId = context.userId();
+        this.dispatcher = context.dispatcher();
+        this.mapper = context.mapper();
+        this.embeddingService = context.embeddingService();
+        this.photoEmbeddingService = context.photoEmbeddingService();
+        this.internalChatClient = context.internalChatClient();
+        this.visionEnabled = context.visionEnabled();
+        AgentProperties.Photos photos = context.props() == null || context.props().agent() == null
+                ? null
+                : context.props().agent().photos();
         this.indexMinScore = photos == null ? 0.20d : photos.minScore();
         this.photoIndexEnabled = photos == null || Boolean.TRUE.equals(photos.enabled());
         this.fallbackRealtime = photos == null || Boolean.TRUE.equals(photos.fallbackRealtime());
-	    }
+    }
 
-	    SemanticPhotoSearchCallback(ObjectMapper mapper, boolean visionEnabled) {
-	        super(remoteToolContext(null, null, null, mapper, null, visionEnabled));
+    SemanticPhotoSearchCallback(ObjectMapper mapper, boolean visionEnabled) {
+        super(remoteToolContext(new SemanticSearchContext()
+                .withMapper(mapper)
+                .withVisionEnabled(visionEnabled)));
         this.deviceId = null;
         this.boundUserId = null;
         this.dispatcher = null;
@@ -129,24 +124,122 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         this.visionEnabled = visionEnabled;
         this.indexMinScore = 0.20d;
         this.photoIndexEnabled = false;
-	        this.fallbackRealtime = true;
-	    }
+        this.fallbackRealtime = true;
+    }
 
-    private static RemoteToolContext remoteToolContext(UUID deviceId,
-                                                       UUID userId,
-                                                       DeviceToolDispatcher dispatcher,
-                                                       ObjectMapper mapper,
-                                                       ApplicationEventPublisher events,
-                                                       boolean visionEnabled) {
+    private static RemoteToolContext remoteToolContext(SemanticSearchContext context) {
         return new RemoteToolContext()
-                .withDeviceId(deviceId)
-                .withUserId(userId)
-                .withSpec(spec(mapper))
-                .withDispatcher(dispatcher)
-                .withMapper(mapper)
+                .withDeviceId(context.deviceId())
+                .withUserId(context.userId())
+                .withSpec(spec(context.mapper()))
+                .withDispatcher(context.dispatcher())
+                .withMapper(context.mapper())
                 .withPreInterceptors(List.of())
-                .withEvents(events)
-                .withVisionEnabled(visionEnabled);
+                .withEvents(context.events())
+                .withVisionEnabled(context.visionEnabled());
+    }
+
+    public static final class SemanticSearchContext {
+        private UUID deviceId;
+        private UUID userId;
+        private DeviceToolDispatcher dispatcher;
+        private ObjectMapper mapper;
+        private EmbeddingService embeddingService;
+        private PhotoEmbeddingService photoEmbeddingService;
+        private InternalChatFeignClient internalChatClient;
+        private ApplicationEventPublisher events;
+        private boolean visionEnabled;
+        private AgentProperties props;
+
+        public SemanticSearchContext withDeviceId(UUID deviceId) {
+            this.deviceId = deviceId;
+            return this;
+        }
+
+        public SemanticSearchContext withUserId(UUID userId) {
+            this.userId = userId;
+            return this;
+        }
+
+        public SemanticSearchContext withDispatcher(DeviceToolDispatcher dispatcher) {
+            this.dispatcher = dispatcher;
+            return this;
+        }
+
+        public SemanticSearchContext withMapper(ObjectMapper mapper) {
+            this.mapper = mapper;
+            return this;
+        }
+
+        public SemanticSearchContext withEmbeddingService(EmbeddingService embeddingService) {
+            this.embeddingService = embeddingService;
+            return this;
+        }
+
+        public SemanticSearchContext withPhotoEmbeddingService(PhotoEmbeddingService photoEmbeddingService) {
+            this.photoEmbeddingService = photoEmbeddingService;
+            return this;
+        }
+
+        public SemanticSearchContext withInternalChatClient(InternalChatFeignClient internalChatClient) {
+            this.internalChatClient = internalChatClient;
+            return this;
+        }
+
+        public SemanticSearchContext withEvents(ApplicationEventPublisher events) {
+            this.events = events;
+            return this;
+        }
+
+        public SemanticSearchContext withVisionEnabled(boolean visionEnabled) {
+            this.visionEnabled = visionEnabled;
+            return this;
+        }
+
+        public SemanticSearchContext withProps(AgentProperties props) {
+            this.props = props;
+            return this;
+        }
+
+        private UUID deviceId() {
+            return deviceId;
+        }
+
+        private UUID userId() {
+            return userId;
+        }
+
+        private DeviceToolDispatcher dispatcher() {
+            return dispatcher;
+        }
+
+        private ObjectMapper mapper() {
+            return mapper;
+        }
+
+        private EmbeddingService embeddingService() {
+            return embeddingService;
+        }
+
+        private PhotoEmbeddingService photoEmbeddingService() {
+            return photoEmbeddingService;
+        }
+
+        private InternalChatFeignClient internalChatClient() {
+            return internalChatClient;
+        }
+
+        private ApplicationEventPublisher events() {
+            return events;
+        }
+
+        private boolean visionEnabled() {
+            return visionEnabled;
+        }
+
+        private AgentProperties props() {
+            return props;
+        }
     }
 
     @Override
@@ -659,17 +752,21 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
             if (raw == null) return mapper.createObjectNode();
             JsonNode node = mapper.valueToTree(raw);
             if (node != null && node.isTextual()) {
-                try {
-                    return mapper.readTree(node.asText());
-                } catch (Exception ignore) {
-                    return mapper.createObjectNode();
-                }
+                return parseTextualArgs(node.asText());
             }
             return node == null || node.isNull() ? mapper.createObjectNode() : node;
         } catch (Exception e) {
             ObjectNode fallback = mapper.createObjectNode();
             fallback.put("_parse_error", e.getMessage());
             return fallback;
+        }
+    }
+
+    private JsonNode parseTextualArgs(String text) {
+        try {
+            return mapper.readTree(text);
+        } catch (Exception ignore) {
+            return mapper.createObjectNode();
         }
     }
 

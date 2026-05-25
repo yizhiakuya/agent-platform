@@ -603,33 +603,23 @@ public class ChatService {
         for (int i = 0; i < attachments.size(); i++) {
             ChatImageAttachment att = attachments.get(i);
             sb.append(i + 1).append(". image_url=").append(att.imageUrl());
-            if (att.assetId() != null && !att.assetId().isBlank()) {
-                sb.append(", asset_id=").append(att.assetId());
-            }
-            if (att.contentType() != null && !att.contentType().isBlank()) {
-                sb.append(", content_type=").append(att.contentType());
-            }
-            if (att.name() != null && !att.name().isBlank()) {
-                sb.append(", name=").append(att.name());
-            }
-            if (att.source() != null && !att.source().isBlank()) {
-                sb.append(", source=").append(att.source());
-            }
-            if (att.mediaRef() != null && !att.mediaRef().isBlank()) {
-                sb.append(", media_ref=").append(att.mediaRef());
-            }
-            if (att.mediaType() != null && !att.mediaType().isBlank()) {
-                sb.append(", media_type=").append(att.mediaType());
-            }
-            if (att.mediaId() != null && !att.mediaId().isBlank()) {
-                sb.append(", media_id=").append(att.mediaId());
-            }
-            if (att.bucketName() != null && !att.bucketName().isBlank()) {
-                sb.append(", bucket_name=").append(att.bucketName());
-            }
+            appendAttachmentField(sb, "asset_id", att.assetId());
+            appendAttachmentField(sb, "content_type", att.contentType());
+            appendAttachmentField(sb, "name", att.name());
+            appendAttachmentField(sb, "source", att.source());
+            appendAttachmentField(sb, "media_ref", att.mediaRef());
+            appendAttachmentField(sb, "media_type", att.mediaType());
+            appendAttachmentField(sb, "media_id", att.mediaId());
+            appendAttachmentField(sb, "bucket_name", att.bucketName());
             sb.append('\n');
         }
         return sb.toString().trim();
+    }
+
+    private static void appendAttachmentField(StringBuilder sb, String label, String value) {
+        if (value != null && !value.isBlank()) {
+            sb.append(", ").append(label).append('=').append(value);
+        }
     }
 
     private JsonNode userMetadata(ChatAttachmentContext attachments) {
@@ -688,27 +678,6 @@ public class ChatService {
         return m;
     }
 
-    private void emitAndPersistToolEvent(SseEmitter emitter, UUID sessionId, UUID userId, SseEvent event) {
-        safeSend(emitter, event);
-        if (event == null || event.data() == null || event.data().isNull()) return;
-        if (EVENT_TOOL_CALL_STARTED.equals(event.type())) {
-            JsonNode data = event.data();
-            String tool = data.path("tool").asText("tool");
-            UUID deviceId = parseUuid(data.path("deviceId").asText(null));
-            JsonNode args = data.path("args").isMissingNode() ? mapper.createObjectNode() : data.path("args");
-            persist(sessionId, userId, MessageRole.TOOL_CALL, "calling " + tool,
-                    toolCallMetadata(deviceId, tool, args));
-        } else if (EVENT_TOOL_CALL_RESULT.equals(event.type())) {
-            JsonNode data = event.data();
-            String tool = data.path("tool").asText("tool");
-            JsonNode result = data.path(METADATA_RESULT).isMissingNode()
-                    ? mapper.createObjectNode() : data.path(METADATA_RESULT);
-            MessageDto saved = persist(sessionId, userId, MessageRole.TOOL_RESULT, "tool " + tool + " returned",
-                    toolResultMetadata(tool, result));
-            persistArtifacts(sessionId, userId, saved == null ? null : saved.id(), tool, result);
-        }
-    }
-
     private class PersistingChatEventSink implements ChatEventSink {
         private final SseEmitter emitter;
         private final UUID sessionId;
@@ -731,7 +700,7 @@ public class ChatService {
                     || EVENT_TOOL_CALL_RESULT.equals(event.type()))) {
                 responseStarted.set(true);
             }
-            emitAndPersistToolEvent(emitter, sessionId, userId, event);
+            emitAndPersistToolEvent(event);
             if (event == null || event.data() == null || event.data().isNull()) return;
             if (EVENT_TOOL_CALL_STARTED.equals(event.type())) {
                 pendingTools.addLast(event.data().path("tool").asText("tool"));
@@ -746,8 +715,35 @@ public class ChatService {
                 String tool = pendingTools.pollLast();
                 String message = event.data().path("message").asText("tool failed");
                 SseEvent terminal = SseEvent.toolCallError(mapper, tool, message);
-                emitAndPersistToolEvent(emitter, sessionId, userId, terminal);
+                emitAndPersistToolEvent(terminal);
             }
+        }
+
+        private void emitAndPersistToolEvent(SseEvent event) {
+            safeSend(emitter, event);
+            if (event == null || event.data() == null || event.data().isNull()) return;
+            if (EVENT_TOOL_CALL_STARTED.equals(event.type())) {
+                persistToolCall(event.data());
+            } else if (EVENT_TOOL_CALL_RESULT.equals(event.type())) {
+                persistToolResult(event.data());
+            }
+        }
+
+        private void persistToolCall(JsonNode data) {
+            String tool = data.path("tool").asText("tool");
+            UUID deviceId = parseUuid(data.path("deviceId").asText(null));
+            JsonNode args = data.path("args").isMissingNode() ? mapper.createObjectNode() : data.path("args");
+            persist(sessionId, userId, MessageRole.TOOL_CALL, "calling " + tool,
+                    toolCallMetadata(deviceId, tool, args));
+        }
+
+        private void persistToolResult(JsonNode data) {
+            String tool = data.path("tool").asText("tool");
+            JsonNode result = data.path(METADATA_RESULT).isMissingNode()
+                    ? mapper.createObjectNode() : data.path(METADATA_RESULT);
+            MessageDto saved = persist(sessionId, userId, MessageRole.TOOL_RESULT, "tool " + tool + " returned",
+                    toolResultMetadata(tool, result));
+            persistArtifacts(sessionId, userId, saved == null ? null : saved.id(), tool, result);
         }
     }
 

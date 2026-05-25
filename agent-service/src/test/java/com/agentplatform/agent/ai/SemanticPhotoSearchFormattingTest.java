@@ -481,17 +481,14 @@ class SemanticPhotoSearchFormattingTest {
                 null,
                 photos);
         AgentProperties props = new AgentProperties(new AgentProperties.Jwt("secret", "issuer"), agent);
-        return new SemanticPhotoSearchCallback(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                null,
-                mapper,
-                null,
-                photoEmbeddingService,
-                chat,
-                null,
-                true,
-                props);
+        return new SemanticPhotoSearchCallback(new SemanticPhotoSearchCallback.SemanticSearchContext()
+                .withDeviceId(UUID.randomUUID())
+                .withUserId(UUID.randomUUID())
+                .withMapper(mapper)
+                .withPhotoEmbeddingService(photoEmbeddingService)
+                .withInternalChatClient(chat)
+                .withVisionEnabled(true)
+                .withProps(props));
     }
 
     private SemanticPhotoSearchCallback realtimeCallback(UUID deviceId,
@@ -524,16 +521,13 @@ class SemanticPhotoSearchFormattingTest {
                 null,
                 photos);
         AgentProperties props = new AgentProperties(new AgentProperties.Jwt("secret", "issuer"), agent);
-        return new SemanticPhotoSearchCallback(
-                deviceId,
-                userId,
-                dispatcher,
-                mapper,
-                embeddingService,
-                null,
-                null,
-                null,
-                false,
-                props);
+        return new SemanticPhotoSearchCallback(new SemanticPhotoSearchCallback.SemanticSearchContext()
+                .withDeviceId(deviceId)
+                .withUserId(userId)
+                .withDispatcher(dispatcher)
+                .withMapper(mapper)
+                .withEmbeddingService(embeddingService)
+                .withVisionEnabled(false)
+                .withProps(props));
     }
 }
