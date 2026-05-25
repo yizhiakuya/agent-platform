@@ -517,7 +517,7 @@ public class CodexResponsesLoopRunner {
                                                 UUID userId, UUID sessionId, ChatEventSink sink) {
         JsonNode args = parseArguments(call.arguments());
         if (SkillLoadCallback.TOOL_NAME.equals(call.name())) {
-            return skillLoadCallback.executeJsonToolUse(args, userId, sessionId, sink);
+            return skillLoadCallback.executeJsonToolUse(args, userId);
         }
         ServerToolCallback serverTool = serverToolRegistry.dispatchMap().get(call.name());
         if (serverTool != null) {

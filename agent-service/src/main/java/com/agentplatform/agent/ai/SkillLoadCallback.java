@@ -87,17 +87,13 @@ public class SkillLoadCallback {
      * {@link ExecutionResult#images()} list is empty.
      *
      * @param tu        tool_use block carrying {@code {"name": "<skill>"}}
-     * @param userId    chat user — currently unused but threaded for consistency
-     *                  with {@link RemoteToolCallback#executeToolUse}
-     * @param sessionId chat session — same
-     * @param sink      per-request SSE sink — currently unused (skill bodies
-     *                  aren't broadcast to the web client)
+     * @param userId    chat user whose runtime skill overlay is visible
      */
-    public ExecutionResult executeToolUse(ToolUseBlock tu, UUID userId, UUID sessionId, ChatEventSink sink) {
-        return executeJsonToolUse(parseArgs(tu), userId, sessionId, sink);
+    public ExecutionResult executeToolUse(ToolUseBlock tu, UUID userId) {
+        return executeJsonToolUse(parseArgs(tu), userId);
     }
 
-    public ExecutionResult executeJsonToolUse(JsonNode input, UUID userId, UUID sessionId, ChatEventSink sink) {
+    public ExecutionResult executeJsonToolUse(JsonNode input, UUID userId) {
         String name = parseName(input);
         if (name == null || name.isBlank()) {
             return ExecutionResult.text("Error: 'name' is required. Available skills: " + availableNames(userId));
@@ -119,15 +115,19 @@ public class SkillLoadCallback {
             if (node != null && node.isTextual()) {
                 // Defensive: SDK occasionally hands back a JSON-encoded string
                 // when the model emits malformed input — try to re-parse.
-                try {
-                    node = mapper.readTree(node.asText());
-                } catch (Exception ignored) {
-                    return null;
-                }
+                return parseJsonString(node.asText());
             }
             return node;
         } catch (Exception e) {
             log.warn("skill_load failed to parse ToolUseBlock input: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private JsonNode parseJsonString(String value) {
+        try {
+            return mapper.readTree(value);
+        } catch (Exception ignored) {
             return null;
         }
     }

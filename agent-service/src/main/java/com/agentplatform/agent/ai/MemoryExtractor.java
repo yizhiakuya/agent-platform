@@ -96,43 +96,17 @@ public class MemoryExtractor {
 
     private void runExtractionBatch(UUID userId, UUID sessionId, List<String> turns) {
         try {
-            StringBuilder body = new StringBuilder();
-            for (int i = 0; i < turns.size(); i++) {
-                body.append("Exchange %d:%n%s%n%n".formatted(i + 1, turns.get(i)));
-            }
-            String reply;
-            try {
-                reply = factExtractor.extractFacts(body.toString());
-            } catch (Exception e) {
-                log.warn("[memory-extract] fact extraction LLM call failed for user {}: {}",
-                        userId, e.getMessage());
-                return;
-            }
-
-            if (reply == null) return;
-            if (reply.isBlank()) return;
-            String arr = sliceFirstArray(reply);
-            if (arr == null) {
-                log.debug("[memory-extract] no JSON array in extractor reply for user {}", userId);
-                return;
-            }
-            JsonNode node = mapper.readTree(arr);
-            if (!node.isArray() || node.isEmpty()) return;
+            String reply = extractFacts(userId, batchBody(turns));
+            JsonNode node = parseFactArray(userId, reply);
+            if (node == null) return;
 
             int saved = 0;
             for (JsonNode item : node) {
-                String kind = item.path("kind").asText("fact").trim();
+                String kind = normalizeKind(item.path("kind").asText("fact").trim());
                 String content = item.path("content").asText("").trim();
                 if (content.isBlank()) continue;
-                if (!kind.equals("fact") && !kind.equals("preference") && !kind.equals("rule")) {
-                    kind = "fact";
-                }
-                try {
-                    float[] embedding = embeddingService.embed(content);
-                    chatFeign.saveFact(new SaveFactRequest(userId, kind, content, null, embedding));
+                if (saveFact(userId, kind, content)) {
                     saved++;
-                } catch (Exception e) {
-                    log.warn("[memory-extract] save fact failed for user {}: {}", userId, e.getMessage());
                 }
             }
             if (saved > 0) {
@@ -142,6 +116,50 @@ public class MemoryExtractor {
         } catch (Exception ex) {
             log.warn("[memory-extract] batch extraction failed for user {}: {}", userId, ex.getMessage());
         }
+    }
+
+    private String batchBody(List<String> turns) {
+        StringBuilder body = new StringBuilder();
+        for (int i = 0; i < turns.size(); i++) {
+            body.append("Exchange %d:%n%s%n%n".formatted(i + 1, turns.get(i)));
+        }
+        return body.toString();
+    }
+
+    private String extractFacts(UUID userId, String body) {
+        try {
+            return factExtractor.extractFacts(body);
+        } catch (Exception e) {
+            log.warn("[memory-extract] fact extraction LLM call failed for user {}: {}",
+                    userId, e.getMessage());
+            return null;
+        }
+    }
+
+    private JsonNode parseFactArray(UUID userId, String reply) throws com.fasterxml.jackson.core.JsonProcessingException {
+        if (reply == null || reply.isBlank()) return null;
+        String arr = sliceFirstArray(reply);
+        if (arr == null) {
+            log.debug("[memory-extract] no JSON array in extractor reply for user {}", userId);
+            return null;
+        }
+        JsonNode node = mapper.readTree(arr);
+        return node.isArray() && !node.isEmpty() ? node : null;
+    }
+
+    private boolean saveFact(UUID userId, String kind, String content) {
+        try {
+            float[] embedding = embeddingService.embed(content);
+            chatFeign.saveFact(new SaveFactRequest(userId, kind, content, null, embedding));
+            return true;
+        } catch (Exception e) {
+            log.warn("[memory-extract] save fact failed for user {}: {}", userId, e.getMessage());
+            return false;
+        }
+    }
+
+    private static String normalizeKind(String kind) {
+        return kind.equals("preference") || kind.equals("rule") ? kind : "fact";
     }
 
     /** Pull the first {@code [...]} block out of a possibly-wrapped LLM reply. */

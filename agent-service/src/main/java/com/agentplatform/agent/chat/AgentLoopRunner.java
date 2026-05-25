@@ -273,7 +273,7 @@ public class AgentLoopRunner {
                                               UUID userId, UUID sessionId, ChatEventSink sink) {
         String name = tu.name();
         if (SkillLoadCallback.TOOL_NAME.equals(name)) {
-            return skillLoadCallback.executeToolUse(tu, userId, sessionId, sink);
+            return skillLoadCallback.executeToolUse(tu, userId);
         }
         ServerToolCallback serverTool = serverToolRegistry.dispatchMap().get(name);
         if (serverTool != null) {

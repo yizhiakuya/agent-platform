@@ -22,6 +22,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -51,41 +52,59 @@ public class AgentBeans {
         }
         List<ConfiguredProvider> out = new ArrayList<>(defs.size());
         for (AgentProperties.Provider p : defs) {
-            if (p == null) continue;
-            String kind = p.kind() == null || p.kind().isBlank()
-                    ? ANTHROPIC_MESSAGES_KIND : p.kind().trim();
-            if (!ANTHROPIC_MESSAGES_KIND.equals(kind) && !CODEX_RESPONSES_KIND.equals(kind)) {
-                log.warn("[agent] skipping provider '{}' kind={} (unsupported)",
-                        p.name(), kind);
-                continue;
-            }
-            if (p.apiKey() == null || p.apiKey().isBlank() ||
-                    "PLACEHOLDER".equalsIgnoreCase(p.apiKey().trim())) {
-                log.warn("[agent] skipping provider '{}': empty/placeholder apiKey", p.name());
-                continue;
-            }
-            String baseUrl = p.baseUrl() == null || p.baseUrl().isBlank()
-                    ? defaultBaseUrl(kind) : p.baseUrl();
-            AnthropicClient client = null;
-            if (ANTHROPIC_MESSAGES_KIND.equals(kind)) {
-                // SDK-level retries disabled: ChatService wraps the whole
-                // provider call in an outer failover loop.
-                client = AnthropicOkHttpClient.builder()
-                        .apiKey(p.apiKey())
-                        .baseUrl(baseUrl)
-                        .maxRetries(0)
-                        .build();
-            }
-            ChatModel backgroundChatModel = langChain4jModelFactory.backgroundChatModel(p, kind, baseUrl, p.model());
-            out.add(new ConfiguredProvider(p.name(), kind, client, backgroundChatModel, baseUrl, p.apiKey(), p.model()));
-            log.info("[agent] provider '{}' ready: kind={} model={} baseUrl={}",
-                    p.name(), kind, p.model(), baseUrl);
+            configuredProvider(p, langChain4jModelFactory).ifPresent(out::add);
         }
         if (out.isEmpty()) {
             throw new IllegalStateException(
                     "no usable LLM provider in agent-platform.agent.providers (all blank/placeholder)");
         }
         return out;
+    }
+
+    private Optional<ConfiguredProvider> configuredProvider(
+            AgentProperties.Provider p,
+            LangChain4jModelFactory langChain4jModelFactory) {
+        if (p == null) return Optional.empty();
+        String kind = providerKind(p);
+        if (!ANTHROPIC_MESSAGES_KIND.equals(kind) && !CODEX_RESPONSES_KIND.equals(kind)) {
+            log.warn("[agent] skipping provider '{}' kind={} (unsupported)",
+                    p.name(), kind);
+            return Optional.empty();
+        }
+        if (isMissingApiKey(p.apiKey())) {
+            log.warn("[agent] skipping provider '{}': empty/placeholder apiKey", p.name());
+            return Optional.empty();
+        }
+        String baseUrl = p.baseUrl() == null || p.baseUrl().isBlank()
+                ? defaultBaseUrl(kind) : p.baseUrl();
+        AnthropicClient client = anthropicClient(p, kind, baseUrl);
+        ChatModel backgroundChatModel = langChain4jModelFactory.backgroundChatModel(p, kind, baseUrl, p.model());
+        log.info("[agent] provider '{}' ready: kind={} model={} baseUrl={}",
+                p.name(), kind, p.model(), baseUrl);
+        return Optional.of(new ConfiguredProvider(
+                p.name(), kind, client, backgroundChatModel, baseUrl, p.apiKey(), p.model()));
+    }
+
+    private static String providerKind(AgentProperties.Provider p) {
+        return p.kind() == null || p.kind().isBlank()
+                ? ANTHROPIC_MESSAGES_KIND : p.kind().trim();
+    }
+
+    private static boolean isMissingApiKey(String apiKey) {
+        return apiKey == null
+                || apiKey.isBlank()
+                || "PLACEHOLDER".equalsIgnoreCase(apiKey.trim());
+    }
+
+    private static AnthropicClient anthropicClient(AgentProperties.Provider p, String kind, String baseUrl) {
+        if (!ANTHROPIC_MESSAGES_KIND.equals(kind)) return null;
+        // SDK-level retries disabled: ChatService wraps the whole
+        // provider call in an outer failover loop.
+        return AnthropicOkHttpClient.builder()
+                .apiKey(p.apiKey())
+                .baseUrl(baseUrl)
+                .maxRetries(0)
+                .build();
     }
 
     @Bean("backgroundFactExtractorChatModel")
