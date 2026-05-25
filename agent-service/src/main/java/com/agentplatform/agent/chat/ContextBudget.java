@@ -29,12 +29,16 @@ public final class ContextBudget {
         Collections.reverse(reversed);
         List<MessageDto> out = new ArrayList<>();
         int tokens = 0;
-        for (MessageDto row : reversed) {
-            if (out.size() >= recentLimit) break;
+        boolean withinBudget = true;
+        for (int i = 0; i < reversed.size() && out.size() < recentLimit && withinBudget; i++) {
+            MessageDto row = reversed.get(i);
             int next = estimateMessageTokens(row);
-            if (!out.isEmpty() && tokens + next > historyBudget) break;
-            out.add(row);
-            tokens += next;
+            if (!out.isEmpty() && tokens + next > historyBudget) {
+                withinBudget = false;
+            } else {
+                out.add(row);
+                tokens += next;
+            }
         }
         Collections.reverse(out);
         return out;
