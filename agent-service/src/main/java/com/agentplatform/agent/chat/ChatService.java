@@ -657,21 +657,6 @@ public class ChatService {
         return clean.equals("image/jpeg") || clean.equals("image/png") || clean.equals("image/webp");
     }
 
-    private JsonNode toolCallMetadata(UUID deviceId, String toolName, JsonNode args) {
-        ObjectNode m = mapper.createObjectNode();
-        m.put("deviceId", deviceId == null ? null : deviceId.toString());
-        m.put("tool", toolName);
-        m.set("args", args == null ? mapper.createObjectNode() : args);
-        return m;
-    }
-
-    private JsonNode toolResultMetadata(String toolName, JsonNode result) {
-        ObjectNode m = mapper.createObjectNode();
-        m.put("tool", toolName);
-        m.set(METADATA_RESULT, result == null ? mapper.createObjectNode() : result);
-        return m;
-    }
-
     private JsonNode assistantMetadata(long durationMs) {
         ObjectNode m = mapper.createObjectNode();
         m.put("durationMs", Math.max(0L, durationMs));
@@ -745,12 +730,31 @@ public class ChatService {
                     toolResultMetadata(tool, result));
             persistArtifacts(sessionId, userId, saved == null ? null : saved.id(), tool, result);
         }
-    }
 
-    private void persistArtifacts(UUID sessionId, UUID userId, UUID messageId, String tool, JsonNode result) {
-        List<UpsertSessionArtifactRequest> artifacts =
-                artifactExtractor.extract(sessionId, userId, messageId, tool, result);
-        for (UpsertSessionArtifactRequest artifact : artifacts) {
+        private JsonNode toolCallMetadata(UUID deviceId, String toolName, JsonNode args) {
+            ObjectNode m = mapper.createObjectNode();
+            m.put("deviceId", deviceId == null ? null : deviceId.toString());
+            m.put("tool", toolName);
+            m.set("args", args == null ? mapper.createObjectNode() : args);
+            return m;
+        }
+
+        private JsonNode toolResultMetadata(String toolName, JsonNode result) {
+            ObjectNode m = mapper.createObjectNode();
+            m.put("tool", toolName);
+            m.set(METADATA_RESULT, result == null ? mapper.createObjectNode() : result);
+            return m;
+        }
+
+        private void persistArtifacts(UUID sessionId, UUID userId, UUID messageId, String tool, JsonNode result) {
+            List<UpsertSessionArtifactRequest> artifacts =
+                    artifactExtractor.extract(sessionId, userId, messageId, tool, result);
+            for (UpsertSessionArtifactRequest artifact : artifacts) {
+                persistArtifact(artifact, sessionId);
+            }
+        }
+
+        private void persistArtifact(UpsertSessionArtifactRequest artifact, UUID sessionId) {
             try {
                 chatClientFeign.upsertArtifact(artifact);
             } catch (Exception e) {
@@ -758,14 +762,14 @@ public class ChatService {
                         artifact.artifactKey(), sessionId, e.getMessage());
             }
         }
-    }
 
-    private UUID parseUuid(String value) {
-        if (value == null || value.isBlank()) return null;
-        try {
-            return UUID.fromString(value);
-        } catch (IllegalArgumentException ignored) {
-            return null;
+        private UUID parseUuid(String value) {
+            if (value == null || value.isBlank()) return null;
+            try {
+                return UUID.fromString(value);
+            } catch (IllegalArgumentException ignored) {
+                return null;
+            }
         }
     }
 
