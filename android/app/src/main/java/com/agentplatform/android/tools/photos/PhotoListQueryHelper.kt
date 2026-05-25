@@ -42,6 +42,17 @@ internal data class PhotoDateRange(
         get() = listOf("date_after" to after, "date_before" to before)
 }
 
+internal data class PhotoFilteredGridQuery(
+    val context: Context,
+    val mapper: ObjectMapper,
+    val args: JsonNode,
+    val tag: String,
+    val selectionFields: List<Pair<String, String?>>,
+    val nextArgFields: (PhotoPageRequest, Int) -> List<Pair<String, Any?>>,
+    val rootFields: List<Pair<String, Any?>> = emptyList(),
+    val summaryFields: List<Pair<String, Any?>> = emptyList()
+)
+
 internal object PhotoListQueryHelper {
     const val DEFAULT_LIMIT = 12
     const val MAX_RESULTS_PER_CALL = 200
@@ -242,27 +253,18 @@ internal object PhotoListQueryHelper {
         return result
     }
 
-    fun filteredGridResult(
-        context: Context,
-        mapper: ObjectMapper,
-        args: JsonNode,
-        tag: String,
-        selectionFields: List<Pair<String, String?>>,
-        nextArgFields: (PhotoPageRequest, Int) -> List<Pair<String, Any?>>,
-        rootFields: List<Pair<String, Any?>> = emptyList(),
-        summaryFields: List<Pair<String, Any?>> = emptyList()
-    ): ObjectNode {
-        val request = pageRequest(args)
-        val page = queryImages(context, mapper, request, selection(selectionFields), tag)
+    fun filteredGridResult(query: PhotoFilteredGridQuery): ObjectNode {
+        val request = pageRequest(query.args)
+        val page = queryImages(query.context, query.mapper, request, selection(query.selectionFields), query.tag)
         val nextOffset = request.offset + page.photos.size()
-        val nextArgs = if (page.hasMore) nextArgs(mapper, nextArgFields(request, nextOffset)) else null
+        val nextArgs = if (page.hasMore) nextArgs(query.mapper, query.nextArgFields(request, nextOffset)) else null
         return gridResult(
-            mapper = mapper,
+            mapper = query.mapper,
             page = page,
             request = request,
             nextArgs = nextArgs,
-            rootFields = rootFields,
-            summaryFields = summaryFields
+            rootFields = query.rootFields,
+            summaryFields = query.summaryFields
         )
     }
 

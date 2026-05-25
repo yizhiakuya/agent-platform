@@ -51,23 +51,25 @@ class PhotosListByAlbumTool(
         require(bucketId.isNotEmpty()) { "bucket_id is required" }
         val dateRange = PhotoListQueryHelper.dateRange(args)
         val result = PhotoListQueryHelper.filteredGridResult(
-            context = context,
-            mapper = mapper,
-            args = args,
-            tag = TAG,
-            selectionFields = listOf(
-                "${MediaStore.Images.Media.BUCKET_ID} = ?" to bucketId,
-            ) + PhotoListQueryHelper.dateRangeSelection(dateRange),
-            nextArgFields = { request, nextOffset ->
-                listOf(
-                    "bucket_id" to bucketId,
-                    "limit" to request.limit,
-                    "offset" to nextOffset,
-                    "max_dim" to request.maxDim,
-                ) + dateRange.fields
-            },
-            rootFields = listOf("bucket_id" to bucketId),
-            summaryFields = listOf("bucket_id" to bucketId) + dateRange.fields
+            PhotoFilteredGridQuery(
+                context = context,
+                mapper = mapper,
+                args = args,
+                tag = TAG,
+                selectionFields = listOf(
+                    "${MediaStore.Images.Media.BUCKET_ID} = ?" to bucketId,
+                ) + PhotoListQueryHelper.dateRangeSelection(dateRange),
+                nextArgFields = { request, nextOffset ->
+                    listOf(
+                        "bucket_id" to bucketId,
+                        "limit" to request.limit,
+                        "offset" to nextOffset,
+                        "max_dim" to request.maxDim,
+                    ) + dateRange.fields
+                },
+                rootFields = listOf("bucket_id" to bucketId),
+                summaryFields = listOf("bucket_id" to bucketId) + dateRange.fields
+            )
         )
         ToolResultEnvelope.applyStandardFields(
             mapper = mapper,

@@ -69,24 +69,26 @@ class PhotosListRecentTool(
         val nameContains = PhotoListQueryHelper.optionalText(args, "name_contains")
         val dateRange = PhotoListQueryHelper.dateRange(args)
         val result = PhotoListQueryHelper.filteredGridResult(
-            context = context,
-            mapper = mapper,
-            args = args,
-            tag = TAG,
-            selectionFields = listOf(
-                MediaStore.Images.Media.DISPLAY_NAME + " LIKE ?" to nameContains?.let { "%$it%" },
-            ) + PhotoListQueryHelper.dateRangeSelection(dateRange),
-            nextArgFields = { request, nextOffset ->
-                listOf(
-                    "limit" to request.limit,
-                    "offset" to nextOffset,
-                    "max_dim" to request.maxDim,
-                    "name_contains" to nameContains
+            PhotoFilteredGridQuery(
+                context = context,
+                mapper = mapper,
+                args = args,
+                tag = TAG,
+                selectionFields = listOf(
+                    MediaStore.Images.Media.DISPLAY_NAME + " LIKE ?" to nameContains?.let { "%$it%" },
+                ) + PhotoListQueryHelper.dateRangeSelection(dateRange),
+                nextArgFields = { request, nextOffset ->
+                    listOf(
+                        "limit" to request.limit,
+                        "offset" to nextOffset,
+                        "max_dim" to request.maxDim,
+                        "name_contains" to nameContains
+                    ) + dateRange.fields
+                },
+                summaryFields = listOf(
+                    "name_contains" to nameContains,
                 ) + dateRange.fields
-            },
-            summaryFields = listOf(
-                "name_contains" to nameContains,
-            ) + dateRange.fields
+            )
         )
         ToolResultEnvelope.applyStandardFields(
             mapper = mapper,
