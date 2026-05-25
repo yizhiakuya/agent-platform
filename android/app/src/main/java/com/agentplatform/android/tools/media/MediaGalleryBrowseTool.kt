@@ -2,6 +2,7 @@ package com.agentplatform.android.tools.media
 
 import android.content.ContentResolver
 import android.content.Context
+import android.database.Cursor
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
@@ -96,45 +97,47 @@ class MediaGalleryBrowseTool(
         val limit = requestedLimit.coerceAtMost(MAX_RESULTS_PER_CALL)
         val offset = args.path("offset").asInt(0).coerceAtLeast(0)
         val maxDim = args.path("max_dim").asInt(DEFAULT_MAX_DIM).coerceIn(MIN_MAX_DIM, MAX_MAX_DIM)
+        val page = GridPage(requestedLimit, limit, offset, maxDim)
 
         when (normalizedView) {
             "albums" -> buildAlbumsHome(args, maxDim)
             "photos" -> buildMediaGrid(
-                request = args,
-                view = "photos",
-                title = "照片",
-                category = "all",
-                bucketId = null,
-                includePhotos = true,
-                includeVideos = true,
-                photoFilter = PhotoFilter.None,
-                videoFilter = VideoFilter.None,
-                requestedLimit = requestedLimit,
-                limit = limit,
-                offset = offset,
-                maxDim = maxDim
+                GridRequest(
+                    source = args,
+                    route = GridRoute(view = "photos", title = "照片", category = "all", bucketId = null),
+                    filters = GridFilters(
+                        includePhotos = true,
+                        includeVideos = true,
+                        photoFilter = PhotoFilter.None,
+                        videoFilter = VideoFilter.None
+                    ),
+                    page = page
+                )
             )
             "category" -> {
                 val category = args.path("category").asText("all").lowercase(Locale.ROOT).trim().ifBlank { "all" }
-                buildCategoryGrid(args, category, requestedLimit, limit, offset, maxDim)
+                buildCategoryGrid(args, category, page)
             }
             "album" -> {
                 val bucketId = args.path("bucket_id").asText("").trim()
                 require(bucketId.isNotEmpty()) { "bucket_id is required when view=album" }
                 buildMediaGrid(
-                    request = args,
-                    view = "album",
-                    title = args.path("title").asText("相册").ifBlank { "相册" },
-                    category = null,
-                    bucketId = bucketId,
-                    includePhotos = true,
-                    includeVideos = true,
-                    photoFilter = PhotoFilter.Bucket(bucketId),
-                    videoFilter = VideoFilter.Bucket(bucketId),
-                    requestedLimit = requestedLimit,
-                    limit = limit,
-                    offset = offset,
-                    maxDim = maxDim
+                    GridRequest(
+                        source = args,
+                        route = GridRoute(
+                            view = "album",
+                            title = args.path("title").asText("相册").ifBlank { "相册" },
+                            category = null,
+                            bucketId = bucketId
+                        ),
+                        filters = GridFilters(
+                            includePhotos = true,
+                            includeVideos = true,
+                            photoFilter = PhotoFilter.Bucket(bucketId),
+                            videoFilter = VideoFilter.Bucket(bucketId)
+                        ),
+                        page = page
+                    )
                 )
             }
             else -> throw IllegalArgumentException("unsupported gallery view: $view")
@@ -234,187 +237,99 @@ class MediaGalleryBrowseTool(
     private fun buildCategoryGrid(
         request: JsonNode,
         category: String,
-        requestedLimit: Int,
-        limit: Int,
-        offset: Int,
-        maxDim: Int
+        page: GridPage
     ): JsonNode {
         return when (category) {
-            "all" -> buildMediaGrid(
-                request, "category", "全部照片", category, null,
-                includePhotos = true,
-                includeVideos = true,
-                photoFilter = PhotoFilter.None,
-                videoFilter = VideoFilter.None,
-                requestedLimit = requestedLimit,
-                limit = limit,
-                offset = offset,
-                maxDim = maxDim
-            )
-            "camera" -> buildMediaGrid(
-                request, "category", "相机", category, null,
-                includePhotos = true,
-                includeVideos = true,
-                photoFilter = PhotoFilter.Camera,
-                videoFilter = VideoFilter.Camera,
-                requestedLimit = requestedLimit,
-                limit = limit,
-                offset = offset,
-                maxDim = maxDim
-            )
-            "screenshots_recordings" -> buildMediaGrid(
-                request, "category", "截屏录屏", category, null,
-                includePhotos = true,
-                includeVideos = true,
-                photoFilter = PhotoFilter.ScreenshotsRecordings,
-                videoFilter = VideoFilter.ScreenshotsRecordings,
-                requestedLimit = requestedLimit,
-                limit = limit,
-                offset = offset,
-                maxDim = maxDim
-            )
-            "videos" -> buildMediaGrid(
-                request, "category", "视频", category, null,
-                includePhotos = false,
-                includeVideos = true,
-                photoFilter = PhotoFilter.None,
-                videoFilter = VideoFilter.None,
-                requestedLimit = requestedLimit,
-                limit = limit,
-                offset = offset,
-                maxDim = maxDim
-            )
-            "recent_deleted" -> {
-                require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) { "recent_deleted requires Android 11 or newer" }
-                buildMediaGrid(
-                    request, "category", "最近删除", category, null,
-                    includePhotos = true,
-                    includeVideos = true,
-                    photoFilter = PhotoFilter.RecentDeleted,
-                    videoFilter = VideoFilter.RecentDeleted,
-                    requestedLimit = requestedLimit,
-                    limit = limit,
-                    offset = offset,
-                    maxDim = maxDim
-                )
-            }
-            "documents" -> buildMediaGrid(
-                request, "category", "文档", category, null,
-                includePhotos = true,
-                includeVideos = false,
-                photoFilter = PhotoFilter.Documents,
-                videoFilter = VideoFilter.None,
-                requestedLimit = requestedLimit,
-                limit = limit,
-                offset = offset,
-                maxDim = maxDim
-            )
-            "gif" -> buildMediaGrid(
-                request, "category", "GIF格式", category, null,
-                includePhotos = true,
-                includeVideos = false,
-                photoFilter = PhotoFilter.Gif,
-                videoFilter = VideoFilter.None,
-                requestedLimit = requestedLimit,
-                limit = limit,
-                offset = offset,
-                maxDim = maxDim
-            )
-            "custom" -> buildMediaGrid(
-                request, "category", "自定义", category, null,
-                includePhotos = true,
-                includeVideos = true,
-                photoFilter = PhotoFilter.Custom,
-                videoFilter = VideoFilter.Custom,
-                requestedLimit = requestedLimit,
-                limit = limit,
-                offset = offset,
-                maxDim = maxDim
-            )
+            "all" -> buildMediaGrid(categoryGridRequest(
+                request,
+                category,
+                "全部照片",
+                GridFilters(true, true, PhotoFilter.None, VideoFilter.None),
+                page
+            ))
+            "camera" -> buildMediaGrid(categoryGridRequest(
+                request,
+                category,
+                "相机",
+                GridFilters(true, true, PhotoFilter.Camera, VideoFilter.Camera),
+                page
+            ))
+            "screenshots_recordings" -> buildMediaGrid(categoryGridRequest(
+                request,
+                category,
+                "截屏录屏",
+                GridFilters(true, true, PhotoFilter.ScreenshotsRecordings, VideoFilter.ScreenshotsRecordings),
+                page
+            ))
+            "videos" -> buildMediaGrid(categoryGridRequest(
+                request,
+                category,
+                "视频",
+                GridFilters(false, true, PhotoFilter.None, VideoFilter.None),
+                page
+            ))
+            "recent_deleted" -> recentDeletedGrid(request, category, page)
+            "documents" -> buildMediaGrid(categoryGridRequest(
+                request,
+                category,
+                "文档",
+                GridFilters(true, false, PhotoFilter.Documents, VideoFilter.None),
+                page
+            ))
+            "gif" -> buildMediaGrid(categoryGridRequest(
+                request,
+                category,
+                "GIF格式",
+                GridFilters(true, false, PhotoFilter.Gif, VideoFilter.None),
+                page
+            ))
+            "custom" -> buildMediaGrid(categoryGridRequest(
+                request,
+                category,
+                "自定义",
+                GridFilters(true, true, PhotoFilter.Custom, VideoFilter.Custom),
+                page
+            ))
             else -> throw IllegalArgumentException("unsupported gallery category: $category")
         }
     }
 
-    private fun buildMediaGrid(
+    private fun recentDeletedGrid(request: JsonNode, category: String, page: GridPage): JsonNode {
+        require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) { "recent_deleted requires Android 11 or newer" }
+        return buildMediaGrid(categoryGridRequest(
+            request,
+            category,
+            "最近删除",
+            GridFilters(true, true, PhotoFilter.RecentDeleted, VideoFilter.RecentDeleted),
+            page
+        ))
+    }
+
+    private fun categoryGridRequest(
         request: JsonNode,
-        view: String,
+        category: String,
         title: String,
-        category: String?,
-        bucketId: String?,
-        includePhotos: Boolean,
-        includeVideos: Boolean,
-        photoFilter: PhotoFilter,
-        videoFilter: VideoFilter,
-        requestedLimit: Int,
-        limit: Int,
-        offset: Int,
-        maxDim: Int
-    ): JsonNode {
-        val fetch = (offset + limit + 1).coerceAtMost(MAX_MERGE_WINDOW)
-        val candidates = mutableListOf<MediaCandidate>()
-        if (includePhotos) candidates += queryPhotos(photoFilter, fetch, 0)
-        if (includeVideos) candidates += queryVideos(videoFilter, fetch, 0)
+        filters: GridFilters,
+        page: GridPage
+    ): GridRequest =
+        GridRequest(
+            source = request,
+            route = GridRoute(view = "category", title = title, category = category, bucketId = null),
+            filters = filters,
+            page = page
+        )
 
-        val sorted = candidates.sortedByDescending { it.sortMs }
-        val page = sorted.drop(offset).take(limit + 1)
-        val hasMore = page.size > limit
-        val visible = page.take(limit)
-        val mutationAction = if (category == "recent_deleted") MediaMutationAction.Restore else MediaMutationAction.Trash
-        val items = mapper.createArrayNode()
-        visible.forEachIndexed { index, candidate ->
-            items.add(candidate.item.apply {
-                putThumbnailUrl(this, candidate.mediaType, candidate.id, maxDim)
-                put("display_index", offset + index + 1)
-                put("media_ref", "media://${candidate.mediaType}/${candidate.id}")
-                putMutationAction(this, candidate.mediaType, candidate.id.toLong(), mutationAction)
-            })
+    private fun buildMediaGrid(grid: GridRequest): JsonNode {
+        val candidates = gridCandidates(grid.filters, grid.page)
+        val mediaPage = visibleMediaPage(candidates, grid.page)
+        val mutationAction = if (grid.route.category == "recent_deleted") {
+            MediaMutationAction.Restore
+        } else {
+            MediaMutationAction.Trash
         }
-
-        val nextArgs = mapper.createObjectNode().apply {
-            put("view", view)
-            if (category != null) put("category", category)
-            if (bucketId != null) put("bucket_id", bucketId)
-            put("limit", limit)
-            put("offset", offset + visible.size)
-            put("max_dim", maxDim)
-        }
-
-        val result = mapper.createObjectNode()
-        result.put("view", view)
-        result.put("title", title)
-        if (category != null) result.put("category", category)
-        if (bucketId != null) result.put("bucket_id", bucketId)
-        result.set<ArrayNode>("items", items)
-        result.put("count", items.size())
-        result.put("requested_limit", requestedLimit)
-        result.put("limit", limit)
-        result.put("offset", offset)
-        result.put("max_dim", maxDim)
-        result.put("has_more", hasMore)
-        result.set<ObjectNode>("pagination", mapper.createObjectNode().apply {
-            put("offset", offset)
-            put("requested_limit", requestedLimit)
-            put("limit", limit)
-            put("returned_count", items.size())
-            put("start_index", if (items.size() == 0) 0 else offset + 1)
-            put("end_index", offset + items.size())
-            put("has_more", hasMore)
-            if (hasMore) {
-                put("next_offset", offset + items.size())
-                set<ObjectNode>("next_args", nextArgs)
-            }
-        })
-        result.set<ObjectNode>("display", mapper.createObjectNode().apply {
-            put("policy", "show_gallery")
-            put("mode", "grid")
-            put("page", if (items.size() == 0) "0" else "${offset + 1}-${offset + items.size()}")
-            put("has_more", hasMore)
-            if (hasMore) put("next_offset", offset + items.size())
-        })
-        result.set<ObjectNode>("selection", mapper.createObjectNode().apply {
-            put("source_tool", name)
-            put("recommended_reference", "Use media_ref, media_type and id from selected items.")
-        })
+        val items = gridItems(mediaPage.visible, grid.page, mutationAction)
+        val nextArgs = nextGridArgs(grid, items.size())
+        val result = gridResult(grid, items, mediaPage.hasMore, nextArgs)
         return ToolResultEnvelope.applyStandardFields(
             mapper = mapper,
             tool = this@MediaGalleryBrowseTool,
@@ -422,9 +337,113 @@ class MediaGalleryBrowseTool(
             ok = true,
             resultType = "results",
             displayPolicy = "show_gallery",
-            request = request
+            request = grid.source
         )
     }
+
+    private fun gridCandidates(filters: GridFilters, page: GridPage): List<MediaCandidate> {
+        val fetch = (page.offset + page.limit + 1).coerceAtMost(MAX_MERGE_WINDOW)
+        val candidates = mutableListOf<MediaCandidate>()
+        if (filters.includePhotos) candidates += queryPhotos(filters.photoFilter, fetch, 0)
+        if (filters.includeVideos) candidates += queryVideos(filters.videoFilter, fetch, 0)
+        return candidates.sortedByDescending { it.sortMs }
+    }
+
+    private fun visibleMediaPage(candidates: List<MediaCandidate>, page: GridPage): GridMediaPage {
+        val window = candidates.drop(page.offset).take(page.limit + 1)
+        return GridMediaPage(
+            visible = window.take(page.limit),
+            hasMore = window.size > page.limit
+        )
+    }
+
+    private fun gridItems(
+        visible: List<MediaCandidate>,
+        page: GridPage,
+        mutationAction: MediaMutationAction
+    ): ArrayNode {
+        val items = mapper.createArrayNode()
+        visible.forEachIndexed { index, candidate ->
+            items.add(candidate.item.apply {
+                putThumbnailUrl(this, candidate.mediaType, candidate.id, page.maxDim)
+                put("display_index", page.offset + index + 1)
+                put("media_ref", "media://${candidate.mediaType}/${candidate.id}")
+                putMutationAction(this, candidate.mediaType, candidate.id.toLong(), mutationAction)
+            })
+        }
+        return items
+    }
+
+    private fun nextGridArgs(grid: GridRequest, returnedCount: Int): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("view", grid.route.view)
+            grid.route.category?.let { put("category", it) }
+            grid.route.bucketId?.let { put("bucket_id", it) }
+            put("limit", grid.page.limit)
+            put("offset", grid.page.offset + returnedCount)
+            put("max_dim", grid.page.maxDim)
+        }
+
+    private fun gridResult(
+        grid: GridRequest,
+        items: ArrayNode,
+        hasMore: Boolean,
+        nextArgs: ObjectNode
+    ): ObjectNode {
+        val result = mapper.createObjectNode()
+        val route = grid.route
+        val page = grid.page
+        result.put("view", route.view)
+        result.put("title", route.title)
+        route.category?.let { result.put("category", it) }
+        route.bucketId?.let { result.put("bucket_id", it) }
+        result.set<ArrayNode>("items", items)
+        result.put("count", items.size())
+        result.put("requested_limit", page.requestedLimit)
+        result.put("limit", page.limit)
+        result.put("offset", page.offset)
+        result.put("max_dim", page.maxDim)
+        result.put("has_more", hasMore)
+        result.set<ObjectNode>("pagination", paginationNode(page, items.size(), hasMore, nextArgs))
+        result.set<ObjectNode>("display", gridDisplayNode(page, items.size(), hasMore))
+        result.set<ObjectNode>("selection", selectionNode())
+        return result
+    }
+
+    private fun paginationNode(
+        page: GridPage,
+        itemCount: Int,
+        hasMore: Boolean,
+        nextArgs: ObjectNode
+    ): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("offset", page.offset)
+            put("requested_limit", page.requestedLimit)
+            put("limit", page.limit)
+            put("returned_count", itemCount)
+            put("start_index", if (itemCount == 0) 0 else page.offset + 1)
+            put("end_index", page.offset + itemCount)
+            put("has_more", hasMore)
+            if (hasMore) {
+                put("next_offset", page.offset + itemCount)
+                set<ObjectNode>("next_args", nextArgs)
+            }
+        }
+
+    private fun gridDisplayNode(page: GridPage, itemCount: Int, hasMore: Boolean): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("policy", "show_gallery")
+            put("mode", "grid")
+            put("page", if (itemCount == 0) "0" else "${page.offset + 1}-${page.offset + itemCount}")
+            put("has_more", hasMore)
+            if (hasMore) put("next_offset", page.offset + itemCount)
+        }
+
+    private fun selectionNode(): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("source_tool", name)
+            put("recommended_reference", "Use media_ref, media_type and id from selected items.")
+        }
 
     private fun listAlbums(limit: Int, maxDim: Int, coverMaxDim: Int): List<ObjectNode> {
         val albums = linkedMapOf<String, AlbumBucket>()
@@ -639,82 +658,17 @@ class MediaGalleryBrowseTool(
 
     private fun queryPhotos(filter: PhotoFilter, limit: Int, offset: Int): List<MediaCandidate> {
         val out = mutableListOf<MediaCandidate>()
-        val projection = arrayOf(
-            MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DISPLAY_NAME,
-            MediaStore.Images.Media.DATE_TAKEN,
-            MediaStore.Images.Media.DATE_MODIFIED,
-            MediaStore.Images.Media.SIZE,
-            MediaStore.Images.Media.BUCKET_ID,
-            MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
-            MediaStore.Images.Media.MIME_TYPE,
-            MediaStore.Images.Media.WIDTH,
-            MediaStore.Images.Media.HEIGHT,
-            MediaStore.Images.Media.RELATIVE_PATH
-        )
-        val cursor = context.contentResolver.query(
+        mediaCursor(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            projection,
-            queryArgs(
-                sortColumn = MediaStore.Images.Media.DATE_TAKEN,
-                limit = limit,
-                offset = offset,
-                selection = filter.selection(),
-                selectionArgs = filter.selectionArgs(),
-                trashMatch = filter.trashMatch()
-            ),
-            null
-        )
-        cursor?.use { c ->
-            val idIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-            val nameIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-            val dateIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
-            val modifiedIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
-            val sizeIdx = c.getColumnIndex(MediaStore.Images.Media.SIZE)
-            val bucketIdIdx = c.getColumnIndex(MediaStore.Images.Media.BUCKET_ID)
-            val bucketNameIdx = c.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-            val mimeIdx = c.getColumnIndex(MediaStore.Images.Media.MIME_TYPE)
-            val widthIdx = c.getColumnIndex(MediaStore.Images.Media.WIDTH)
-            val heightIdx = c.getColumnIndex(MediaStore.Images.Media.HEIGHT)
-            val relativePathIdx = c.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
-            while (c.moveToNext() && out.size < limit) {
-                val id = c.getLong(idIdx)
-                val name = c.getString(nameIdx) ?: "image_$id"
-                val date = longColumn(c, dateIdx)
-                val modified = longColumn(c, modifiedIdx)
-                val size = longColumn(c, sizeIdx)
-                val bucketId = stringColumn(c, bucketIdIdx)
-                val bucketName = stringColumn(c, bucketNameIdx)
-                val mime = stringColumn(c, mimeIdx)
-                val width = longColumn(c, widthIdx)
-                val height = longColumn(c, heightIdx)
-                val relativePath = stringColumn(c, relativePathIdx)
-                val item = mapper.createObjectNode()
-                item.put("media_type", "photo")
-                item.put("id", id.toString())
-                item.put("name", name)
-                item.put("date_taken_ms", date)
-                item.put("date_modified_sec", modified)
-                item.put("size_bytes", size)
-                if (!bucketId.isNullOrBlank()) item.put("bucket_id", bucketId)
-                if (!bucketName.isNullOrBlank()) item.put("bucket_name", bucketName)
-                if (!mime.isNullOrBlank()) item.put("mime_type", mime)
-                if (width > 0L) item.put("width", width)
-                if (height > 0L) item.put("height", height)
-                if (!relativePath.isNullOrBlank()) item.put("relative_path", relativePath)
-
-                item.put("preview_kind", "thumbnail")
-                item.put("open_original_available", true)
-                putOpenOriginalAction(item, id)
-
-                out += MediaCandidate(
-                    mediaType = "photo",
-                    id = id.toString(),
-                    sortMs = sortTime(date, modified),
-                    bucketId = bucketId,
-                    bucketName = bucketName,
-                    item = item
-                )
+            PHOTO_PROJECTION,
+            MediaStore.Images.Media.DATE_TAKEN,
+            filter,
+            limit,
+            offset
+        )?.use { cursor ->
+            val columns = PhotoColumns(cursor)
+            while (cursor.moveToNext() && out.size < limit) {
+                out += mediaCandidate(readPhotoRow(cursor, columns))
             }
         }
         return out
@@ -722,25 +676,35 @@ class MediaGalleryBrowseTool(
 
     private fun queryVideos(filter: VideoFilter, limit: Int, offset: Int): List<MediaCandidate> {
         val out = mutableListOf<MediaCandidate>()
-        val projection = arrayOf(
-            MediaStore.Video.Media._ID,
-            MediaStore.Video.Media.DISPLAY_NAME,
-            MediaStore.Video.Media.DATE_TAKEN,
-            MediaStore.Video.Media.DATE_MODIFIED,
-            MediaStore.Video.Media.SIZE,
-            MediaStore.Video.Media.BUCKET_ID,
-            MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
-            MediaStore.Video.Media.MIME_TYPE,
-            MediaStore.Video.Media.DURATION,
-            MediaStore.Video.Media.WIDTH,
-            MediaStore.Video.Media.HEIGHT,
-            MediaStore.Video.Media.RELATIVE_PATH
-        )
-        val cursor = context.contentResolver.query(
+        mediaCursor(
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            VIDEO_PROJECTION,
+            MediaStore.Video.Media.DATE_TAKEN,
+            filter,
+            limit,
+            offset
+        )?.use { cursor ->
+            val columns = VideoColumns(cursor)
+            while (cursor.moveToNext() && out.size < limit) {
+                out += mediaCandidate(readVideoRow(cursor, columns))
+            }
+        }
+        return out
+    }
+
+    private fun mediaCursor(
+        uri: android.net.Uri,
+        projection: Array<String>,
+        sortColumn: String,
+        filter: GalleryFilter,
+        limit: Int,
+        offset: Int
+    ): Cursor? =
+        context.contentResolver.query(
+            uri,
             projection,
             queryArgs(
-                sortColumn = MediaStore.Video.Media.DATE_TAKEN,
+                sortColumn = sortColumn,
                 limit = limit,
                 offset = offset,
                 selection = filter.selection(),
@@ -749,60 +713,85 @@ class MediaGalleryBrowseTool(
             ),
             null
         )
-        cursor?.use { c ->
-            val idIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-            val nameIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
-            val dateIdx = c.getColumnIndex(MediaStore.Video.Media.DATE_TAKEN)
-            val modifiedIdx = c.getColumnIndex(MediaStore.Video.Media.DATE_MODIFIED)
-            val sizeIdx = c.getColumnIndex(MediaStore.Video.Media.SIZE)
-            val bucketIdIdx = c.getColumnIndex(MediaStore.Video.Media.BUCKET_ID)
-            val bucketNameIdx = c.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
-            val mimeIdx = c.getColumnIndex(MediaStore.Video.Media.MIME_TYPE)
-            val durationIdx = c.getColumnIndex(MediaStore.Video.Media.DURATION)
-            val widthIdx = c.getColumnIndex(MediaStore.Video.Media.WIDTH)
-            val heightIdx = c.getColumnIndex(MediaStore.Video.Media.HEIGHT)
-            val relativePathIdx = c.getColumnIndex(MediaStore.Video.Media.RELATIVE_PATH)
-            while (c.moveToNext() && out.size < limit) {
-                val id = c.getLong(idIdx)
-                val name = c.getString(nameIdx) ?: "video_$id"
-                val date = longColumn(c, dateIdx)
-                val modified = longColumn(c, modifiedIdx)
-                val size = longColumn(c, sizeIdx)
-                val bucketId = stringColumn(c, bucketIdIdx)
-                val bucketName = stringColumn(c, bucketNameIdx)
-                val mime = stringColumn(c, mimeIdx)
-                val duration = longColumn(c, durationIdx)
-                val width = longColumn(c, widthIdx)
-                val height = longColumn(c, heightIdx)
-                val relativePath = stringColumn(c, relativePathIdx)
-                val item = mapper.createObjectNode()
-                item.put("media_type", "video")
-                item.put("id", id.toString())
-                item.put("name", name)
-                item.put("date_taken_ms", date)
-                item.put("date_modified_sec", modified)
-                item.put("size_bytes", size)
-                item.put("duration_ms", duration)
-                if (!bucketId.isNullOrBlank()) item.put("bucket_id", bucketId)
-                if (!bucketName.isNullOrBlank()) item.put("bucket_name", bucketName)
-                if (!mime.isNullOrBlank()) item.put("mime_type", mime)
-                if (width > 0L) item.put("width", width)
-                if (height > 0L) item.put("height", height)
-                if (!relativePath.isNullOrBlank()) item.put("relative_path", relativePath)
-                item.put("preview_kind", "thumbnail")
-                item.put("open_original_available", false)
 
-                out += MediaCandidate(
-                    mediaType = "video",
-                    id = id.toString(),
-                    sortMs = sortTime(date, modified),
-                    bucketId = bucketId,
-                    bucketName = bucketName,
-                    item = item
-                )
-            }
-        }
-        return out
+    private fun readPhotoRow(cursor: Cursor, columns: PhotoColumns): GalleryMediaRow {
+        val id = cursor.getLong(columns.id)
+        return GalleryMediaRow(
+            mediaType = "photo",
+            id = id,
+            name = cursor.getString(columns.name) ?: "image_$id",
+            time = GalleryTime(longColumn(cursor, columns.date), longColumn(cursor, columns.modified)),
+            bucket = GalleryBucketInfo(stringColumn(cursor, columns.bucketId), stringColumn(cursor, columns.bucketName)),
+            details = GalleryMediaDetails(
+                sizeBytes = longColumn(cursor, columns.size),
+                mimeType = stringColumn(cursor, columns.mime),
+                width = longColumn(cursor, columns.width),
+                height = longColumn(cursor, columns.height),
+                relativePath = stringColumn(cursor, columns.relativePath),
+                durationMs = null
+            )
+        )
+    }
+
+    private fun readVideoRow(cursor: Cursor, columns: VideoColumns): GalleryMediaRow {
+        val id = cursor.getLong(columns.id)
+        return GalleryMediaRow(
+            mediaType = "video",
+            id = id,
+            name = cursor.getString(columns.name) ?: "video_$id",
+            time = GalleryTime(longColumn(cursor, columns.date), longColumn(cursor, columns.modified)),
+            bucket = GalleryBucketInfo(stringColumn(cursor, columns.bucketId), stringColumn(cursor, columns.bucketName)),
+            details = GalleryMediaDetails(
+                sizeBytes = longColumn(cursor, columns.size),
+                mimeType = stringColumn(cursor, columns.mime),
+                width = longColumn(cursor, columns.width),
+                height = longColumn(cursor, columns.height),
+                relativePath = stringColumn(cursor, columns.relativePath),
+                durationMs = longColumn(cursor, columns.duration)
+            )
+        )
+    }
+
+    private fun mediaCandidate(row: GalleryMediaRow): MediaCandidate {
+        val item = mediaItem(row)
+        return MediaCandidate(
+            mediaType = row.mediaType,
+            id = row.id.toString(),
+            sortMs = sortTime(row.time.dateTakenMs, row.time.dateModifiedSec),
+            bucketId = row.bucket.id,
+            bucketName = row.bucket.name,
+            item = item
+        )
+    }
+
+    private fun mediaItem(row: GalleryMediaRow): ObjectNode {
+        val item = mapper.createObjectNode()
+        val details = row.details
+        item.put("media_type", row.mediaType)
+        item.put("id", row.id.toString())
+        item.put("name", row.name)
+        item.put("date_taken_ms", row.time.dateTakenMs)
+        item.put("date_modified_sec", row.time.dateModifiedSec)
+        item.put("size_bytes", details.sizeBytes)
+        details.durationMs?.let { item.put("duration_ms", it) }
+        putOptionalString(item, "bucket_id", row.bucket.id)
+        putOptionalString(item, "bucket_name", row.bucket.name)
+        putOptionalString(item, "mime_type", details.mimeType)
+        putPositiveLong(item, "width", details.width)
+        putPositiveLong(item, "height", details.height)
+        putOptionalString(item, "relative_path", details.relativePath)
+        item.put("preview_kind", "thumbnail")
+        item.put("open_original_available", row.mediaType == "photo")
+        if (row.mediaType == "photo") putOpenOriginalAction(item, row.id)
+        return item
+    }
+
+    private fun putOptionalString(item: ObjectNode, field: String, value: String?) {
+        if (!value.isNullOrBlank()) item.put(field, value)
+    }
+
+    private fun putPositiveLong(item: ObjectNode, field: String, value: Long) {
+        if (value > 0L) item.put(field, value)
     }
 
     private fun queryArgs(
@@ -919,6 +908,39 @@ class MediaGalleryBrowseTool(
         val customCount: Int
     )
 
+    private data class GridRequest(
+        val source: JsonNode,
+        val route: GridRoute,
+        val filters: GridFilters,
+        val page: GridPage
+    )
+
+    private data class GridRoute(
+        val view: String,
+        val title: String,
+        val category: String?,
+        val bucketId: String?
+    )
+
+    private data class GridFilters(
+        val includePhotos: Boolean,
+        val includeVideos: Boolean,
+        val photoFilter: PhotoFilter,
+        val videoFilter: VideoFilter
+    )
+
+    private data class GridPage(
+        val requestedLimit: Int,
+        val limit: Int,
+        val offset: Int,
+        val maxDim: Int
+    )
+
+    private data class GridMediaPage(
+        val visible: List<MediaCandidate>,
+        val hasMore: Boolean
+    )
+
     private data class MediaCandidate(
         val mediaType: String,
         val id: String,
@@ -934,6 +956,63 @@ class MediaGalleryBrowseTool(
         val sortMs: Long,
         val maxDim: Int
     )
+
+    private data class GalleryMediaRow(
+        val mediaType: String,
+        val id: Long,
+        val name: String,
+        val time: GalleryTime,
+        val bucket: GalleryBucketInfo,
+        val details: GalleryMediaDetails
+    )
+
+    private data class GalleryTime(
+        val dateTakenMs: Long,
+        val dateModifiedSec: Long
+    )
+
+    private data class GalleryBucketInfo(
+        val id: String?,
+        val name: String?
+    )
+
+    private data class GalleryMediaDetails(
+        val sizeBytes: Long,
+        val mimeType: String?,
+        val width: Long,
+        val height: Long,
+        val relativePath: String?,
+        val durationMs: Long?
+    )
+
+    private class PhotoColumns(cursor: Cursor) {
+        val id: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+        val name: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+        val date: Int = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+        val modified: Int = cursor.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
+        val size: Int = cursor.getColumnIndex(MediaStore.Images.Media.SIZE)
+        val bucketId: Int = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_ID)
+        val bucketName: Int = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+        val mime: Int = cursor.getColumnIndex(MediaStore.Images.Media.MIME_TYPE)
+        val width: Int = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
+        val height: Int = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
+        val relativePath: Int = cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
+    }
+
+    private class VideoColumns(cursor: Cursor) {
+        val id: Int = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+        val name: Int = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+        val date: Int = cursor.getColumnIndex(MediaStore.Video.Media.DATE_TAKEN)
+        val modified: Int = cursor.getColumnIndex(MediaStore.Video.Media.DATE_MODIFIED)
+        val size: Int = cursor.getColumnIndex(MediaStore.Video.Media.SIZE)
+        val bucketId: Int = cursor.getColumnIndex(MediaStore.Video.Media.BUCKET_ID)
+        val bucketName: Int = cursor.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+        val mime: Int = cursor.getColumnIndex(MediaStore.Video.Media.MIME_TYPE)
+        val duration: Int = cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
+        val width: Int = cursor.getColumnIndex(MediaStore.Video.Media.WIDTH)
+        val height: Int = cursor.getColumnIndex(MediaStore.Video.Media.HEIGHT)
+        val relativePath: Int = cursor.getColumnIndex(MediaStore.Video.Media.RELATIVE_PATH)
+    }
 
     private enum class MediaMutationAction(
         val fieldName: String,
@@ -1035,5 +1114,32 @@ class MediaGalleryBrowseTool(
         private const val DOCUMENTS_PATTERN = "%Documents%"
         private const val SCREEN_PATTERN = "%Screen%"
         private const val SCREENSHOT_PATTERN = "%Screenshot%"
+        private val PHOTO_PROJECTION = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.DATE_MODIFIED,
+            MediaStore.Images.Media.SIZE,
+            MediaStore.Images.Media.BUCKET_ID,
+            MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
+            MediaStore.Images.Media.MIME_TYPE,
+            MediaStore.Images.Media.WIDTH,
+            MediaStore.Images.Media.HEIGHT,
+            MediaStore.Images.Media.RELATIVE_PATH
+        )
+        private val VIDEO_PROJECTION = arrayOf(
+            MediaStore.Video.Media._ID,
+            MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media.DATE_TAKEN,
+            MediaStore.Video.Media.DATE_MODIFIED,
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.BUCKET_ID,
+            MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
+            MediaStore.Video.Media.MIME_TYPE,
+            MediaStore.Video.Media.DURATION,
+            MediaStore.Video.Media.WIDTH,
+            MediaStore.Video.Media.HEIGHT,
+            MediaStore.Video.Media.RELATIVE_PATH
+        )
     }
 }
