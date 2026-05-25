@@ -11,12 +11,14 @@ import java.util.Map;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    private static final String STATUS_KEY = "status";
+    private static final String MESSAGE_KEY = "message";
 
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<Map<String, Object>> handleResponseStatus(ResponseStatusException e) {
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("status", e.getStatusCode().value());
-        body.put("message", e.getReason());
+        body.put(STATUS_KEY, e.getStatusCode().value());
+        body.put(MESSAGE_KEY, e.getReason());
         return ResponseEntity.status(e.getStatusCode()).body(body);
     }
 
@@ -24,12 +26,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleIllegalState(IllegalStateException e) {
         Map<String, Object> body = new LinkedHashMap<>();
         if (e.getMessage() != null && e.getMessage().contains("authenticated principal")) {
-            body.put("status", 401);
-            body.put("message", e.getMessage());
+            body.put(STATUS_KEY, 401);
+            body.put(MESSAGE_KEY, e.getMessage());
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(body);
         }
-        body.put("status", 500);
-        body.put("message", e.getMessage());
+        body.put(STATUS_KEY, 500);
+        body.put(MESSAGE_KEY, e.getMessage());
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body);
     }
 }
