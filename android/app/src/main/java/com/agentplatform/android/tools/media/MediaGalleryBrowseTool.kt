@@ -971,11 +971,11 @@ class MediaGalleryBrowseTool(
 
         override fun selectionArgs(): Array<String>? = when (this) {
             None, RecentDeleted -> null
-            Camera -> arrayOf("%Camera%")
-            ScreenshotsRecordings -> arrayOf("%Screenshot%", "%Screenshot%", "%Screenshot%")
-            Documents -> arrayOf("%pdf%", "%Documents%", "%Documents%")
+            Camera -> arrayOf(CAMERA_PATTERN)
+            ScreenshotsRecordings -> arrayOf(SCREENSHOT_PATTERN, SCREENSHOT_PATTERN, SCREENSHOT_PATTERN)
+            Documents -> arrayOf("%pdf%", DOCUMENTS_PATTERN, DOCUMENTS_PATTERN)
             Gif -> arrayOf("image/gif")
-            Custom -> arrayOf("%Custom%", "%Custom%")
+            Custom -> arrayOf(CUSTOM_PATTERN, CUSTOM_PATTERN)
             is Bucket -> arrayOf(bucketId)
         }
 
@@ -1000,9 +1000,9 @@ class MediaGalleryBrowseTool(
 
         override fun selectionArgs(): Array<String>? = when (this) {
             None, RecentDeleted -> null
-            Camera -> arrayOf("%Camera%")
-            ScreenshotsRecordings -> arrayOf("%Screen%", "%Screen%", "%Screen%")
-            Custom -> arrayOf("%Custom%", "%Custom%")
+            Camera -> arrayOf(CAMERA_PATTERN)
+            ScreenshotsRecordings -> arrayOf(SCREEN_PATTERN, SCREEN_PATTERN, SCREEN_PATTERN)
+            Custom -> arrayOf(CUSTOM_PATTERN, CUSTOM_PATTERN)
             is Bucket -> arrayOf(bucketId)
         }
 
@@ -1030,5 +1030,10 @@ class MediaGalleryBrowseTool(
         private const val COUNT_SCAN_LIMIT = 5000
         private const val COVER_MIN_DIM = 128
         private const val COVER_MAX_DIM = 320
+        private const val CAMERA_PATTERN = "%Camera%"
+        private const val CUSTOM_PATTERN = "%Custom%"
+        private const val DOCUMENTS_PATTERN = "%Documents%"
+        private const val SCREEN_PATTERN = "%Screen%"
+        private const val SCREENSHOT_PATTERN = "%Screenshot%"
     }
 }

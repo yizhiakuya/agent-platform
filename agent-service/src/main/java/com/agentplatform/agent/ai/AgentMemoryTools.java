@@ -17,20 +17,27 @@ public final class AgentMemoryTools {
 
     private static final int MAX_MEMORY_CONTENT_CHARS = 4_000;
     private static final int DEDUPE_SCAN_LIMIT = 100;
+    private static final String CONTENT_FIELD = "content";
+    private static final String DESCRIPTION_FIELD = "description";
+    private static final String INCLUDE_RAW_FIELD = "includeRaw";
+    private static final String LIMIT_FIELD = "limit";
+    private static final String PROPERTIES_FIELD = "properties";
+    private static final String STRING_TYPE = "string";
+    private static final String TYPE_FIELD = "type";
 
     private AgentMemoryTools() {}
 
     static ObjectNode schema(ObjectMapper mapper) {
         ObjectNode schema = mapper.createObjectNode();
-        schema.put("type", "object");
-        schema.set("properties", mapper.createObjectNode());
+        schema.put(TYPE_FIELD, "object");
+        schema.set(PROPERTIES_FIELD, mapper.createObjectNode());
         return schema;
     }
 
     static ObjectNode prop(ObjectMapper mapper, String type, String description) {
         ObjectNode p = mapper.createObjectNode();
-        p.put("type", type);
-        p.put("description", description);
+        p.put(TYPE_FIELD, type);
+        p.put(DESCRIPTION_FIELD, description);
         return p;
     }
 
@@ -62,12 +69,12 @@ public final class AgentMemoryTools {
         @Override
         public JsonNode schema() {
             ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get("properties");
-            props.set("kind", prop(mapper, "string", "One of fact, preference, rule, lesson."));
-            props.set("content", prop(mapper, "string", "Concise durable memory text. Avoid secrets and transient details."));
+            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
+            props.set("kind", prop(mapper, STRING_TYPE, "One of fact, preference, rule, lesson."));
+            props.set(CONTENT_FIELD, prop(mapper, STRING_TYPE, "Concise durable memory text. Avoid secrets and transient details."));
             ArrayNode required = mapper.createArrayNode();
             required.add("kind");
-            required.add("content");
+            required.add(CONTENT_FIELD);
             schema.set("required", required);
             return schema;
         }
@@ -76,19 +83,19 @@ public final class AgentMemoryTools {
         public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
             String kind = normalizeKind(text(args, "kind", "fact"));
             if (kind == null) return ExecutionResult.error("kind must be one of fact, preference, rule, lesson");
-            String content = text(args, "content", "").trim();
+            String content = text(args, CONTENT_FIELD, "").trim();
             if (content.isBlank()) return ExecutionResult.error("content is required");
             if (content.length() > MAX_MEMORY_CONTENT_CHARS) {
                 return ExecutionResult.error("content too long; max " + MAX_MEMORY_CONTENT_CHARS + " chars");
             }
-            MemoryFactDto duplicate = findDuplicate(userId, kind, content);
+            MemoryFactDto duplicate = findDuplicate(userId, content);
             if (duplicate != null) {
                 ObjectNode out = mapper.createObjectNode();
                 out.put("ok", true);
                 out.put("duplicate", true);
                 out.put("id", String.valueOf(duplicate.id()));
                 out.put("kind", duplicate.kind());
-                out.put("content", duplicate.content());
+                out.put(CONTENT_FIELD, duplicate.content());
                 out.put("message", "A matching memory already exists; no new memory was saved.");
                 return ExecutionResult.text(out.toString());
             }
@@ -99,15 +106,15 @@ public final class AgentMemoryTools {
             out.put("ok", true);
             out.put("id", String.valueOf(saved.get("id")));
             out.put("kind", kind);
-            out.put("content", content);
+            out.put(CONTENT_FIELD, content);
             return ExecutionResult.text(out.toString());
         }
 
-        private MemoryFactDto findDuplicate(UUID userId, String kind, String content) {
+        private MemoryFactDto findDuplicate(UUID userId, String content) {
             List<MemoryFactDto> rows = chatClient.listFacts(Map.of(
                     "userId", userId.toString(),
-                    "limit", DEDUPE_SCAN_LIMIT,
-                    "includeRaw", true));
+                    LIMIT_FIELD, DEDUPE_SCAN_LIMIT,
+                    INCLUDE_RAW_FIELD, true));
             if (rows == null || rows.isEmpty()) return null;
             String normalizedContent = normalizeForDuplicate(content);
             for (MemoryFactDto row : rows) {
@@ -145,20 +152,20 @@ public final class AgentMemoryTools {
         @Override
         public JsonNode schema() {
             ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get("properties");
-            props.set("limit", prop(mapper, "integer", "Maximum rows to return, default 20, max 100."));
-            props.set("includeRaw", prop(mapper, "boolean", "When true, include automatically extracted raw memories too."));
+            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
+            props.set(LIMIT_FIELD, prop(mapper, "integer", "Maximum rows to return, default 20, max 100."));
+            props.set(INCLUDE_RAW_FIELD, prop(mapper, "boolean", "When true, include automatically extracted raw memories too."));
             return schema;
         }
 
         @Override
         public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
-            int limit = args == null ? 20 : Math.max(1, Math.min(args.path("limit").asInt(20), 100));
-            boolean includeRaw = args != null && args.path("includeRaw").asBoolean(false);
+            int limit = args == null ? 20 : Math.max(1, Math.min(args.path(LIMIT_FIELD).asInt(20), 100));
+            boolean includeRaw = args != null && args.path(INCLUDE_RAW_FIELD).asBoolean(false);
             List<MemoryFactDto> rows = chatClient.listFacts(Map.of(
                     "userId", userId.toString(),
-                    "limit", limit,
-                    "includeRaw", includeRaw));
+                    LIMIT_FIELD, limit,
+                    INCLUDE_RAW_FIELD, includeRaw));
             return ExecutionResult.text(mapper.valueToTree(rows == null ? List.of() : rows).toString());
         }
     }
@@ -186,8 +193,8 @@ public final class AgentMemoryTools {
         @Override
         public JsonNode schema() {
             ObjectNode schema = AgentMemoryTools.schema(mapper);
-            ObjectNode props = (ObjectNode) schema.get("properties");
-            props.set("id", prop(mapper, "string", "Memory fact UUID from agent_memory_list."));
+            ObjectNode props = (ObjectNode) schema.get(PROPERTIES_FIELD);
+            props.set("id", prop(mapper, STRING_TYPE, "Memory fact UUID from agent_memory_list."));
             ArrayNode required = mapper.createArrayNode();
             required.add("id");
             schema.set("required", required);

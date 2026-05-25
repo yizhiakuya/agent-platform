@@ -21,15 +21,18 @@ import java.util.UUID;
 @Service
 public class PhotoUploadStorageService {
 
+    private static final String IMAGE_JPEG = "image/jpeg";
+    private static final String IMAGE_PNG = "image/png";
+    private static final String IMAGE_WEBP = "image/webp";
     private static final String URL_PREFIX = "/api/uploads/photos/";
     private static final Map<String, String> CONTENT_TYPE_TO_EXTENSION = Map.of(
-            "image/jpeg", "jpg",
-            "image/png", "png",
-            "image/webp", "webp");
+            IMAGE_JPEG, "jpg",
+            IMAGE_PNG, "png",
+            IMAGE_WEBP, "webp");
     private static final Map<String, String> EXTENSION_TO_CONTENT_TYPE = Map.of(
-            "jpg", "image/jpeg",
-            "png", "image/png",
-            "webp", "image/webp");
+            "jpg", IMAGE_JPEG,
+            "png", IMAGE_PNG,
+            "webp", IMAGE_WEBP);
 
     private final PhotoUploadProperties props;
     private final Path root;
@@ -156,7 +159,7 @@ public class PhotoUploadStorageService {
         String value = separator >= 0 ? contentType.substring(0, separator) : contentType;
         value = value.trim().toLowerCase(Locale.ROOT);
         if (value.equals("image/jpg") || value.equals("image/pjpeg")) {
-            return "image/jpeg";
+            return IMAGE_JPEG;
         }
         return value;
     }
@@ -166,7 +169,7 @@ public class PhotoUploadStorageService {
                 && (bytes[0] & 0xff) == 0xff
                 && (bytes[1] & 0xff) == 0xd8
                 && (bytes[2] & 0xff) == 0xff) {
-            return "image/jpeg";
+            return IMAGE_JPEG;
         }
         if (bytes.length >= 8
                 && (bytes[0] & 0xff) == 0x89
@@ -177,7 +180,7 @@ public class PhotoUploadStorageService {
                 && bytes[5] == 0x0a
                 && bytes[6] == 0x1a
                 && bytes[7] == 0x0a) {
-            return "image/png";
+            return IMAGE_PNG;
         }
         if (bytes.length >= 12
                 && bytes[0] == 0x52
@@ -188,7 +191,7 @@ public class PhotoUploadStorageService {
                 && bytes[9] == 0x45
                 && bytes[10] == 0x42
                 && bytes[11] == 0x50) {
-            return "image/webp";
+            return IMAGE_WEBP;
         }
         return null;
     }

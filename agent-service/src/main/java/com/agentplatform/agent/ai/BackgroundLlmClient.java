@@ -24,8 +24,6 @@ import java.util.Set;
 @Service
 public class BackgroundLlmClient {
 
-    public BackgroundLlmClient() {}
-
     @Nullable
     public CompletionPlan choosePlan(List<ConfiguredProvider> providers, @Nullable String requestedModel) {
         List<CompletionPlan> plans = candidatePlans(providers, requestedModel);
