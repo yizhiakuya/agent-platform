@@ -449,7 +449,7 @@ class SemanticPhotoSearchFormattingTest {
         assertEquals("camera", dst.path("bucket_id").asText());
     }
 
-    private SemanticPhotoSearchCallback callbackShell() throws Exception {
+    private SemanticPhotoSearchCallback callbackShell() {
         return new SemanticPhotoSearchCallback(mapper, true);
     }
 
