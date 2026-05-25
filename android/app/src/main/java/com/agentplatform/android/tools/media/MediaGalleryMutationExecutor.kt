@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -94,18 +95,17 @@ internal class MediaGalleryMutationExecutor(
     private val context: Context,
     private val mapper: ObjectMapper,
     private val tool: Tool,
-    private val action: MediaGalleryMutationAction
+    private val action: MediaGalleryMutationAction,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
-    suspend fun execute(args: JsonNode): JsonNode = withContext(Dispatchers.IO) {
+    suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             throw UnsupportedOperationException(action.unsupportedMessage)
         }
 
         val items = parseItems(args)
-        val photos = items.filter { it.mediaType == "photo" }.map { it.id }
-        val videos = items.filter { it.mediaType == "video" }.map { it.id }
-        val missing = items.filter { queryTrashState(it) == null }
-        if (missing.isNotEmpty()) {
+        val missingItems = items.filter { queryTrashState(it) == null }
+        if (missingItems.isNotEmpty()) {
             return@withContext mediaAccessError(
                 args = args,
                 items = items,
@@ -115,84 +115,24 @@ internal class MediaGalleryMutationExecutor(
                 usedManageMedia = false,
                 usedSystemConfirmation = false
             ).apply {
-                set<ArrayNode>("missing_items", itemsArray(missing))
+                set<ArrayNode>("missing_items", itemsArray(missingItems))
             }
         }
 
-        val shellAvailable = PrivilegeManager.status(context).shellAvailable
-        var usedPrivilegedShell = false
-        var usedManageMedia = false
-        var usedSystemConfirmation = false
-        var commandResults: List<PrivilegeManager.MediaCommandResult> = emptyList()
-
-        if (shellAvailable) {
-            commandResults = PrivilegeManager.setImagesTrashed(photos, trashed = action.targetTrashed) +
-                PrivilegeManager.setVideosTrashed(videos, trashed = action.targetTrashed)
-            if (commandResults.all { it.result.ok } && verifyItemsState(items)) {
-                usedPrivilegedShell = true
-            }
-        }
-
-        if (!usedPrivilegedShell && PrivilegeManager.canManageMedia(context)) {
-            try {
-                var updatedCount = 0
-                items.forEach { item ->
-                    val updated = context.contentResolver.update(
-                        item.uri(),
-                        ContentValues().apply { put("is_trashed", if (action.targetTrashed) 1 else 0) },
-                        null,
-                        null
-                    )
-                    if (updated > 0) updatedCount += 1
-                }
-                if (updatedCount == items.size && verifyItemsState(items)) {
-                    usedManageMedia = true
-                }
-            } catch (e: SecurityException) {
-                usedManageMedia = false
-            }
-        }
-
-        if (!usedPrivilegedShell && !usedManageMedia) {
-            usedSystemConfirmation = requestSystemMutation(items)
-        }
-
-        if (!usedPrivilegedShell && !usedManageMedia && !usedSystemConfirmation) {
+        val mutation = mutateItems(items)
+        if (!mutation.succeeded) {
             return@withContext mediaAccessError(
                 args = args,
                 items = items,
-                commandResults = commandResults,
+                commandResults = mutation.commandResults,
                 code = "media_mutation_denied",
                 message = action.deniedMessage,
                 usedManageMedia = false,
-                usedSystemConfirmation = usedSystemConfirmation
+                usedSystemConfirmation = mutation.usedSystemConfirmation
             )
         }
 
-        val result = mapper.createObjectNode().apply {
-            set<ArrayNode>("items", itemsArray(items))
-            put("trashed", action.targetTrashed)
-            if (action.includeRestoredField) put("restored", true)
-            put("affected_count", items.size)
-            put("used_privileged_shell", usedPrivilegedShell)
-            put("used_manage_media", usedManageMedia)
-            put("used_system_confirmation", usedSystemConfirmation)
-            put("system_confirmation_required", usedSystemConfirmation)
-            put("system_confirmation_suppressed", false)
-            if (commandResults.isNotEmpty()) {
-                set<ArrayNode>("privileged_shell_results", commandResultsArray(commandResults))
-            }
-            set<JsonNode>("summary", mapper.createObjectNode().apply {
-                put("affected_count", items.size)
-                put("photo_count", photos.size)
-                put("video_count", videos.size)
-                put("trashed", action.targetTrashed)
-                if (action.includeRestoredField) put("restored", true)
-                put("used_privileged_shell", usedPrivilegedShell)
-                put("used_manage_media", usedManageMedia)
-                put("used_system_confirmation", usedSystemConfirmation)
-            })
-        }
+        val result = successResult(items, mutation)
         ToolResultEnvelope.applyStandardFields(
             mapper = mapper,
             tool = tool,
@@ -203,6 +143,99 @@ internal class MediaGalleryMutationExecutor(
             request = args
         )
     }
+
+    private suspend fun mutateItems(items: List<GalleryMediaItem>): MutationOutcome {
+        val shellOutcome = mutateWithShell(items)
+        if (shellOutcome.usedPrivilegedShell) {
+            return shellOutcome
+        }
+
+        if (mutateWithManageMedia(items)) {
+            return shellOutcome.copy(usedManageMedia = true)
+        }
+
+        val usedSystemConfirmation = requestSystemMutation(items)
+        return shellOutcome.copy(usedSystemConfirmation = usedSystemConfirmation)
+    }
+
+    private fun mutateWithShell(items: List<GalleryMediaItem>): MutationOutcome {
+        if (!PrivilegeManager.status(context).shellAvailable) {
+            return MutationOutcome()
+        }
+
+        val photos = items.filter { it.mediaType == "photo" }.map { it.id }
+        val videos = items.filter { it.mediaType == "video" }.map { it.id }
+        val commands = PrivilegeManager.setImagesTrashed(photos, trashed = action.targetTrashed) +
+            PrivilegeManager.setVideosTrashed(videos, trashed = action.targetTrashed)
+        val succeeded = commands.all { it.result.ok } && verifyItemsState(items)
+        return MutationOutcome(
+            usedPrivilegedShell = succeeded,
+            commandResults = commands
+        )
+    }
+
+    private fun mutateWithManageMedia(items: List<GalleryMediaItem>): Boolean {
+        if (!PrivilegeManager.canManageMedia(context)) {
+            return false
+        }
+
+        return try {
+            updateTrashState(items) == items.size && verifyItemsState(items)
+        } catch (e: SecurityException) {
+            false
+        }
+    }
+
+    private fun updateTrashState(items: List<GalleryMediaItem>): Int {
+        var updatedCount = 0
+        items.forEach { item ->
+            val updated = context.contentResolver.update(
+                item.uri(),
+                ContentValues().apply { put("is_trashed", if (action.targetTrashed) 1 else 0) },
+                null,
+                null
+            )
+            if (updated > 0) updatedCount += 1
+        }
+        return updatedCount
+    }
+
+    private fun successResult(items: List<GalleryMediaItem>, mutation: MutationOutcome): ObjectNode {
+        val photos = items.count { it.mediaType == "photo" }
+        val videos = items.count { it.mediaType == "video" }
+        return mapper.createObjectNode().apply {
+            set<ArrayNode>("items", itemsArray(items))
+            put("trashed", action.targetTrashed)
+            if (action.includeRestoredField) put("restored", true)
+            put("affected_count", items.size)
+            put("used_privileged_shell", mutation.usedPrivilegedShell)
+            put("used_manage_media", mutation.usedManageMedia)
+            put("used_system_confirmation", mutation.usedSystemConfirmation)
+            put("system_confirmation_required", mutation.usedSystemConfirmation)
+            put("system_confirmation_suppressed", false)
+            if (mutation.commandResults.isNotEmpty()) {
+                set<ArrayNode>("privileged_shell_results", commandResultsArray(mutation.commandResults))
+            }
+            set<JsonNode>("summary", successSummary(items.size, photos, videos, mutation))
+        }
+    }
+
+    private fun successSummary(
+        itemCount: Int,
+        photoCount: Int,
+        videoCount: Int,
+        mutation: MutationOutcome
+    ): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("affected_count", itemCount)
+            put("photo_count", photoCount)
+            put("video_count", videoCount)
+            put("trashed", action.targetTrashed)
+            if (action.includeRestoredField) put("restored", true)
+            put("used_privileged_shell", mutation.usedPrivilegedShell)
+            put("used_manage_media", mutation.usedManageMedia)
+            put("used_system_confirmation", mutation.usedSystemConfirmation)
+        }
 
     private suspend fun requestSystemMutation(items: List<GalleryMediaItem>): Boolean {
         val uris = items.map { it.uri() }
@@ -343,6 +376,16 @@ internal class MediaGalleryMutationExecutor(
             }
             return ContentUris.withAppendedId(base, id)
         }
+    }
+
+    private data class MutationOutcome(
+        val usedPrivilegedShell: Boolean = false,
+        val usedManageMedia: Boolean = false,
+        val usedSystemConfirmation: Boolean = false,
+        val commandResults: List<PrivilegeManager.MediaCommandResult> = emptyList()
+    ) {
+        val succeeded: Boolean
+            get() = usedPrivilegedShell || usedManageMedia || usedSystemConfirmation
     }
 
     private companion object {

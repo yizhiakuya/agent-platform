@@ -106,7 +106,7 @@ public final class PromptAssembler {
         if (Boolean.TRUE.equals(mem.enableWebSearch())) {
             out.add(ToolUnion.ofWebSearchTool20250305(
                     WebSearchTool20250305.builder()
-                            .maxUses((long) mem.webSearchMaxUses())
+                            .maxUses(mem.webSearchMaxUses())
                             .build()));
         }
         return out;

@@ -90,8 +90,7 @@ public class SkillRegistry {
                             def.name());
                 }
             } catch (Exception e) {
-                log.warn("Failed to parse skill '{}': {}; skipping.",
-                        safeUri(r), e.getMessage());
+                warnSkill(r, "Failed to parse skill '{}': {}; skipping.", e.getMessage());
             }
         }
         log.info("Loaded {} skill(s): {}", skills.size(), skills.keySet());
@@ -107,7 +106,7 @@ public class SkillRegistry {
             raw = StreamUtils.copyToString(in, StandardCharsets.UTF_8);
         }
         if (raw == null || raw.isBlank()) {
-            log.warn("Skill '{}' is empty; skipping.", safeUri(resource));
+            warnSkill(resource, "Skill '{}' is empty; skipping.");
             return null;
         }
 
@@ -116,8 +115,7 @@ public class SkillRegistry {
         String normalized = raw.replace("\r\n", "\n").replace('\r', '\n');
 
         if (!normalized.startsWith("---\n")) {
-            log.warn("Skill '{}' missing leading '---' YAML front-matter; skipping.",
-                    safeUri(resource));
+            warnSkill(resource, "Skill '{}' missing leading '---' YAML front-matter; skipping.");
             return null;
         }
         // Find the closing "---" delimiter on its own line.
@@ -127,8 +125,7 @@ public class SkillRegistry {
             // body). Tolerate trailing-newline-less '---' too.
             closing = normalized.indexOf("\n---", 4);
             if (closing < 0) {
-                log.warn("Skill '{}' missing closing '---' for YAML front-matter; skipping.",
-                        safeUri(resource));
+                warnSkill(resource, "Skill '{}' missing closing '---' for YAML front-matter; skipping.");
                 return null;
             }
         }
@@ -145,25 +142,35 @@ public class SkillRegistry {
                 Map<String, Object> casted = (Map<String, Object>) m;
                 meta = casted;
             } else {
-                log.warn("Skill '{}' front-matter is not a YAML mapping; skipping.",
-                        safeUri(resource));
+                warnSkill(resource, "Skill '{}' front-matter is not a YAML mapping; skipping.");
                 return null;
             }
         } catch (RuntimeException e) {
-            log.warn("Skill '{}' front-matter YAML parse failed: {}; skipping.",
-                    safeUri(resource), e.getMessage());
+            warnSkill(resource, "Skill '{}' front-matter YAML parse failed: {}; skipping.", e.getMessage());
             return null;
         }
 
         Object nameObj = meta.get("name");
         Object descObj = meta.get("description");
         if (!(nameObj instanceof String name) || name.isBlank()) {
-            log.warn("Skill '{}' missing 'name' in front-matter; skipping.", safeUri(resource));
+            warnSkill(resource, "Skill '{}' missing 'name' in front-matter; skipping.");
             return null;
         }
         String description = (descObj instanceof String s) ? s : "";
 
         return new SkillDef(name.trim(), description.trim(), body.stripLeading());
+    }
+
+    private static void warnSkill(Resource resource, String message) {
+        if (log.isWarnEnabled()) {
+            log.warn(message, safeUri(resource));
+        }
+    }
+
+    private static void warnSkill(Resource resource, String message, String detail) {
+        if (log.isWarnEnabled()) {
+            log.warn(message, safeUri(resource), detail);
+        }
     }
 
     private static String safeUri(Resource r) {
