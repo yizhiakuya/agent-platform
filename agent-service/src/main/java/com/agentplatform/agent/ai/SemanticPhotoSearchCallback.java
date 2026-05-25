@@ -279,28 +279,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
             }
         }
 
-        ObjectNode result = mapper.createObjectNode();
-        result.put("ok", true);
-        result.put(SCHEMA_VERSION_FIELD, AGENT_TOOL_CONTRACT_VERSION);
-        result.put("tool", TOOL_NAME);
-        result.put(RESULT_TYPE_FIELD, SELECTED_RESULT_TYPE);
-        result.put(QUERY_FIELD, query);
-        result.put(COUNT_FIELD, outPhotos.size());
-        result.put(REQUESTED_LIMIT_FIELD, limit);
-        result.put(REVIEW_LIMIT_FIELD, reviewLimit);
-        result.put(REVIEWED_COUNT_FIELD, take);
-        result.put(CANDIDATE_K_FIELD, contract.candidateK());
-        result.put(CANDIDATE_ONLY_FIELD, false);
-        result.put(DISPLAY_POLICY_FIELD, resultDisplayPolicy(contract));
-        ObjectNode ranking = mapper.createObjectNode();
-        ranking.put("mode", contract.rankingMode());
-        ranking.put(CANDIDATE_K_FIELD, contract.candidateK());
-        ranking.put(MIN_SCORE_FIELD, round((float) contract.minScore()));
-        result.set(RANKING_FIELD, ranking);
-        ObjectNode sort = mapper.createObjectNode();
-        sort.put("by", contract.sortBy());
-        sort.put(DIRECTION_FIELD, contract.sortDirection());
-        result.set("sort", sort);
+        ObjectNode result = selectedResult(query, outPhotos.size(), limit, reviewLimit, take, contract);
         result.put(SCANNED_FIELD, candidateRoot.path(SCANNED_FIELD).asInt(scored.size()));
         result.put(SEMANTIC_ENGINE_FIELD, "realtime_text_embedding+visual_labels");
         result.put(FALLBACK_REALTIME_FIELD, true);
@@ -402,28 +381,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
             }
         }
 
-        ObjectNode result = mapper.createObjectNode();
-        result.put("ok", true);
-        result.put(SCHEMA_VERSION_FIELD, AGENT_TOOL_CONTRACT_VERSION);
-        result.put("tool", TOOL_NAME);
-        result.put(RESULT_TYPE_FIELD, SELECTED_RESULT_TYPE);
-        result.put(QUERY_FIELD, query);
-        result.put(COUNT_FIELD, outPhotos.size());
-        result.put(REQUESTED_LIMIT_FIELD, contract.resultLimit());
-        result.put(REVIEW_LIMIT_FIELD, contract.reviewLimit());
-        result.put(REVIEWED_COUNT_FIELD, take);
-        result.put(CANDIDATE_K_FIELD, contract.candidateK());
-        result.put(CANDIDATE_ONLY_FIELD, false);
-        result.put(DISPLAY_POLICY_FIELD, resultDisplayPolicy(contract));
-        ObjectNode ranking = mapper.createObjectNode();
-        ranking.put("mode", contract.rankingMode());
-        ranking.put(CANDIDATE_K_FIELD, contract.candidateK());
-        ranking.put(MIN_SCORE_FIELD, round((float) contract.minScore()));
-        result.set(RANKING_FIELD, ranking);
-        ObjectNode sort = mapper.createObjectNode();
-        sort.put("by", contract.sortBy());
-        sort.put(DIRECTION_FIELD, contract.sortDirection());
-        result.set("sort", sort);
+        ObjectNode result = selectedResult(query, outPhotos.size(), contract.resultLimit(), contract.reviewLimit(), take, contract);
         result.put(SEMANTIC_ENGINE_FIELD, "photo_index");
         result.put(FALLBACK_REALTIME_FIELD, false);
         result.put("embedding_model", photoEmbeddingService.model());
@@ -479,28 +437,7 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
                 reviewCandidates.add(withoutBinaryFields(copy));
             }
         }
-        ObjectNode out = mapper.createObjectNode();
-        out.put("ok", true);
-        out.put(SCHEMA_VERSION_FIELD, AGENT_TOOL_CONTRACT_VERSION);
-        out.put("tool", TOOL_NAME);
-        out.put(RESULT_TYPE_FIELD, SELECTED_RESULT_TYPE);
-        out.put(QUERY_FIELD, query);
-        out.put(COUNT_FIELD, arr.size());
-        out.put(REQUESTED_LIMIT_FIELD, contract.resultLimit());
-        out.put(REVIEW_LIMIT_FIELD, contract.reviewLimit());
-        out.put(REVIEWED_COUNT_FIELD, take);
-        out.put(CANDIDATE_K_FIELD, contract.candidateK());
-        out.put(CANDIDATE_ONLY_FIELD, false);
-        out.put(DISPLAY_POLICY_FIELD, resultDisplayPolicy(contract));
-        ObjectNode ranking = mapper.createObjectNode();
-        ranking.put("mode", contract.rankingMode());
-        ranking.put(CANDIDATE_K_FIELD, contract.candidateK());
-        ranking.put(MIN_SCORE_FIELD, round((float) contract.minScore()));
-        out.set(RANKING_FIELD, ranking);
-        ObjectNode sort = mapper.createObjectNode();
-        sort.put("by", contract.sortBy());
-        sort.put(DIRECTION_FIELD, contract.sortDirection());
-        out.set("sort", sort);
+        ObjectNode out = selectedResult(query, arr.size(), contract.resultLimit(), contract.reviewLimit(), take, contract);
         out.put(SCANNED_FIELD, candidateRoot.path(SCANNED_FIELD).asInt(ordered.size()));
         out.put(SEMANTIC_ENGINE_FIELD, "local_text_visual_fallback");
         out.set(PHOTOS_FIELD, arr);
@@ -511,6 +448,37 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         addInspectNext(out);
         attachFullImageForSingleResult(out, contract);
         return out;
+    }
+
+    private ObjectNode selectedResult(String query,
+                                      int count,
+                                      int requestedLimit,
+                                      int reviewLimit,
+                                      int reviewedCount,
+                                      SearchContract contract) {
+        ObjectNode result = mapper.createObjectNode();
+        result.put("ok", true);
+        result.put(SCHEMA_VERSION_FIELD, AGENT_TOOL_CONTRACT_VERSION);
+        result.put("tool", TOOL_NAME);
+        result.put(RESULT_TYPE_FIELD, SELECTED_RESULT_TYPE);
+        result.put(QUERY_FIELD, query);
+        result.put(COUNT_FIELD, count);
+        result.put(REQUESTED_LIMIT_FIELD, requestedLimit);
+        result.put(REVIEW_LIMIT_FIELD, reviewLimit);
+        result.put(REVIEWED_COUNT_FIELD, reviewedCount);
+        result.put(CANDIDATE_K_FIELD, contract.candidateK());
+        result.put(CANDIDATE_ONLY_FIELD, false);
+        result.put(DISPLAY_POLICY_FIELD, resultDisplayPolicy(contract));
+        ObjectNode ranking = mapper.createObjectNode();
+        ranking.put("mode", contract.rankingMode());
+        ranking.put(CANDIDATE_K_FIELD, contract.candidateK());
+        ranking.put(MIN_SCORE_FIELD, round((float) contract.minScore()));
+        result.set(RANKING_FIELD, ranking);
+        ObjectNode sort = mapper.createObjectNode();
+        sort.put("by", contract.sortBy());
+        sort.put(DIRECTION_FIELD, contract.sortDirection());
+        result.set("sort", sort);
+        return result;
     }
 
     private JsonNode resultForLlm(ObjectNode result) {
