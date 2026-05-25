@@ -200,9 +200,18 @@ class DeviceWebSocketIntegrationTest {
 
         TestDeviceClient(JsonRpcCodec codec) { this.codec = codec; }
 
-        @Override public void afterConnectionEstablished(WebSocketSession session) {}
-        @Override public void handleTransportError(WebSocketSession session, Throwable exception) {}
-        @Override public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {}
+        @Override public void afterConnectionEstablished(WebSocketSession session) {
+            // No connection lifecycle state is needed for this test client.
+        }
+
+        @Override public void handleTransportError(WebSocketSession session, Throwable exception) {
+            // Transport failures are surfaced by the client future in these tests.
+        }
+
+        @Override public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+            // The tests assert registry cleanup rather than client-side close state.
+        }
+
         @Override public boolean supportsPartialMessages() { return false; }
 
         @Override
