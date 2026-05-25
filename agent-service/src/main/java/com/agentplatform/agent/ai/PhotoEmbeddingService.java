@@ -65,9 +65,15 @@ public class PhotoEmbeddingService {
                 .baseUrl(baseUrl)
                 .exchangeStrategies(exchangeStrategies)
                 .build();
+        String authState;
+        if (apiKey.isBlank()) {
+            authState = requiresApiKey ? "missing" : "none";
+        } else {
+            authState = "bearer";
+        }
         log.info("[photo-embed] configured enabled={} baseUrl={} model={} dim={} textTask={} imageTask={} imageField={} timeoutSeconds={} auth={}",
                 enabled, baseUrl, model, dim, textTask, imageTask, inputImageField, requestTimeoutSeconds,
-                apiKey.isBlank() ? (requiresApiKey ? "missing" : "none") : "bearer");
+                authState);
     }
 
     public float[] embedText(String text) {
