@@ -32,46 +32,24 @@ class PhotosListByAlbumTool(
         `max_dim` (512-768) when browsing many photos.
     """.trimIndent()
 
-    override val schema: JsonNode = mapper.readTree(
-        """
-        {
-          "type": "object",
-          "properties": {
-            "bucket_id": {
-              "type": "string",
-              "description": "Album bucket id from photos.list_albums."
-            },
-            "limit": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 12,
-              "description": "Number of album photos the agent wants in this call. Choose the count that matches the task."
-            },
-            "offset": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "description": "Number of matching photos to skip. Use next_args.offset from a previous result to fetch the next page."
-            },
-            "max_dim": {
-              "type": "integer",
-              "minimum": 512,
-              "maximum": 2048,
-              "default": 1024,
-              "description": "Long-edge size for returned display images. Use 512-768 for many photos; use 1024-2048 for detail."
-            },
-            "date_after": {
-              "type": "integer",
-              "description": "Only return photos taken on/after this UNIX millisecond timestamp (UTC)."
-            },
-            "date_before": {
-              "type": "integer",
-              "description": "Only return photos taken on/before this UNIX millisecond timestamp (UTC)."
-            }
-          },
-          "required": ["bucket_id"]
-        }
-        """.trimIndent()
+    override val schema: JsonNode = PhotoListQueryHelper.gridSchema(
+        mapper = mapper,
+        itemLabel = "album photos",
+        additionalProperties = listOf(
+            "bucket_id" to PhotoListQueryHelper.stringProperty(
+                mapper,
+                "Album bucket id from photos.list_albums."
+            ),
+            "date_after" to PhotoListQueryHelper.integerProperty(
+                mapper,
+                "Only return photos taken on/after this UNIX millisecond timestamp (UTC)."
+            ),
+            "date_before" to PhotoListQueryHelper.integerProperty(
+                mapper,
+                "Only return photos taken on/before this UNIX millisecond timestamp (UTC)."
+            )
+        ),
+        required = listOf("bucket_id")
     )
 
     override val confirmRequired: Boolean = false

@@ -34,37 +34,15 @@ class PhotosRecentScreenshotsTool(
         `max_dim` (512-768) when browsing many screenshots.
     """.trimIndent()
 
-    override val schema: JsonNode = mapper.readTree(
-        """
-        {
-          "type": "object",
-          "properties": {
-            "limit": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 12,
-              "description": "Number of screenshots the agent wants in this call. Choose the count that matches the task."
-            },
-            "offset": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "description": "Number of matching screenshots to skip. Use next_args.offset from a previous result to fetch the next page."
-            },
-            "max_dim": {
-              "type": "integer",
-              "minimum": 512,
-              "maximum": 2048,
-              "default": 1024,
-              "description": "Long-edge size for returned display images. Use 512-768 for many screenshots; use 1024-2048 for detail."
-            },
-            "name_contains": {
-              "type": "string",
-              "description": "Optional secondary filter on the filename within screenshots."
-            }
-          }
-        }
-        """.trimIndent()
+    override val schema: JsonNode = PhotoListQueryHelper.gridSchema(
+        mapper = mapper,
+        itemLabel = "screenshots",
+        additionalProperties = listOf(
+            "name_contains" to PhotoListQueryHelper.stringProperty(
+                mapper,
+                "Optional secondary filter on the filename within screenshots."
+            )
+        )
     )
 
     override val confirmRequired: Boolean = false

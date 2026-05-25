@@ -51,46 +51,24 @@ class PhotosListRecentTool(
         so you do not repeat the same first page.
     """.trimIndent()
 
-    override val schema: JsonNode = mapper.readTree(
-        """
-        {
-          "type": "object",
-          "properties": {
-            "limit": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 12,
-              "description": "Number of photos the agent wants in this call. Choose the count that matches the task."
-            },
-            "offset": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "description": "Number of matching photos to skip. Use next_args.offset from a previous result to fetch the next page."
-            },
-            "max_dim": {
-              "type": "integer",
-              "minimum": 512,
-              "maximum": 2048,
-              "default": 1024,
-              "description": "Long-edge size for returned display images. Use 512-768 for many photos; use 1024-2048 for detail."
-            },
-            "name_contains": {
-              "type": "string",
-              "description": "Case-insensitive substring of the filename. Useful for filtering Android screenshots by source app (e.g. 'com.max.xiaoheihe')."
-            },
-            "date_after": {
-              "type": "integer",
-              "description": "Only return photos taken on/after this UNIX millisecond timestamp (UTC)."
-            },
-            "date_before": {
-              "type": "integer",
-              "description": "Only return photos taken on/before this UNIX millisecond timestamp (UTC)."
-            }
-          },
-          "required": ["limit"]
-        }
-        """.trimIndent()
+    override val schema: JsonNode = PhotoListQueryHelper.gridSchema(
+        mapper = mapper,
+        itemLabel = "photos",
+        additionalProperties = listOf(
+            "name_contains" to PhotoListQueryHelper.stringProperty(
+                mapper,
+                "Case-insensitive substring of the filename. Useful for filtering Android screenshots by source app (e.g. 'com.max.xiaoheihe')."
+            ),
+            "date_after" to PhotoListQueryHelper.integerProperty(
+                mapper,
+                "Only return photos taken on/after this UNIX millisecond timestamp (UTC)."
+            ),
+            "date_before" to PhotoListQueryHelper.integerProperty(
+                mapper,
+                "Only return photos taken on/before this UNIX millisecond timestamp (UTC)."
+            )
+        ),
+        required = listOf("limit")
     )
 
     override val confirmRequired: Boolean = false

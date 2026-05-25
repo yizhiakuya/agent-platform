@@ -71,6 +71,73 @@ internal object PhotoListQueryHelper {
     fun optionalLong(args: JsonNode, field: String): Long? =
         args.path(field).let { if (it.isNumber) it.asLong() else null }
 
+    fun gridSchema(
+        mapper: ObjectMapper,
+        itemLabel: String,
+        additionalProperties: List<Pair<String, ObjectNode>> = emptyList(),
+        required: List<String> = emptyList()
+    ): ObjectNode {
+        val properties = mapper.createObjectNode().apply {
+            set<ObjectNode>(
+                "limit",
+                integerProperty(
+                    mapper = mapper,
+                    minimum = 1,
+                    defaultValue = DEFAULT_LIMIT,
+                    description = "Number of $itemLabel the agent wants in this call. Choose the count that matches the task."
+                )
+            )
+            set<ObjectNode>(
+                "offset",
+                integerProperty(
+                    mapper = mapper,
+                    minimum = 0,
+                    defaultValue = 0,
+                    description = "Number of matching $itemLabel to skip. Use next_args.offset from a previous result to fetch the next page."
+                )
+            )
+            set<ObjectNode>(
+                "max_dim",
+                integerProperty(
+                    mapper = mapper,
+                    minimum = MIN_MAX_DIM,
+                    maximum = MAX_MAX_DIM,
+                    defaultValue = DEFAULT_MAX_DIM,
+                    description = "Long-edge size for returned display images. Use 512-768 for many $itemLabel; use 1024-2048 for detail."
+                )
+            )
+            additionalProperties.forEach { (name, property) -> set<ObjectNode>(name, property) }
+        }
+        return mapper.createObjectNode().apply {
+            put("type", "object")
+            set<ObjectNode>("properties", properties)
+            if (required.isNotEmpty()) {
+                set<ArrayNode>("required", mapper.createArrayNode().apply { required.forEach(::add) })
+            }
+        }
+    }
+
+    fun stringProperty(mapper: ObjectMapper, description: String): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("type", "string")
+            put("description", description)
+        }
+
+    fun integerProperty(
+        mapper: ObjectMapper,
+        description: String,
+        minimum: Int? = null,
+        maximum: Int? = null,
+        defaultValue: Int? = null
+    ): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("type", "integer")
+            minimum?.let { put("minimum", it) }
+            maximum?.let { put("maximum", it) }
+            defaultValue?.let { put("default", it) }
+            put("description", description)
+        }
+
     fun selection(filters: List<Pair<String, String?>>): PhotoSelection {
         val present = filters.mapNotNull { (clause, value) -> value?.let { clause to it } }
         return PhotoSelection(
