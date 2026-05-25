@@ -1383,7 +1383,23 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
                                          int scanLimit,
                                          SearchContract contract) {}
 
-    private record QueryEmbeddingResult(float[] value, String failureReason) {
+    private static final class QueryEmbeddingResult {
+        private final float[] value;
+        private final String failureReason;
+
+        private QueryEmbeddingResult(float[] value, String failureReason) {
+            this.value = value;
+            this.failureReason = failureReason;
+        }
+
+        private float[] value() {
+            return value;
+        }
+
+        private String failureReason() {
+            return failureReason;
+        }
+
         private boolean failed() {
             return failureReason != null;
         }
