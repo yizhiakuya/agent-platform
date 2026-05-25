@@ -43,9 +43,8 @@ class JwtUtilTest {
     }
 
     @Test
-    void expired_token_rejected() throws InterruptedException {
-        String token = jwt.issueUserToken(UUID.randomUUID(), Duration.ofMillis(1));
-        Thread.sleep(20);
+    void expired_token_rejected() {
+        String token = jwt.issueUserToken(UUID.randomUUID(), Duration.ofSeconds(-1));
         assertThatThrownBy(() -> jwt.verify(token))
                 .isInstanceOf(ExpiredJwtException.class);
     }
