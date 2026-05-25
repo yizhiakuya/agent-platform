@@ -4,6 +4,7 @@ import android.content.Context
 import com.agentplatform.android.core.tool.Tool
 import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.privilege.PrivilegeManager
+import com.agentplatform.android.privilege.PrivilegeManager.CommandResult
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.CoroutineDispatcher
@@ -73,15 +74,7 @@ class PrivilegesConfigureTool(
         val before = PrivilegeManager.status(context)
         val command = runCatching { PrivilegeManager.configureManageMedia(context) }
             .getOrElse {
-                return ToolResultEnvelope.error(
-                    mapper = mapper,
-                    tool = this@PrivilegesConfigureTool,
-                    code = "shizuku_unavailable",
-                    message = it.message ?: shizukuUnavailableMessage,
-                    retryable = true,
-                    hint = shizukuRetryHint,
-                    request = args
-                )
+                return shizukuUnavailable(args, it)
             }
         val after = PrivilegeManager.status(context)
         val ok = command.ok && after.manageMediaGranted
@@ -112,63 +105,16 @@ class PrivilegesConfigureTool(
 
     private fun configureXiaomiBackground(args: JsonNode): JsonNode {
         val commands = runCatching { PrivilegeManager.configureXiaomiBackgroundOps(context) }
-            .getOrElse {
-                return ToolResultEnvelope.error(
-                    mapper = mapper,
-                    tool = this@PrivilegesConfigureTool,
-                    code = "shizuku_unavailable",
-                    message = it.message ?: shizukuUnavailableMessage,
-                    retryable = true,
-                    hint = shizukuRetryHint,
-                    request = args
-                )
-            }
-        val results = mapper.createArrayNode()
-        var successCount = 0
-        for ((command, result) in commands) {
-            if (result.ok) successCount++
-            results.addObject().apply {
-                put("command", command)
-                put("exit_code", result.exitCode)
-                put("timed_out", result.timedOut)
-                put("ok", result.ok)
-                if (result.stdout.isNotBlank()) put("stdout", result.stdout.take(1000))
-                if (result.stderr.isNotBlank()) put("stderr", result.stderr.take(1000))
-            }
+            .getOrElse { return shizukuUnavailable(args, it) }
+        return configureCommandBatch(args, "xiaomi_background", commands) { success, total ->
+            success == total
         }
-        val ok = successCount == commands.size
-        val out = mapper.createObjectNode().apply {
-            put("target", "xiaomi_background")
-            put("success_count", successCount)
-            put("total_count", commands.size)
-            set<JsonNode>("commands", results)
-            set<JsonNode>("summary", mapper.createObjectNode().apply {
-                put("ok", ok)
-                put("success_count", successCount)
-                put("total_count", commands.size)
-            })
-        }
-        return ToolResultEnvelope.applyStandardFields(
-            mapper,
-            this@PrivilegesConfigureTool,
-            out,
-            ok = ok,
-            request = args
-        )
     }
 
     private fun configureBattery(args: JsonNode): JsonNode {
         val command = runCatching { PrivilegeManager.configureBatteryWhitelist(context) }
             .getOrElse {
-                return ToolResultEnvelope.error(
-                    mapper = mapper,
-                    tool = this@PrivilegesConfigureTool,
-                    code = "shizuku_unavailable",
-                    message = it.message ?: shizukuUnavailableMessage,
-                    retryable = true,
-                    hint = shizukuRetryHint,
-                    request = args
-                )
+                return shizukuUnavailable(args, it)
             }
         val unrestricted = PrivilegeManager.batteryUnrestricted(context)
         val ok = command.ok && unrestricted
@@ -195,17 +141,18 @@ class PrivilegesConfigureTool(
 
     private fun configureStandardAppOps(args: JsonNode): JsonNode {
         val commands = runCatching { PrivilegeManager.configureStandardAppOps(context) }
-            .getOrElse {
-                return ToolResultEnvelope.error(
-                    mapper = mapper,
-                    tool = this@PrivilegesConfigureTool,
-                    code = "shizuku_unavailable",
-                    message = it.message ?: shizukuUnavailableMessage,
-                    retryable = true,
-                    hint = shizukuRetryHint,
-                    request = args
-                )
-            }
+            .getOrElse { return shizukuUnavailable(args, it) }
+        return configureCommandBatch(args, "standard_appops", commands) { success, total ->
+            success >= total / 2
+        }
+    }
+
+    private fun configureCommandBatch(
+        args: JsonNode,
+        target: String,
+        commands: List<Pair<String, CommandResult>>,
+        okWhen: (successCount: Int, totalCount: Int) -> Boolean
+    ): JsonNode {
         val results = mapper.createArrayNode()
         var successCount = 0
         for ((command, result) in commands) {
@@ -219,9 +166,9 @@ class PrivilegesConfigureTool(
                 if (result.stderr.isNotBlank()) put("stderr", result.stderr.take(1000))
             }
         }
-        val ok = successCount >= commands.size / 2
+        val ok = okWhen(successCount, commands.size)
         val out = mapper.createObjectNode().apply {
-            put("target", "standard_appops")
+            put("target", target)
             put("success_count", successCount)
             put("total_count", commands.size)
             set<JsonNode>("commands", results)
@@ -243,15 +190,7 @@ class PrivilegesConfigureTool(
     private fun configureAccessibility(args: JsonNode): JsonNode {
         val configured = runCatching { PrivilegeManager.configureAccessibilityService(context) }
             .getOrElse {
-                return ToolResultEnvelope.error(
-                    mapper = mapper,
-                    tool = this@PrivilegesConfigureTool,
-                    code = "shizuku_unavailable",
-                    message = it.message ?: shizukuUnavailableMessage,
-                    retryable = true,
-                    hint = shizukuRetryHint,
-                    request = args
-                )
+                return shizukuUnavailable(args, it)
             }
         val ok = configured.putServices.ok &&
             configured.putEnabled.ok &&
@@ -294,4 +233,15 @@ class PrivilegesConfigureTool(
             request = args
         )
     }
+
+    private fun shizukuUnavailable(args: JsonNode, error: Throwable): JsonNode =
+        ToolResultEnvelope.error(
+            mapper = mapper,
+            tool = this@PrivilegesConfigureTool,
+            code = "shizuku_unavailable",
+            message = error.message ?: shizukuUnavailableMessage,
+            retryable = true,
+            hint = shizukuRetryHint,
+            request = args
+        )
 }
