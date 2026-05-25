@@ -245,9 +245,8 @@ public class ChatService {
 
         long t0 = System.currentTimeMillis();
 
-        // Provider failover — synchronous setup only. If the SDK throws on
-        // createStreaming we try the next provider; once stream events start
-        // flowing we don't switch (TODO P2: mid-stream failover).
+        // Provider failover is limited to synchronous setup. After stream
+        // events start, the current response is closed without trying another provider.
         RunResult result = null;
         RuntimeException lastErr = null;
         for (ConfiguredProvider provider : chatClients) {
