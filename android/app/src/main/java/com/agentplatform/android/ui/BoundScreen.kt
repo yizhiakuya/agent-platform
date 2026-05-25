@@ -63,8 +63,8 @@ fun BoundScreen(
     fun isGranted(perm: String): Boolean =
         ContextCompat.checkSelfPermission(ctx, perm) == PackageManager.PERMISSION_GRANTED
 
-    fun checkNotif() = if (Build.VERSION.SDK_INT >= 33) isGranted(Manifest.permission.POST_NOTIFICATIONS) else true
-    fun checkPhotos() = if (Build.VERSION.SDK_INT >= 33) isGranted(Manifest.permission.READ_MEDIA_IMAGES) else true
+    fun checkNotif() = Build.VERSION.SDK_INT < 33 || isGranted(Manifest.permission.POST_NOTIFICATIONS)
+    fun checkPhotos() = Build.VERSION.SDK_INT < 33 || isGranted(Manifest.permission.READ_MEDIA_IMAGES)
     // MIUI / HyperOS 把"照片和视频"合并成一个系统权限项,授权后通常两边都给,
     // 但有时只给 READ_MEDIA_VISUAL_USER_SELECTED(部分访问,Android 14+)。
     // 任一覆盖到视频的权限存在就算给了。
