@@ -362,24 +362,18 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
                                                    JsonNode candidateRoot,
                                                    JsonNode photos,
                                                    ChatEventSink sink) {
-        QueryEmbeddingResult queryEmbedding = queryEmbedding(request.query());
-        if (queryEmbedding.failed()) {
-            ObjectNode fallback = fallbackResult(
-                    request.query(), candidateRoot, photos, request.contract(), queryEmbedding.failureReason());
-            return emitVisionResult(fallback, sink);
-        }
-        List<ScoredPhoto> scored = scoreRealtimePhotos(photos, queryEmbedding.value(), tokenize(request.query()));
-        sortScoredPhotos(scored, request.contract());
-        return emitVisionResult(realtimeResult(request, candidateRoot, scored), sink);
-    }
-
-    private QueryEmbeddingResult queryEmbedding(String query) {
+        float[] queryEmbedding;
         try {
-            return new QueryEmbeddingResult(embeddingService.embed("query: " + query), null);
+            queryEmbedding = embeddingService.embed("query: " + request.query());
         } catch (Exception e) {
             log.warn("[semantic-photos] query embedding failed: {}", e.getMessage());
-            return new QueryEmbeddingResult(null, "embedding_failed: " + e.getMessage());
+            ObjectNode fallback = fallbackResult(
+                    request.query(), candidateRoot, photos, request.contract(), "embedding_failed: " + e.getMessage());
+            return emitVisionResult(fallback, sink);
         }
+        List<ScoredPhoto> scored = scoreRealtimePhotos(photos, queryEmbedding, tokenize(request.query()));
+        sortScoredPhotos(scored, request.contract());
+        return emitVisionResult(realtimeResult(request, candidateRoot, scored), sink);
     }
 
     private List<ScoredPhoto> scoreRealtimePhotos(JsonNode photos, float[] queryEmbedding, Set<String> queryTerms) {
@@ -1382,28 +1376,6 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
                                          int reviewLimit,
                                          int scanLimit,
                                          SearchContract contract) {}
-
-    private static final class QueryEmbeddingResult {
-        private final float[] value;
-        private final String failureReason;
-
-        private QueryEmbeddingResult(float[] value, String failureReason) {
-            this.value = value;
-            this.failureReason = failureReason;
-        }
-
-        private float[] value() {
-            return value;
-        }
-
-        private String failureReason() {
-            return failureReason;
-        }
-
-        private boolean failed() {
-            return failureReason != null;
-        }
-    }
 
     private record CandidateEmbeddingResult(float score, String reason) {}
 
