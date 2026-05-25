@@ -1,11 +1,8 @@
 package com.agentplatform.android.tools.photos
 
-import android.content.ContentResolver
 import android.content.Context
 import android.os.Build
-import android.os.Bundle
 import android.provider.MediaStore
-import android.util.Log
 import com.agentplatform.android.core.tool.Tool
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -112,74 +109,7 @@ private fun listSpecialPhotos(
     matchArg: String,
     resultKey: String
 ): JsonNode {
-    val uploader = PhotoAssetUploader(context, mapper)
-    val photos = mapper.createArrayNode()
-    val projection = arrayOf(
-        MediaStore.Images.Media._ID,
-        MediaStore.Images.Media.DISPLAY_NAME,
-        MediaStore.Images.Media.DATE_TAKEN,
-        MediaStore.Images.Media.DATE_MODIFIED,
-        MediaStore.Images.Media.SIZE
-    )
-    val queryArgs = Bundle().apply {
-        putInt(matchArg, MediaStore.MATCH_ONLY)
-        putStringArray(
-            ContentResolver.QUERY_ARG_SORT_COLUMNS,
-            arrayOf(MediaStore.Images.Media.DATE_TAKEN)
-        )
-        putInt(
-            ContentResolver.QUERY_ARG_SORT_DIRECTION,
-            ContentResolver.QUERY_SORT_DIRECTION_DESCENDING
-        )
-        putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
-    }
-
-    context.contentResolver.query(
-        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-        projection,
-        queryArgs,
-        null
-    )?.use { c ->
-        val idIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-        val nameIdx = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-        val dateIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
-        val modifiedIdx = c.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
-        val sizeIdx = c.getColumnIndex(MediaStore.Images.Media.SIZE)
-        while (c.moveToNext() && photos.size() < limit) {
-            val id = c.getLong(idIdx)
-            val name = c.getString(nameIdx) ?: "image_$id"
-            val date = if (dateIdx >= 0 && !c.isNull(dateIdx)) c.getLong(dateIdx) else 0L
-            val modified = if (modifiedIdx >= 0 && !c.isNull(modifiedIdx)) c.getLong(modifiedIdx) else 0L
-            val size = if (sizeIdx >= 0 && !c.isNull(sizeIdx)) c.getLong(sizeIdx) else 0L
-
-            val obj = mapper.createObjectNode()
-            obj.put("id", id.toString())
-            obj.put("name", name)
-            obj.put("date_taken_ms", date)
-            obj.put("date_modified_sec", modified)
-            obj.put("size_bytes", size)
-
-            val image = try {
-                PhotoToolUtils.encodedDisplayPhoto(
-                    context = context,
-                    id = id,
-                    maxDim = 2048,
-                    quality = 85,
-                    sourceModifiedSec = modified,
-                    sourceSizeBytes = size
-                )
-            } catch (e: Exception) {
-                Log.w("PhotosListSpecial", "image encode failed for id=$id: ${e.message}")
-                null
-            }
-            if (image != null) {
-                val upload = uploader.uploadDisplayJpeg(id, name, image)
-                PhotoAssetUploader.putUploadFields(obj, upload, image)
-            }
-            photos.add(obj)
-        }
-    }
-
+    val photos = PhotoListQueryHelper.querySpecialImages(context, mapper, limit, matchArg, "PhotosListSpecial")
     return mapper.createObjectNode().apply {
         set<JsonNode>(resultKey, photos)
         put("count", photos.size())
