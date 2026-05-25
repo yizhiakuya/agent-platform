@@ -101,8 +101,15 @@ public class ContextAssembler {
                 ? ContextBudget.selectRecent(allRows, memory)
                 : allRows;
         List<MessageParam> anthropicMessages = historyReplayer.toParams(historyRows);
-        ContextStats stats = buildStats(stableSystemText, memoryBlock, artifactBlock, summaryBlock,
-                historyRows, allRows.size(), currentMessage, memory);
+        ContextStats stats = buildStats(new ContextStatsInput()
+                .withStableSystemText(stableSystemText)
+                .withMemoryBlock(memoryBlock)
+                .withArtifactBlock(artifactBlock)
+                .withSummaryBlock(summaryBlock)
+                .withHistoryRows(historyRows)
+                .withTotalHistoryRows(allRows.size())
+                .withCurrentMessage(currentMessage)
+                .withMemory(memory));
         log.debug("context user={} session={} totalTokens~{} system~{} memory~{} artifacts~{} summary~{} history~{} "
                         + "historyRows={}/{} summarizedRows={} summaryPresent={} maxInput={}",
                 userId, sessionId, stats.totalTokens(), stats.systemTokens(), stats.memoryTokens(),
@@ -169,23 +176,16 @@ public class ContextAssembler {
                 && !summary.summary().isBlank();
     }
 
-    private ContextStats buildStats(String stableSystemText,
-                                    String memoryBlock,
-                                    String artifactBlock,
-                                    String summaryBlock,
-                                    List<MessageDto> historyRows,
-                                    int totalHistoryRows,
-                                    String currentMessage,
-                                    AgentProperties.Memory memory) {
-        int systemTokens = ContextBudget.estimateTextTokens(stableSystemText);
-        int memoryTokens = ContextBudget.estimateTextTokens(memoryBlock);
-        int artifactTokens = ContextBudget.estimateTextTokens(artifactBlock);
-        int summaryTokens = ContextBudget.estimateTextTokens(summaryBlock);
-        int historyTokens = ContextBudget.estimateMessagesTokens(historyRows);
+    private ContextStats buildStats(ContextStatsInput input) {
+        int systemTokens = ContextBudget.estimateTextTokens(input.stableSystemText());
+        int memoryTokens = ContextBudget.estimateTextTokens(input.memoryBlock());
+        int artifactTokens = ContextBudget.estimateTextTokens(input.artifactBlock());
+        int summaryTokens = ContextBudget.estimateTextTokens(input.summaryBlock());
+        int historyTokens = ContextBudget.estimateMessagesTokens(input.historyRows());
         int currentTokens = ContextBudget.estimateTextTokens(PromptAssembler.formatCurrentTimeBlock())
-                + ContextBudget.estimateTextTokens(currentMessage);
+                + ContextBudget.estimateTextTokens(input.currentMessage());
         int total = systemTokens + memoryTokens + artifactTokens + summaryTokens + historyTokens + currentTokens;
-        int recentRows = historyRows == null ? 0 : historyRows.size();
+        int recentRows = input.historyRows() == null ? 0 : input.historyRows().size();
         return new ContextStats(
                 systemTokens,
                 memoryTokens,
@@ -194,9 +194,92 @@ public class ContextAssembler {
                 historyTokens,
                 currentTokens,
                 total,
-                totalHistoryRows,
+                input.totalHistoryRows(),
                 recentRows,
-                Math.max(0, totalHistoryRows - recentRows),
-                memory.maxInputTokens());
+                Math.max(0, input.totalHistoryRows() - recentRows),
+                input.memory().maxInputTokens());
+    }
+
+    private static final class ContextStatsInput {
+        private String stableSystemText;
+        private String memoryBlock;
+        private String artifactBlock;
+        private String summaryBlock;
+        private List<MessageDto> historyRows;
+        private int totalHistoryRows;
+        private String currentMessage;
+        private AgentProperties.Memory memory;
+
+        private ContextStatsInput withStableSystemText(String stableSystemText) {
+            this.stableSystemText = stableSystemText;
+            return this;
+        }
+
+        private ContextStatsInput withMemoryBlock(String memoryBlock) {
+            this.memoryBlock = memoryBlock;
+            return this;
+        }
+
+        private ContextStatsInput withArtifactBlock(String artifactBlock) {
+            this.artifactBlock = artifactBlock;
+            return this;
+        }
+
+        private ContextStatsInput withSummaryBlock(String summaryBlock) {
+            this.summaryBlock = summaryBlock;
+            return this;
+        }
+
+        private ContextStatsInput withHistoryRows(List<MessageDto> historyRows) {
+            this.historyRows = historyRows;
+            return this;
+        }
+
+        private ContextStatsInput withTotalHistoryRows(int totalHistoryRows) {
+            this.totalHistoryRows = totalHistoryRows;
+            return this;
+        }
+
+        private ContextStatsInput withCurrentMessage(String currentMessage) {
+            this.currentMessage = currentMessage;
+            return this;
+        }
+
+        private ContextStatsInput withMemory(AgentProperties.Memory memory) {
+            this.memory = memory;
+            return this;
+        }
+
+        private String stableSystemText() {
+            return stableSystemText;
+        }
+
+        private String memoryBlock() {
+            return memoryBlock;
+        }
+
+        private String artifactBlock() {
+            return artifactBlock;
+        }
+
+        private String summaryBlock() {
+            return summaryBlock;
+        }
+
+        private List<MessageDto> historyRows() {
+            return historyRows;
+        }
+
+        private int totalHistoryRows() {
+            return totalHistoryRows;
+        }
+
+        private String currentMessage() {
+            return currentMessage;
+        }
+
+        private AgentProperties.Memory memory() {
+            return memory;
+        }
     }
 }

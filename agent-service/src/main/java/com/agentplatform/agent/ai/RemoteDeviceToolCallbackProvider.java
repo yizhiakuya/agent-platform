@@ -98,9 +98,15 @@ public class RemoteDeviceToolCallbackProvider {
                 hasSemanticCandidates = true;
                 continue;
             }
-            RemoteToolCallback cb = new RemoteToolCallback(
-                    selected.deviceId(), userId, spec, dispatcher, mapper,
-                    preInterceptors, events, visionToolResults);
+            RemoteToolCallback cb = new RemoteToolCallback(new RemoteToolCallback.RemoteToolContext()
+                    .withDeviceId(selected.deviceId())
+                    .withUserId(userId)
+                    .withSpec(spec)
+                    .withDispatcher(dispatcher)
+                    .withMapper(mapper)
+                    .withPreInterceptors(preInterceptors)
+                    .withEvents(events)
+                    .withVisionEnabled(visionToolResults));
             defs.add(cb.toAnthropicTool());
             dispatch.put(cb.name(), cb);
         }

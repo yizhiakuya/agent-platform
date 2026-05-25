@@ -120,28 +120,16 @@ public record AgentProperties(
             Boolean enableSessionSummary
     ) {
         public Memory {
-            if (embeddingModel == null || embeddingModel.isBlank()) {
-                embeddingModel = "jina-embeddings-v3";
-            }
-            if (embeddingDim <= 0) {
-                embeddingDim = 1024;
-            }
-            if (topK <= 0) {
-                topK = 5;
-            }
-            if (factExtractorModel == null || factExtractorModel.isBlank()) {
-                factExtractorModel = "claude-haiku-4-5";
-            }
-            if (enablePromptCache == null) {
-                enablePromptCache = Boolean.TRUE;
-            }
+            embeddingModel = defaultText(embeddingModel, "jina-embeddings-v3");
+            embeddingDim = defaultPositive(embeddingDim, 1024);
+            topK = defaultPositive(topK, 5);
+            factExtractorModel = defaultText(factExtractorModel, "claude-haiku-4-5");
+            enablePromptCache = defaultBoolean(enablePromptCache, true);
             // 1 = no batching (legacy behavior). 3 = sweet spot for typical
             // multi-turn chats — most sessions hit it, sub2api request count
             // drops ~60%, with at most 2 dropped turns per session if the
             // user walks away mid-batch (memory is best-effort anyway).
-            if (factBatchSize <= 0) {
-                factBatchSize = 3;
-            }
+            factBatchSize = defaultPositive(factBatchSize, 3);
             // Multimodal tool_result: when a device tool returns base64
             // image bytes (e.g. photos.list_recent.thumb_b64), inject them
             // into the next LLM turn as a sibling user message with Media
@@ -149,43 +137,21 @@ public record AgentProperties(
             // — instead of being fed the legacy <binary NB omitted> stub.
             // Default true; flip false to fall back to the strip path
             // (e.g. cost-conscious deploys or non-vision LLM endpoints).
-            if (enableVisionToolResults == null) {
-                enableVisionToolResults = Boolean.TRUE;
-            }
+            enableVisionToolResults = defaultBoolean(enableVisionToolResults, true);
             // Anthropic Extended Thinking budget. >= 1024 enables; 0 disables.
             // The model's reasoning is hidden from the user, which structurally
             // prevents the "is X… no wait, Y… actually Z" stream pattern —
             // not a prompt-level patch but an API-level mode change.
-            if (thinkingBudgetTokens < 0) {
-                thinkingBudgetTokens = 0;
-            }
-            if (enableWebSearch == null) {
-                enableWebSearch = Boolean.TRUE;
-            }
-            if (webSearchMaxUses <= 0) {
-                webSearchMaxUses = 5;
-            }
-            if (embeddingTask != null && embeddingTask.isBlank()) {
-                embeddingTask = null;
-            }
-            if (preferLangChain4jEmbeddings == null) {
-                preferLangChain4jEmbeddings = Boolean.TRUE;
-            }
-            if (recentHistoryMessages <= 0) {
-                recentHistoryMessages = 12;
-            }
-            if (summaryTriggerMessages <= 0) {
-                summaryTriggerMessages = 18;
-            }
-            if (maxInputTokens <= 0) {
-                maxInputTokens = 48_000;
-            }
-            if (summaryMaxTokens <= 0) {
-                summaryMaxTokens = 1_200;
-            }
-            if (enableSessionSummary == null) {
-                enableSessionSummary = Boolean.TRUE;
-            }
+            thinkingBudgetTokens = Math.max(0, thinkingBudgetTokens);
+            enableWebSearch = defaultBoolean(enableWebSearch, true);
+            webSearchMaxUses = defaultPositive(webSearchMaxUses, 5);
+            embeddingTask = blankToNull(embeddingTask);
+            preferLangChain4jEmbeddings = defaultBoolean(preferLangChain4jEmbeddings, true);
+            recentHistoryMessages = defaultPositive(recentHistoryMessages, 12);
+            summaryTriggerMessages = defaultPositive(summaryTriggerMessages, 18);
+            maxInputTokens = defaultPositive(maxInputTokens, 48_000);
+            summaryMaxTokens = defaultPositive(summaryMaxTokens, 1_200);
+            enableSessionSummary = defaultBoolean(enableSessionSummary, true);
         }
     }
 
@@ -213,43 +179,35 @@ public record AgentProperties(
             int requestTimeoutSeconds
     ) {
         public Photos {
-            if (embeddingModel == null || embeddingModel.isBlank()) {
-                embeddingModel = "clip-ViT-B-32-multilingual-v1";
-            }
-            if (embeddingDim <= 0) {
-                embeddingDim = 1024;
-            }
-            if (textTask != null && textTask.isBlank()) {
-                textTask = null;
-            }
-            if (imageTask != null && imageTask.isBlank()) {
-                imageTask = null;
-            }
-            if (inputImageField == null || inputImageField.isBlank()) {
-                inputImageField = "image";
-            }
-            if (enabled == null) {
-                enabled = Boolean.TRUE;
-            }
-            if (fallbackRealtime == null) {
-                fallbackRealtime = Boolean.TRUE;
-            }
-            if (indexWorkerEnabled == null) {
-                indexWorkerEnabled = Boolean.FALSE;
-            }
-            if (searchTopK <= 0) {
-                searchTopK = 8;
-            }
-            if (minScore < 0.0d || minScore >= 1.0d) {
-                minScore = 0.20d;
-            }
-            if (indexBatchSize <= 0) {
-                indexBatchSize = 8;
-            }
-            if (requestTimeoutSeconds <= 0) {
-                requestTimeoutSeconds = 180;
-            }
+            embeddingModel = defaultText(embeddingModel, "clip-ViT-B-32-multilingual-v1");
+            embeddingDim = defaultPositive(embeddingDim, 1024);
+            textTask = blankToNull(textTask);
+            imageTask = blankToNull(imageTask);
+            inputImageField = defaultText(inputImageField, "image");
+            enabled = defaultBoolean(enabled, true);
+            fallbackRealtime = defaultBoolean(fallbackRealtime, true);
+            indexWorkerEnabled = defaultBoolean(indexWorkerEnabled, false);
+            searchTopK = defaultPositive(searchTopK, 8);
+            minScore = minScore < 0.0d || minScore >= 1.0d ? 0.20d : minScore;
+            indexBatchSize = defaultPositive(indexBatchSize, 8);
+            requestTimeoutSeconds = defaultPositive(requestTimeoutSeconds, 180);
         }
+    }
+
+    private static String defaultText(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    private static String blankToNull(String value) {
+        return value != null && value.isBlank() ? null : value;
+    }
+
+    private static int defaultPositive(int value, int defaultValue) {
+        return value <= 0 ? defaultValue : value;
+    }
+
+    private static Boolean defaultBoolean(Boolean value, boolean defaultValue) {
+        return value == null ? defaultValue : value;
     }
 
     public record MediaGalleryCache(

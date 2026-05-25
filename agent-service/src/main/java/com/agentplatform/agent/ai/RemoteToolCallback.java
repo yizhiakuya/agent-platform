@@ -9,6 +9,7 @@ import com.anthropic.models.messages.ToolUseBlock;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,26 +57,29 @@ public class RemoteToolCallback {
     private final ApplicationEventPublisher events;
     private final boolean visionEnabled;
 
-    public RemoteToolCallback(UUID deviceId, UUID userId, ToolSpec spec,
-                              DeviceToolDispatcher dispatcher, ObjectMapper mapper,
-                              List<ToolPreInterceptor> preInterceptors,
-                              ApplicationEventPublisher events) {
-        this(deviceId, userId, spec, dispatcher, mapper, preInterceptors, events, false);
+    public RemoteToolCallback(RemoteToolContext context) {
+        this.deviceId = context.deviceId();
+        this.userId = context.userId();
+        this.spec = context.spec();
+        this.dispatcher = context.dispatcher();
+        this.mapper = context.mapper();
+        this.preInterceptors = context.preInterceptors() == null ? List.of() : context.preInterceptors();
+        this.events = context.events();
+        this.visionEnabled = context.visionEnabled();
     }
 
     public RemoteToolCallback(UUID deviceId, UUID userId, ToolSpec spec,
                               DeviceToolDispatcher dispatcher, ObjectMapper mapper,
                               List<ToolPreInterceptor> preInterceptors,
-                              ApplicationEventPublisher events,
-                              boolean visionEnabled) {
-        this.deviceId = deviceId;
-        this.userId = userId;
-        this.spec = spec;
-        this.dispatcher = dispatcher;
-        this.mapper = mapper;
-        this.preInterceptors = preInterceptors == null ? List.of() : preInterceptors;
-        this.events = events;
-        this.visionEnabled = visionEnabled;
+                              ApplicationEventPublisher events) {
+        this(new RemoteToolContext()
+                .withDeviceId(deviceId)
+                .withUserId(userId)
+                .withSpec(spec)
+                .withDispatcher(dispatcher)
+                .withMapper(mapper)
+                .withPreInterceptors(preInterceptors)
+                .withEvents(events));
     }
 
     /**
@@ -132,59 +136,91 @@ public class RemoteToolCallback {
     }
 
     public ExecutionResult executeJsonToolUse(JsonNode args, UUID userId, UUID sessionId, ChatEventSink sink) {
-        if (args == null || args.isNull()) {
-            args = mapper.createObjectNode();
-        }
         Map<String, Object> requestCtx = new HashMap<>();
         requestCtx.put("userId", userId);
         if (sessionId != null) requestCtx.put("sessionId", sessionId);
 
-        // PRE: chain — each interceptor may return rewritten args, or throw
-        // ToolBlockedException to abort with a structured error.
-        try {
-            for (ToolPreInterceptor pre : preInterceptors) {
-                args = pre.before(this.userId, deviceId, spec, args, requestCtx);
-            }
-        } catch (ToolBlockedException blocked) {
-            if (sink != null) {
-                sink.emit(SseEvent.error(mapper, "Tool blocked: " + blocked.getReason()));
-            }
-            return ExecutionResult.text("{\"error\":{\"code\":-32099,\"message\":"
-                    + mapper.valueToTree("blocked: " + blocked.getReason()).toString() + "}}");
+        JsonNode preparedArgs = prepareArgs(args, requestCtx, sink);
+        if (preparedArgs == null) {
+            return blockedResult(requestCtx);
         }
 
         if (sink != null) {
-            sink.emit(SseEvent.toolCallStarted(mapper, deviceId, spec.name(), args));
+            sink.emit(SseEvent.toolCallStarted(mapper, deviceId, spec.name(), preparedArgs));
         }
 
         long t0 = System.currentTimeMillis();
-        ToolResult result;
-        try {
-            result = dispatcher.dispatch(deviceId, this.userId, spec.name(), args);
-        } catch (RuntimeException e) {
-            long dur = System.currentTimeMillis() - t0;
-            if (events != null) {
-                events.publishEvent(new ToolPostEvent(this.userId, deviceId, spec.name(), args,
-                        null, e.getMessage(), dur, Instant.now()));
-            }
-            if (sink != null) {
-                sink.emit(SseEvent.toolCallError(mapper, spec.name(), e.getMessage()));
-                sink.emit(SseEvent.error(mapper,
-                        "Tool '" + spec.name() + "' failed: " + e.getMessage()));
-            }
-            return ExecutionResult.error(e.getMessage());
+        DispatchOutcome outcome = dispatch(preparedArgs, t0, sink);
+        if (outcome.failure() != null) {
+            return outcome.failure();
         }
-        long dur = System.currentTimeMillis() - t0;
 
         // POST: emit event regardless of success/error so audit/metrics
         // listeners observe both outcomes uniformly.
+        publishResultEvent(preparedArgs, outcome.result(), outcome.durationMs());
+        emitResult(outcome.result(), sink);
+
+        return executionResult(outcome.result());
+    }
+
+    private JsonNode prepareArgs(JsonNode args, Map<String, Object> requestCtx, ChatEventSink sink) {
+        JsonNode prepared = args == null || args.isNull() ? mapper.createObjectNode() : args;
+        try {
+            for (ToolPreInterceptor pre : preInterceptors) {
+                prepared = pre.before(this.userId, deviceId, spec, prepared, requestCtx);
+            }
+            return prepared;
+        } catch (ToolBlockedException blocked) {
+            requestCtx.put("blockedReason", blocked.getReason());
+            if (sink != null) {
+                sink.emit(SseEvent.error(mapper, "Tool blocked: " + blocked.getReason()));
+            }
+            return null;
+        }
+    }
+
+    private ExecutionResult blockedResult(Map<String, Object> requestCtx) {
+        String reason = String.valueOf(requestCtx.get("blockedReason"));
+        return ExecutionResult.text("{\"error\":{\"code\":-32099,\"message\":"
+                + mapper.valueToTree("blocked: " + reason).toString() + "}}");
+    }
+
+    private DispatchOutcome dispatch(JsonNode args, long startMs, ChatEventSink sink) {
+        try {
+            ToolResult result = dispatcher.dispatch(deviceId, this.userId, spec.name(), args);
+            return new DispatchOutcome(result, System.currentTimeMillis() - startMs, null);
+        } catch (RuntimeException e) {
+            long dur = System.currentTimeMillis() - startMs;
+            publishFailureEvent(args, e.getMessage(), dur);
+            emitFailure(e.getMessage(), sink);
+            return new DispatchOutcome(null, dur, ExecutionResult.error(e.getMessage()));
+        }
+    }
+
+    private void publishFailureEvent(JsonNode args, String message, long durationMs) {
+        if (events != null) {
+            events.publishEvent(new ToolPostEvent(this.userId, deviceId, spec.name(), args,
+                    null, message, durationMs, Instant.now()));
+        }
+    }
+
+    private void publishResultEvent(JsonNode args, ToolResult result, long durationMs) {
         if (events != null) {
             events.publishEvent(new ToolPostEvent(this.userId, deviceId, spec.name(), args,
                     result.hasError() ? null : result.value(),
                     result.hasError() ? result.error().message() : null,
-                    dur, Instant.now()));
+                    durationMs, Instant.now()));
         }
+    }
 
+    private void emitFailure(String message, ChatEventSink sink) {
+        if (sink != null) {
+            sink.emit(SseEvent.toolCallError(mapper, spec.name(), message));
+            sink.emit(SseEvent.error(mapper, "Tool '" + spec.name() + "' failed: " + message));
+        }
+    }
+
+    private void emitResult(ToolResult result, ChatEventSink sink) {
         if (sink != null) {
             if (result.hasError()) {
                 sink.emit(SseEvent.toolCallError(mapper, spec.name(), result.error().message()));
@@ -194,7 +230,9 @@ public class RemoteToolCallback {
                 sink.emit(SseEvent.toolCallResult(mapper, spec.name(), result.value()));
             }
         }
+    }
 
+    private ExecutionResult executionResult(ToolResult result) {
         // Tool result text/JSON for the LLM. Two paths for *_b64 base64 fields:
         //   - vision DISABLED (legacy): replace each *_b64 with a
         //     "<binary NB omitted>" placeholder — keeps a non-vision LLM from
@@ -289,53 +327,81 @@ public class RemoteToolCallback {
      */
     protected static JsonNode stripB64ForLlmAndCollect(JsonNode node, String pathPrefix, List<PendingImage> out) {
         if (node instanceof ObjectNode obj) {
-            ObjectNode copy = obj.objectNode();
-            // Layered b64 priority within ONE object: when a tool returns BOTH
-            // `vision_b64` (for the LLM) and `image_b64` (for the web bubble),
-            // collect only the vision copy. The other b64 fields are still
-            // placeholdered so raw bytes never leak into text context.
-            boolean hasVisionSibling = false;
-            for (java.util.Iterator<String> it = obj.fieldNames(); it.hasNext(); ) {
-                String fn = it.next();
-                JsonNode fv = obj.get(fn);
-                if (fn.endsWith("_b64") && fv != null && fv.isTextual()
-                        && fn.startsWith("vision") && !fv.asText().isEmpty()) {
-                    hasVisionSibling = true;
-                    break;
-                }
-            }
-            final boolean hasVision = hasVisionSibling;
-            obj.fields().forEachRemaining(e -> {
-                String k = e.getKey();
-                String childPath = pathPrefix.isEmpty() ? k : pathPrefix + "." + k;
-                JsonNode v = e.getValue();
-                if (k.endsWith("_b64") && v.isTextual()) {
-                    String b64 = v.asText();
-                    int len = b64.length();
-                    boolean isVision = k.startsWith("vision");
-                    boolean shouldCollect = len > 0 && len < 7_000_000   // Anthropic per-image cap ~5MB binary
-                            && (isVision || !hasVision);                  // skip duplicate UI image when vision sibling present
-                    if (shouldCollect) {
-                        copy.put(k, binaryPlaceholder(len, "attached as image; rendered to user"));
-                        out.add(new PendingImage(sniffMime(b64), b64));
-                    } else {
-                        copy.put(k, binaryPlaceholder(len, "omitted; vision sibling preferred"));
-                    }
-                } else {
-                    copy.set(k, stripB64ForLlmAndCollect(v, childPath, out));
-                }
-            });
-            return copy;
+            return stripObjectB64ForLlmAndCollect(obj, pathPrefix, out);
         } else if (node instanceof ArrayNode arr) {
-            ArrayNode copy = arr.arrayNode();
-            int i = 0;
-            for (JsonNode child : arr) {
-                copy.add(stripB64ForLlmAndCollect(child, pathPrefix + "[" + i + "]", out));
-                i++;
-            }
-            return copy;
+            return stripArrayB64ForLlmAndCollect(arr, pathPrefix, out);
         }
         return node;
+    }
+
+    private static JsonNode stripObjectB64ForLlmAndCollect(ObjectNode obj, String pathPrefix, List<PendingImage> out) {
+        ObjectNode copy = obj.objectNode();
+        boolean hasVision = hasVisionB64Sibling(obj);
+        obj.fields().forEachRemaining(e -> copy.set(
+                e.getKey(),
+                strippedObjectField(e.getKey(), e.getValue(), pathPrefix, hasVision, out)));
+        return copy;
+    }
+
+    private static boolean hasVisionB64Sibling(ObjectNode obj) {
+        for (java.util.Iterator<String> it = obj.fieldNames(); it.hasNext(); ) {
+            String fieldName = it.next();
+            JsonNode value = obj.get(fieldName);
+            if (isVisionB64Field(fieldName, value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isVisionB64Field(String fieldName, JsonNode value) {
+        return fieldName.endsWith("_b64")
+                && fieldName.startsWith("vision")
+                && value != null
+                && value.isTextual()
+                && !value.asText().isEmpty();
+    }
+
+    private static JsonNode strippedObjectField(String key,
+                                                JsonNode value,
+                                                String pathPrefix,
+                                                boolean hasVisionSibling,
+                                                List<PendingImage> out) {
+        if (!key.endsWith("_b64") || !value.isTextual()) {
+            return stripB64ForLlmAndCollect(value, childPath(pathPrefix, key), out);
+        }
+        return strippedB64Field(key, value.asText(), hasVisionSibling, out);
+    }
+
+    private static JsonNode strippedB64Field(String key,
+                                             String b64,
+                                             boolean hasVisionSibling,
+                                             List<PendingImage> out) {
+        int len = b64.length();
+        boolean isVision = key.startsWith("vision");
+        boolean shouldCollect = len > 0 && len < 7_000_000 && (isVision || !hasVisionSibling);
+        ObjectNode holder = JsonNodeFactory.instance.objectNode();
+        if (shouldCollect) {
+            holder.put(key, binaryPlaceholder(len, "attached as image; rendered to user"));
+            out.add(new PendingImage(sniffMime(b64), b64));
+            return holder.get(key);
+        }
+        holder.put(key, binaryPlaceholder(len, "omitted; vision sibling preferred"));
+        return holder.get(key);
+    }
+
+    private static String childPath(String pathPrefix, String key) {
+        return pathPrefix.isEmpty() ? key : pathPrefix + "." + key;
+    }
+
+    private static JsonNode stripArrayB64ForLlmAndCollect(ArrayNode arr, String pathPrefix, List<PendingImage> out) {
+        ArrayNode copy = arr.arrayNode();
+        int i = 0;
+        for (JsonNode child : arr) {
+            copy.add(stripB64ForLlmAndCollect(child, pathPrefix + "[" + i + "]", out));
+            i++;
+        }
+        return copy;
     }
 
     /**
@@ -391,4 +457,89 @@ public class RemoteToolCallback {
         return "{\"error\":{\"code\":" + result.error().code()
                 + ",\"message\":" + mapper.valueToTree(result.error().message()).toString() + "}}";
     }
+
+    public static final class RemoteToolContext {
+        private UUID deviceId;
+        private UUID userId;
+        private ToolSpec spec;
+        private DeviceToolDispatcher dispatcher;
+        private ObjectMapper mapper;
+        private List<ToolPreInterceptor> preInterceptors;
+        private ApplicationEventPublisher events;
+        private boolean visionEnabled;
+
+        public RemoteToolContext withDeviceId(UUID deviceId) {
+            this.deviceId = deviceId;
+            return this;
+        }
+
+        public RemoteToolContext withUserId(UUID userId) {
+            this.userId = userId;
+            return this;
+        }
+
+        public RemoteToolContext withSpec(ToolSpec spec) {
+            this.spec = spec;
+            return this;
+        }
+
+        public RemoteToolContext withDispatcher(DeviceToolDispatcher dispatcher) {
+            this.dispatcher = dispatcher;
+            return this;
+        }
+
+        public RemoteToolContext withMapper(ObjectMapper mapper) {
+            this.mapper = mapper;
+            return this;
+        }
+
+        public RemoteToolContext withPreInterceptors(List<ToolPreInterceptor> preInterceptors) {
+            this.preInterceptors = preInterceptors;
+            return this;
+        }
+
+        public RemoteToolContext withEvents(ApplicationEventPublisher events) {
+            this.events = events;
+            return this;
+        }
+
+        public RemoteToolContext withVisionEnabled(boolean visionEnabled) {
+            this.visionEnabled = visionEnabled;
+            return this;
+        }
+
+        private UUID deviceId() {
+            return deviceId;
+        }
+
+        private UUID userId() {
+            return userId;
+        }
+
+        private ToolSpec spec() {
+            return spec;
+        }
+
+        private DeviceToolDispatcher dispatcher() {
+            return dispatcher;
+        }
+
+        private ObjectMapper mapper() {
+            return mapper;
+        }
+
+        private List<ToolPreInterceptor> preInterceptors() {
+            return preInterceptors;
+        }
+
+        private ApplicationEventPublisher events() {
+            return events;
+        }
+
+        private boolean visionEnabled() {
+            return visionEnabled;
+        }
+    }
+
+    private record DispatchOutcome(ToolResult result, long durationMs, ExecutionResult failure) {}
 }

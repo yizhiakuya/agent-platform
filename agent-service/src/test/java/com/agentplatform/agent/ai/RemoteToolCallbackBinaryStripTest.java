@@ -153,15 +153,14 @@ class RemoteToolCallbackBinaryStripTest {
                 .thenReturn(Optional.of(new DeviceToolDispatcher.FetchedAsset(
                         "image/jpeg", "jpeg-bytes".getBytes(StandardCharsets.UTF_8))));
 
-        RemoteToolCallback callback = new RemoteToolCallback(
-                UUID.randomUUID(),
-                userId,
-                new ToolSpec("photos.list_recent", "list", mapper.createObjectNode(), false),
-                dispatcher,
-                mapper,
-                List.of(),
-                null,
-                true);
+        RemoteToolCallback callback = new RemoteToolCallback(new RemoteToolCallback.RemoteToolContext()
+                .withDeviceId(UUID.randomUUID())
+                .withUserId(userId)
+                .withSpec(new ToolSpec("photos.list_recent", "list", mapper.createObjectNode(), false))
+                .withDispatcher(dispatcher)
+                .withMapper(mapper)
+                .withPreInterceptors(List.of())
+                .withVisionEnabled(true));
 
         ExecutionResult result = callback.executeJsonToolUse(mapper.createObjectNode(), userId, UUID.randomUUID(), null);
 
@@ -190,15 +189,14 @@ class RemoteToolCallbackBinaryStripTest {
                         org.mockito.Mockito.eq("photos.list_recent"), org.mockito.Mockito.any()))
                 .thenReturn(ToolResult.ok(mapper.readTree(photos.toString())));
 
-        RemoteToolCallback callback = new RemoteToolCallback(
-                UUID.randomUUID(),
-                userId,
-                new ToolSpec("photos.list_recent", "list", mapper.createObjectNode(), false),
-                dispatcher,
-                mapper,
-                List.of(),
-                null,
-                true);
+        RemoteToolCallback callback = new RemoteToolCallback(new RemoteToolCallback.RemoteToolContext()
+                .withDeviceId(UUID.randomUUID())
+                .withUserId(userId)
+                .withSpec(new ToolSpec("photos.list_recent", "list", mapper.createObjectNode(), false))
+                .withDispatcher(dispatcher)
+                .withMapper(mapper)
+                .withPreInterceptors(List.of())
+                .withVisionEnabled(true));
 
         ExecutionResult result = callback.executeJsonToolUse(mapper.createObjectNode(), userId, UUID.randomUUID(), null);
 

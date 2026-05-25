@@ -99,10 +99,10 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
                                        EmbeddingService embeddingService,
                                        PhotoEmbeddingService photoEmbeddingService,
                                        InternalChatFeignClient internalChatClient,
-                                       ApplicationEventPublisher events,
-                                       boolean visionEnabled,
-                                       AgentProperties props) {
-        super(deviceId, userId, spec(mapper), dispatcher, mapper, List.of(), events, visionEnabled);
+	                                       ApplicationEventPublisher events,
+	                                       boolean visionEnabled,
+	                                       AgentProperties props) {
+	        super(remoteToolContext(deviceId, userId, dispatcher, mapper, events, visionEnabled));
         this.deviceId = deviceId;
         this.boundUserId = userId;
         this.dispatcher = dispatcher;
@@ -115,10 +115,10 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         this.indexMinScore = photos == null ? 0.20d : photos.minScore();
         this.photoIndexEnabled = photos == null || Boolean.TRUE.equals(photos.enabled());
         this.fallbackRealtime = photos == null || Boolean.TRUE.equals(photos.fallbackRealtime());
-    }
+	    }
 
-    SemanticPhotoSearchCallback(ObjectMapper mapper, boolean visionEnabled) {
-        super(null, null, spec(mapper), null, mapper, List.of(), null, visionEnabled);
+	    SemanticPhotoSearchCallback(ObjectMapper mapper, boolean visionEnabled) {
+	        super(remoteToolContext(null, null, null, mapper, null, visionEnabled));
         this.deviceId = null;
         this.boundUserId = null;
         this.dispatcher = null;
@@ -129,7 +129,24 @@ public class SemanticPhotoSearchCallback extends RemoteToolCallback {
         this.visionEnabled = visionEnabled;
         this.indexMinScore = 0.20d;
         this.photoIndexEnabled = false;
-        this.fallbackRealtime = true;
+	        this.fallbackRealtime = true;
+	    }
+
+    private static RemoteToolContext remoteToolContext(UUID deviceId,
+                                                       UUID userId,
+                                                       DeviceToolDispatcher dispatcher,
+                                                       ObjectMapper mapper,
+                                                       ApplicationEventPublisher events,
+                                                       boolean visionEnabled) {
+        return new RemoteToolContext()
+                .withDeviceId(deviceId)
+                .withUserId(userId)
+                .withSpec(spec(mapper))
+                .withDispatcher(dispatcher)
+                .withMapper(mapper)
+                .withPreInterceptors(List.of())
+                .withEvents(events)
+                .withVisionEnabled(visionEnabled);
     }
 
     @Override
