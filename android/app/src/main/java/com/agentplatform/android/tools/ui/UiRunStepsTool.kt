@@ -7,6 +7,7 @@ import com.agentplatform.android.privilege.PrivilegeManager
 import com.agentplatform.android.ui.accessibility.UiAccessibilityService
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlinx.coroutines.delay
 
@@ -120,78 +121,100 @@ class UiRunStepsTool(
 
     override suspend fun execute(args: JsonNode): JsonNode {
         if (!UiAccessibilityService.isAvailable()) {
-            return mapper.createObjectNode().apply {
-                put("ok", false)
-                put("error", "accessibility service not enabled - open Settings -> Accessibility -> Agent Platform")
-            }
+            return accessibilityUnavailable()
         }
 
         val steps = args.path("steps")
-        if (!steps.isArray || steps.size() == 0) {
-            return mapper.createObjectNode().apply {
-                put("ok", false)
-                put("error", "steps must be a non-empty array")
-            }
-        }
-        if (steps.size() > MAX_STEPS) {
-            return mapper.createObjectNode().apply {
-                put("ok", false)
-                put("error", "too many steps; max is $MAX_STEPS")
-            }
+        validateSteps(steps)?.let { return it }
+        val options = runOptions(args)
+        return runStepsResult(executeSteps(steps, options), options)
+    }
+
+    private fun accessibilityUnavailable(): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("ok", false)
+            put("error", "accessibility service not enabled - open Settings -> Accessibility -> Agent Platform")
         }
 
-        val observe = normalizedObserve(args.path("observe").asText("final").lowercase())
-        val abortOnFailure = args.path("abort_on_failure").asBoolean(true)
-        val stepDelayMs = args.path("step_delay_ms").asLong(DEFAULT_STEP_DELAY_MS)
-            .coerceIn(0L, MAX_STEP_DELAY_MS)
-        val finalMaxDepth = args.path("final_max_depth").asInt(DEFAULT_TREE_DEPTH)
-            .coerceIn(1, MAX_TREE_DEPTH)
+    private fun validateSteps(steps: JsonNode): ObjectNode? =
+        when {
+            !steps.isArray || steps.size() == 0 -> errorStep("steps must be a non-empty array")
+            steps.size() > MAX_STEPS -> errorStep("too many steps; max is $MAX_STEPS")
+            else -> null
+        }
 
+    private fun runOptions(args: JsonNode): RunOptions =
+        RunOptions(
+            observe = normalizedObserve(args.path("observe").asText("final").lowercase()),
+            abortOnFailure = args.path("abort_on_failure").asBoolean(true),
+            stepDelayMs = args.path("step_delay_ms").asLong(DEFAULT_STEP_DELAY_MS)
+                .coerceIn(0L, MAX_STEP_DELAY_MS),
+            finalMaxDepth = args.path("final_max_depth").asInt(DEFAULT_TREE_DEPTH)
+                .coerceIn(1, MAX_TREE_DEPTH)
+        )
+
+    private suspend fun executeSteps(steps: JsonNode, options: RunOptions): StepRunResult {
         val results = mapper.createArrayNode()
-        var ok = true
         var failedStep = -1
         var aborted = false
 
         for (i in 0 until steps.size()) {
-            val step = steps[i]
-            val action = step.path("action").asText("")
-            val startedAt = System.currentTimeMillis()
-            val result = executeStep(action, step)
+            val result = executeStepAt(i, steps[i], options)
             val stepOk = result.path("ok").asBoolean(false)
-            result.put("index", i)
-            result.put("action", action)
-            result.put("duration_ms", System.currentTimeMillis() - startedAt)
-
-            if (observe == "after_each" || (!stepOk && observe == "on_failure")) {
-                result.set<JsonNode>("observation", safeDumpTree(finalMaxDepth))
-            }
             results.add(result)
-
             if (!stepOk) {
-                ok = false
                 failedStep = i
-                if (abortOnFailure) {
-                    aborted = true
-                    break
-                }
+                aborted = options.abortOnFailure
+                if (aborted) break
             }
-
-            if (i < steps.size() - 1 && stepDelayMs > 0) {
-                delay(stepDelayMs)
-            }
+            delayBeforeNextStep(i, steps.size(), options.stepDelayMs)
         }
 
-        return mapper.createObjectNode().apply {
-            put("ok", ok)
-            put("executed_steps", results.size())
-            put("aborted", aborted)
-            if (failedStep >= 0) put("failed_step", failedStep)
-            set<JsonNode>("results", results)
-            if (observe == "final" || (!ok && observe == "on_failure")) {
-                set<JsonNode>("observation", safeDumpTree(finalMaxDepth))
-            }
+        return StepRunResult(
+            ok = failedStep < 0,
+            failedStep = failedStep,
+            aborted = aborted,
+            results = results
+        )
+    }
+
+    private suspend fun executeStepAt(index: Int, step: JsonNode, options: RunOptions): ObjectNode {
+        val action = step.path("action").asText("")
+        val startedAt = System.currentTimeMillis()
+        val result = executeStep(action, step)
+        val stepOk = result.path("ok").asBoolean(false)
+        result.put("index", index)
+        result.put("action", action)
+        result.put("duration_ms", System.currentTimeMillis() - startedAt)
+        if (shouldObserveStep(options.observe, stepOk)) {
+            result.set<JsonNode>("observation", safeDumpTree(options.finalMaxDepth))
+        }
+        return result
+    }
+
+    private fun shouldObserveStep(observe: String, stepOk: Boolean): Boolean =
+        observe == "after_each" || (!stepOk && observe == "on_failure")
+
+    private suspend fun delayBeforeNextStep(index: Int, totalSteps: Int, delayMs: Long) {
+        if (index < totalSteps - 1 && delayMs > 0) {
+            delay(delayMs)
         }
     }
+
+    private fun runStepsResult(run: StepRunResult, options: RunOptions): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("ok", run.ok)
+            put("executed_steps", run.results.size())
+            put("aborted", run.aborted)
+            if (run.failedStep >= 0) put("failed_step", run.failedStep)
+            set<JsonNode>("results", run.results)
+            if (shouldObserveFinal(options.observe, run.ok)) {
+                set<JsonNode>("observation", safeDumpTree(options.finalMaxDepth))
+            }
+        }
+
+    private fun shouldObserveFinal(observe: String, ok: Boolean): Boolean =
+        observe == "final" || (!ok && observe == "on_failure")
 
     private suspend fun executeStep(action: String, step: JsonNode): ObjectNode =
         when (action) {
@@ -215,61 +238,109 @@ class UiRunStepsTool(
             ?: return errorStep("app not installed or has no launcher activity").apply {
                 put("package", packageName)
             }
-        val intent = launchTarget.intent
-        intent.addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED or
-                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-        )
-
         val attempts = mapper.createArrayNode()
-        var sent = sendLaunchIntentFromShell(packageName, launchTarget.activityName, attempts)
-        if (!sent) {
-            sent = sendLaunchIntentFromAccessibility(intent, attempts)
-        }
-        if (!sent) {
-            sent = sendLaunchIntent(intent, "application", attempts)
-        }
+        val waitMs = openWaitMs(step)
+        val launch = launchAndVerify(packageName, launchTarget, attempts, waitMs)
+        return appOpenResult(packageName, launch, attempts, waitMs)
+    }
+
+    private fun openWaitMs(step: JsonNode): Long {
         val requestedWaitMs = step.path("duration_ms").asLong(DEFAULT_OPEN_WAIT_MS)
-        val waitMs = if (requestedWaitMs <= 0L) {
+        return if (requestedWaitMs <= 0L) {
             DEFAULT_OPEN_WAIT_MS
         } else {
             requestedWaitMs.coerceIn(250L, MAX_WAIT_MS)
         }
-        delay(waitMs)
-        var foreground = foregroundPackage()
-        var foregroundPackage = foreground.packageName
-        if (sent && foregroundPackage != packageName) {
-            sent = sendLaunchIntentFromAccessibility(intent, attempts)
-            if (sent) {
-                delay(waitMs)
-                foreground = foregroundPackage()
-                foregroundPackage = foreground.packageName
-            }
+    }
+
+    private suspend fun launchAndVerify(
+        packageName: String,
+        launchTarget: LaunchTarget,
+        attempts: ArrayNode,
+        waitMs: Long
+    ): AppOpenAttempt {
+        val intent = launchTarget.intentWithFlags()
+        var sent = sendInitialLaunch(packageName, launchTarget.activityName, intent, attempts)
+        var foreground = observeAfterWait(waitMs)
+        if (sent && foreground.packageName != packageName) {
+            val retry = retryAccessibilityLaunch(intent, attempts, waitMs)
+            sent = retry.sent
+            foreground = retry.foreground
         }
-        if (foregroundPackage != packageName) {
-            val shellSent = sendLaunchIntentFromShell(packageName, launchTarget.activityName, attempts)
-            if (shellSent) {
-                delay(SHELL_OPEN_WAIT_MS)
-                foreground = foregroundPackage()
-                foregroundPackage = foreground.packageName
-                sent = true
-            }
+        if (foreground.packageName != packageName) {
+            val retry = retryShellLaunch(packageName, launchTarget.activityName, attempts)
+            sent = sent || retry.sent
+            if (retry.sent) foreground = retry.foreground
+        }
+        return AppOpenAttempt(sent = sent, foreground = foreground)
+    }
+
+    private fun LaunchTarget.intentWithFlags(): Intent =
+        intent.apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            )
         }
 
-        return mapper.createObjectNode().apply {
-            put("ok", sent && foregroundPackage == packageName)
+    private fun sendInitialLaunch(
+        packageName: String,
+        activityName: String?,
+        intent: Intent,
+        attempts: ArrayNode
+    ): Boolean =
+        sendLaunchIntentFromShell(packageName, activityName, attempts) ||
+            sendLaunchIntentFromAccessibility(intent, attempts) ||
+            sendLaunchIntent(intent, "application", attempts)
+
+    private suspend fun observeAfterWait(waitMs: Long): ForegroundObservation {
+        delay(waitMs)
+        return foregroundPackage()
+    }
+
+    private suspend fun retryAccessibilityLaunch(
+        intent: Intent,
+        attempts: ArrayNode,
+        waitMs: Long
+    ): AppOpenAttempt {
+        val sent = sendLaunchIntentFromAccessibility(intent, attempts)
+        val foreground = if (sent) observeAfterWait(waitMs) else foregroundPackage()
+        return AppOpenAttempt(sent = sent, foreground = foreground)
+    }
+
+    private suspend fun retryShellLaunch(
+        packageName: String,
+        activityName: String?,
+        attempts: ArrayNode
+    ): AppOpenAttempt {
+        val sent = sendLaunchIntentFromShell(packageName, activityName, attempts)
+        val foreground = if (sent) observeAfterWait(SHELL_OPEN_WAIT_MS) else foregroundPackage()
+        return AppOpenAttempt(sent = sent, foreground = foreground)
+    }
+
+    private fun appOpenResult(
+        packageName: String,
+        launch: AppOpenAttempt,
+        attempts: ArrayNode,
+        waitMs: Long
+    ): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("ok", launch.sent && launch.foreground.packageName == packageName)
             put("package", packageName)
-            put("foregroundPackage", foregroundPackage)
-            put("verificationSource", foreground.source)
-            if (foreground.cachedPackage.isNotBlank()) put("cachedForegroundPackage", foreground.cachedPackage)
-            if (foreground.activeWindowPackage.isNotBlank()) put("activeWindowPackage", foreground.activeWindowPackage)
+            put("foregroundPackage", launch.foreground.packageName)
+            put("verificationSource", launch.foreground.source)
+            addForegroundDetails(launch.foreground)
             put("wait_ms", waitMs)
             set<JsonNode>("launchAttempts", attempts)
-            if (foregroundPackage != packageName) {
+            if (launch.foreground.packageName != packageName) {
                 put("error", "launch intent sent but target app foreground could not be verified")
             }
         }
+
+    private fun ObjectNode.addForegroundDetails(foreground: ForegroundObservation) {
+        if (foreground.cachedPackage.isNotBlank()) put("cachedForegroundPackage", foreground.cachedPackage)
+        if (foreground.activeWindowPackage.isNotBlank()) put("activeWindowPackage", foreground.activeWindowPackage)
     }
 
     private suspend fun tap(step: JsonNode): ObjectNode {
@@ -400,7 +471,7 @@ class UiRunStepsTool(
         )
     }
 
-    private fun sendLaunchIntent(intent: Intent, source: String, attempts: com.fasterxml.jackson.databind.node.ArrayNode): Boolean =
+    private fun sendLaunchIntent(intent: Intent, source: String, attempts: ArrayNode): Boolean =
         runCatching {
             context.startActivity(intent)
             attempts.add(mapper.createObjectNode().apply {
@@ -419,7 +490,7 @@ class UiRunStepsTool(
 
     private fun sendLaunchIntentFromAccessibility(
         intent: Intent,
-        attempts: com.fasterxml.jackson.databind.node.ArrayNode
+        attempts: ArrayNode
     ): Boolean =
         runCatching { UiAccessibilityService.startActivityFromService(intent) }
             .getOrDefault(false)
@@ -433,22 +504,12 @@ class UiRunStepsTool(
     private fun sendLaunchIntentFromShell(
         packageName: String,
         activityName: String?,
-        attempts: com.fasterxml.jackson.databind.node.ArrayNode
+        attempts: ArrayNode
     ): Boolean =
         runCatching {
-            val results = PrivilegeManager.launchApp(packageName, activityName, timeoutSeconds = SHELL_LAUNCH_TIMEOUT_SECONDS)
-            var anyOk = false
-            results.forEach { shell ->
-                if (shell.ok) anyOk = true
-                attempts.add(mapper.createObjectNode().apply {
-                    put("source", "shizuku:${shell.strategy}")
-                    put("sent", shell.ok)
-                    if (shell.result.stderr.isNotBlank()) put("error", shell.result.stderr.take(500))
-                    if (!shell.ok && shell.result.stdout.isNotBlank()) put("stdout", shell.result.stdout.take(500))
-                    if (shell.result.timedOut) put("timed_out", true)
-                })
-            }
-            anyOk
+            PrivilegeManager.launchApp(packageName, activityName, timeoutSeconds = SHELL_LAUNCH_TIMEOUT_SECONDS)
+                .onEach { attempts.add(shellLaunchAttemptNode(it)) }
+                .any { it.ok }
         }.getOrElse { error ->
             attempts.add(mapper.createObjectNode().apply {
                 put("source", "shizuku")
@@ -456,6 +517,15 @@ class UiRunStepsTool(
                 put("error", error.message ?: "Shizuku launch failed")
             })
             false
+        }
+
+    private fun shellLaunchAttemptNode(shell: PrivilegeManager.AppLaunchShellResult): ObjectNode =
+        mapper.createObjectNode().apply {
+            put("source", "shizuku:${shell.strategy}")
+            put("sent", shell.ok)
+            shell.result.stderr.takeIf { it.isNotBlank() }?.let { put("error", it.take(500)) }
+            shell.result.stdout.takeIf { !shell.ok && it.isNotBlank() }?.let { put("stdout", it.take(500)) }
+            if (shell.result.timedOut) put("timed_out", true)
         }
 
     private fun launchTarget(packageName: String): LaunchTarget? {
@@ -489,6 +559,25 @@ class UiRunStepsTool(
             "none", "final", "after_each", "on_failure" -> value
             else -> "final"
         }
+
+    private data class RunOptions(
+        val observe: String,
+        val abortOnFailure: Boolean,
+        val stepDelayMs: Long,
+        val finalMaxDepth: Int
+    )
+
+    private data class StepRunResult(
+        val ok: Boolean,
+        val failedStep: Int,
+        val aborted: Boolean,
+        val results: ArrayNode
+    )
+
+    private data class AppOpenAttempt(
+        val sent: Boolean,
+        val foreground: ForegroundObservation
+    )
 
     private data class ForegroundObservation(
         val packageName: String,
