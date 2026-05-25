@@ -203,16 +203,18 @@ public final class AgentSkillTools {
             Map<String, String> out = new LinkedHashMap<>();
             for (String line : yaml.split("\n")) {
                 String trimmed = line.trim();
-                if (trimmed.isBlank() || trimmed.startsWith("#")) continue;
-                int colon = trimmed.indexOf(':');
-                if (colon <= 0) continue;
-                String key = trimmed.substring(0, colon).trim();
-                String value = trimmed.substring(colon + 1).trim();
-                if ((value.startsWith("\"") && value.endsWith("\""))
-                        || (value.startsWith("'") && value.endsWith("'"))) {
-                    value = value.substring(1, value.length() - 1);
+                if (!trimmed.isBlank() && !trimmed.startsWith("#")) {
+                    int colon = trimmed.indexOf(':');
+                    if (colon > 0) {
+                        String key = trimmed.substring(0, colon).trim();
+                        String value = trimmed.substring(colon + 1).trim();
+                        if ((value.startsWith("\"") && value.endsWith("\""))
+                                || (value.startsWith("'") && value.endsWith("'"))) {
+                            value = value.substring(1, value.length() - 1);
+                        }
+                        out.put(key, value);
+                    }
                 }
-                out.put(key, value);
             }
             return out;
         }

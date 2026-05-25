@@ -54,6 +54,7 @@ public class CodexResponsesLoopRunner {
     private static final Set<String> RESPONSES_UNSUPPORTED_ROOT_SCHEMA_KEYS =
             Set.of("oneOf", "anyOf", "allOf", "enum", "not");
     private static final String ERROR_FIELD = "error";
+    private static final String CONTENT_FIELD = "content";
     private static final String MESSAGE_FIELD = "message";
     private static final String OBJECT_TYPE = "object";
     private static final String OUTPUT_FIELD = "output";
@@ -368,7 +369,7 @@ public class CodexResponsesLoopRunner {
     private ObjectNode message(String role, String text) {
         ObjectNode node = mapper.createObjectNode();
         node.put("role", role);
-        node.put("content", text);
+        node.put(CONTENT_FIELD, text);
         return node;
     }
 
@@ -390,7 +391,7 @@ public class CodexResponsesLoopRunner {
             image.put("detail", "high");
             content.add(image);
         }
-        msg.set("content", content);
+        msg.set(CONTENT_FIELD, content);
         return msg;
     }
 
@@ -483,7 +484,7 @@ public class CodexResponsesLoopRunner {
         JsonNode output = resp.path(OUTPUT_FIELD);
         if (output.isArray()) {
             for (JsonNode item : output) {
-                JsonNode content = item.path("content");
+                JsonNode content = item.path(CONTENT_FIELD);
                 if (!content.isArray()) continue;
                 for (JsonNode block : content) {
                     String type = block.path("type").asText("");
@@ -598,7 +599,7 @@ public class CodexResponsesLoopRunner {
             content.add(image);
         }
 
-        msg.set("content", content);
+        msg.set(CONTENT_FIELD, content);
         return msg;
     }
 

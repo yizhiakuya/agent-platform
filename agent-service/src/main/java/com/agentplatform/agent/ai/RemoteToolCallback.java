@@ -46,6 +46,7 @@ public class RemoteToolCallback {
     private static final Logger log = LoggerFactory.getLogger(RemoteToolCallback.class);
     private static final int MAX_UPLOADED_VISION_ATTACHMENTS = 8;
     private static final Set<String> ANTHROPIC_UNSUPPORTED_ROOT_SCHEMA_KEYS = Set.of("oneOf", "anyOf", "allOf");
+    private static final String BINARY_PLACEHOLDER_PREFIX = "<binary ";
 
     private final UUID deviceId;
     private final UUID userId;
@@ -351,10 +352,10 @@ public class RemoteToolCallback {
                     boolean shouldCollect = len > 0 && len < 7_000_000   // Anthropic per-image cap ~5MB binary
                             && (isVision || !hasVision);                  // skip duplicate UI image when vision sibling present
                     if (shouldCollect) {
-                        copy.put(k, "<binary " + len + "B attached as image; rendered to user>");
-                        out.add(new PendingImage(sniffMime(k, b64), b64));
+                        copy.put(k, binaryPlaceholder(len, "attached as image; rendered to user"));
+                        out.add(new PendingImage(sniffMime(b64), b64));
                     } else {
-                        copy.put(k, "<binary " + len + "B omitted; vision sibling preferred>");
+                        copy.put(k, binaryPlaceholder(len, "omitted; vision sibling preferred"));
                     }
                 } else {
                     copy.set(k, stripB64ForLlmAndCollect(v, childPath, out));
@@ -374,13 +375,11 @@ public class RemoteToolCallback {
     }
 
     /**
-     * Best-effort MIME-type guess. Field names like {@code thumb_b64} /
-     * {@code image_b64} come from Android device tools that always emit JPEG;
-     * for safety we also peek at the base64 prefix — JPEG starts with "/9j/",
+     * Best-effort MIME-type guess from the base64 prefix — JPEG starts with "/9j/",
      * PNG with "iVBORw0KGgo". Default to JPEG since Anthropic accepts both
      * and our existing photos.list_recent path emits JPEG.
      */
-    private static String sniffMime(String fieldName, String b64) {
+    private static String sniffMime(String b64) {
         if (b64 == null || b64.length() < 8) return "image/jpeg";
         if (b64.startsWith("iVBORw0KGgo")) return "image/png";
         if (b64.startsWith("R0lGOD")) return "image/gif";
@@ -396,7 +395,7 @@ public class RemoteToolCallback {
                 String k = e.getKey();
                 if (k.endsWith("_b64") && e.getValue().isTextual()) {
                     int len = e.getValue().asText().length();
-                    copy.put(k, "<binary " + len + "B omitted; rendered to user>");
+                    copy.put(k, binaryPlaceholder(len, "omitted; rendered to user"));
                 } else {
                     copy.set(k, stripB64ForLlm(e.getValue()));
                 }
@@ -408,6 +407,10 @@ public class RemoteToolCallback {
             return copy;
         }
         return node;
+    }
+
+    private static String binaryPlaceholder(int length, String reason) {
+        return BINARY_PLACEHOLDER_PREFIX + length + "B " + reason + ">";
     }
 
     /**
