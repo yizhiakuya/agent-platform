@@ -127,6 +127,32 @@ public final class AgentMemoryTools {
             }
             return null;
         }
+
+        private static String normalizeKind(String kind) {
+            if (kind == null || kind.isBlank()) return "fact";
+            return switch (kind.trim().toLowerCase()) {
+                case "fact", "preference", "rule", "lesson" -> kind.trim().toLowerCase();
+                default -> null;
+            };
+        }
+
+        private static String normalizeForDuplicate(String value) {
+            if (value == null) return "";
+            StringBuilder sb = new StringBuilder(value.length());
+            for (int i = 0; i < value.length(); i++) {
+                char c = Character.toLowerCase(value.charAt(i));
+                if (Character.isLetterOrDigit(c)) {
+                    sb.append(c);
+                }
+            }
+            return sb.toString();
+        }
+
+        private static boolean isLongContainmentDuplicate(String existing, String incoming) {
+            int shorter = Math.min(existing.length(), incoming.length());
+            if (shorter < 12) return false;
+            return existing.contains(incoming) || incoming.contains(existing);
+        }
     }
 
     @Component
@@ -225,29 +251,4 @@ public final class AgentMemoryTools {
         return node == null || node.isNull() ? fallback : node.asText(fallback);
     }
 
-    private static String normalizeKind(String kind) {
-        if (kind == null || kind.isBlank()) return "fact";
-        return switch (kind.trim().toLowerCase()) {
-            case "fact", "preference", "rule", "lesson" -> kind.trim().toLowerCase();
-            default -> null;
-        };
-    }
-
-    private static String normalizeForDuplicate(String value) {
-        if (value == null) return "";
-        StringBuilder sb = new StringBuilder(value.length());
-        for (int i = 0; i < value.length(); i++) {
-            char c = Character.toLowerCase(value.charAt(i));
-            if (Character.isLetterOrDigit(c)) {
-                sb.append(c);
-            }
-        }
-        return sb.toString();
-    }
-
-    private static boolean isLongContainmentDuplicate(String existing, String incoming) {
-        int shorter = Math.min(existing.length(), incoming.length());
-        if (shorter < 12) return false;
-        return existing.contains(incoming) || incoming.contains(existing);
-    }
 }
