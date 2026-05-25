@@ -2,6 +2,7 @@ package com.agentplatform.android.ui
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -57,34 +58,11 @@ fun BoundScreen(
     onUnbind: () -> Unit
 ) {
     val ctx = LocalContext.current
+    val activity = ctx as Activity
     val status by AgentForegroundService.status.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    fun isGranted(perm: String): Boolean =
-        ContextCompat.checkSelfPermission(ctx, perm) == PackageManager.PERMISSION_GRANTED
-
-    fun checkNotif() = Build.VERSION.SDK_INT < 33 || isGranted(Manifest.permission.POST_NOTIFICATIONS)
-    fun checkPhotos() = Build.VERSION.SDK_INT < 33 || isGranted(Manifest.permission.READ_MEDIA_IMAGES)
-    // MIUI / HyperOS 把"照片和视频"合并成一个系统权限项,授权后通常两边都给,
-    // 但有时只给 READ_MEDIA_VISUAL_USER_SELECTED(部分访问,Android 14+)。
-    // 任一覆盖到视频的权限存在就算给了。
-    fun checkVideos(): Boolean {
-        if (Build.VERSION.SDK_INT < 33) return true
-        if (isGranted(Manifest.permission.READ_MEDIA_VIDEO)) return true
-        if (Build.VERSION.SDK_INT >= 34 && isGranted("android.permission.READ_MEDIA_VISUAL_USER_SELECTED")) return true
-        return false
-    }
-    fun checkOverlayPermission(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(ctx)
-
-    val isXiaomiLike = Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true)
-        || Build.BRAND.equals("Xiaomi", ignoreCase = true)
-        || Build.DISPLAY.contains("HyperOS", ignoreCase = true)
-
-    var notifGranted by remember { mutableStateOf(checkNotif()) }
-    var photosGranted by remember { mutableStateOf(checkPhotos()) }
-    var videosGranted by remember { mutableStateOf(checkVideos()) }
-    var overlayGranted by remember { mutableStateOf(checkOverlayPermission()) }
+    var permissions by remember { mutableStateOf(boundScreenPermissions(ctx)) }
     var accessibilityReady by remember { mutableStateOf(UiAccessibilityService.isAvailable()) }
     var captureReady by remember { mutableStateOf(UiCaptureManager.isReady()) }
     var autoApproveUiTools by remember { mutableStateOf(prefs.autoApproveUiTools) }
@@ -95,10 +73,7 @@ fun BoundScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                notifGranted = checkNotif()
-                photosGranted = checkPhotos()
-                videosGranted = checkVideos()
-                overlayGranted = checkOverlayPermission()
+                permissions = boundScreenPermissions(ctx)
                 accessibilityReady = UiAccessibilityService.isAvailable()
                 captureReady = UiCaptureManager.isReady()
                 autoApproveUiTools = prefs.autoApproveUiTools
@@ -136,27 +111,7 @@ fun BoundScreen(
             value = prefs.deviceId ?: "(未知)"
         )
 
-        if (!notifGranted) {
-            PermissionCard(
-                title = "通知权限",
-                desc = "Android 13+ 必须开通知权限,前台服务才能保持运行。",
-                actionLabel = "打开设置"
-            ) { openAppSettings(ctx as Activity) }
-        }
-        if (!photosGranted) {
-            PermissionCard(
-                title = "媒体读取权限",
-                desc = "photos.list_recent 工具需要此权限,不给将返回空列表。",
-                actionLabel = "打开设置"
-            ) { openAppSettings(ctx as Activity) }
-        }
-        if (!videosGranted) {
-            PermissionCard(
-                title = "读取视频权限",
-                desc = "videos.list_recent 工具需要,不给将看不到视频。",
-                actionLabel = "打开设置"
-            ) { openAppSettings(ctx as Activity) }
-        }
+        PermissionWarnings(permissions) { openAppSettings(activity) }
 
         CapabilityCard(
             title = "屏幕操作",
@@ -167,67 +122,26 @@ fun BoundScreen(
                 "需要手动开启无障碍服务后,agent 才能操作其他应用。"
             },
             actionLabel = "打开无障碍设置"
-        ) { openAccessibilitySettings(ctx as Activity) }
+        ) { openAccessibilitySettings(activity) }
 
-        CapabilityCard(
-            title = "屏幕识别",
-            enabled = accessibilityReady || captureReady,
-            desc = if (accessibilityReady) {
-                "已启用无障碍截图,agent 可按需获取当前屏幕截图用于视觉理解。"
-            } else if (captureReady) {
-                "已授权屏幕录制,agent 可按需获取当前屏幕截图用于视觉理解。"
-            } else {
-                "建议先开启无障碍服务；也可授权系统屏幕录制弹窗作为截图兜底。"
-            },
-            actionLabel = "允许屏幕识别"
-        ) { onRequestScreenCapture() }
+        ScreenCaptureCard(
+            accessibilityReady = accessibilityReady,
+            captureReady = captureReady,
+            onRequestScreenCapture = onRequestScreenCapture
+        )
 
         CapabilityCard(
             title = "后台拉起应用",
-            enabled = overlayGranted,
-            desc = if (overlayGranted) {
-                "已允许悬浮窗权限。小米/HyperOS 还需要在其他权限里允许后台弹出界面,用于 ui.open_app 直接把微信等应用拉到前台。"
-            } else if (isXiaomiLike) {
-                "小米/HyperOS 需要允许悬浮窗和后台弹出界面,否则 ui.open_app 会发出启动 intent,但目标应用可能停留在后台。"
-            } else {
-                "部分系统需要允许悬浮窗/后台弹出权限,否则后台服务不能直接把其他应用拉到前台。"
-            },
-            actionLabel = if (isXiaomiLike) "打开小米权限设置" else "打开悬浮窗设置"
-        ) { openBackgroundLaunchSettings(ctx as Activity) }
+            enabled = permissions.overlayGranted,
+            desc = backgroundLaunchDescription(permissions),
+            actionLabel = backgroundLaunchActionLabel(permissions)
+        ) { openBackgroundLaunchSettings(activity) }
 
-        CapabilityCard(
-            title = "高级权限通道",
-            enabled = privilegeStatus.manageMediaGranted || privilegeStatus.shellAvailable,
-            desc = when {
-                privilegeStatus.manageMediaGranted ->
-                    "已获得媒体管理权限，相册移入回收站/删除可以减少 Android 系统二次确认。"
-                privilegeStatus.shellAvailable ->
-                    "Shizuku 已运行并已授权，agent 可以使用白名单高级配置工具。"
-                privilegeStatus.shizukuRunning ->
-                    "Shizuku 已运行，但还没有授权 Agent Platform。"
-                privilegeStatus.shizukuInstalled ->
-                    "Shizuku 已安装但当前未运行。重启手机后需要重新用 Shizuku 启动服务。"
-                else ->
-                    "未检测到 Shizuku。高级权限是可选能力，普通相册和屏幕工具仍会继续工作。"
-            },
-            actionLabel = when {
-                privilegeStatus.shizukuRunning && !privilegeStatus.shizukuPermissionGranted -> "授权 Shizuku"
-                !privilegeStatus.manageMediaGranted && privilegeStatus.canRequestManageMedia -> "打开媒体管理权限"
-                else -> "刷新状态"
-            }
-        ) {
-            when {
-                privilegeStatus.shizukuRunning && !privilegeStatus.shizukuPermissionGranted -> {
-                    PrivilegeManager.requestShizukuPermission()
-                    privilegeStatus = PrivilegeManager.status(ctx)
-                }
-                !privilegeStatus.manageMediaGranted && privilegeStatus.canRequestManageMedia -> {
-                    runCatching { ctx.startActivity(PrivilegeManager.manageMediaSettingsIntent(ctx)) }
-                    privilegeStatus = PrivilegeManager.status(ctx)
-                }
-                else -> privilegeStatus = PrivilegeManager.status(ctx)
-            }
-        }
+        PrivilegeCapabilityCard(
+            status = privilegeStatus,
+            onStatusChange = { privilegeStatus = it },
+            context = ctx
+        )
 
         AutoApproveCard(
             enabled = autoApproveUiTools,
@@ -239,27 +153,198 @@ fun BoundScreen(
 
         Spacer(Modifier.height(8.dp))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            OutlinedButton(
-                onClick = { openBatterySettings(ctx as Activity) },
-                modifier = Modifier.fillMaxWidth().padding(end = 0.dp)
-            ) { Text("电池白名单") }
-        }
-
-        Button(
-            onClick = onUnbind,
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("解绑设备") }
-
-        Text(
-            "解绑会停止 WebSocket 服务并清除本地 token,重新绑定需要在网页端生成新的二维码。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+        BoundScreenActions(
+            onBatterySettings = { openBatterySettings(activity) },
+            onUnbind = onUnbind
         )
     }
+}
+
+private fun boundScreenPermissions(ctx: Context): BoundScreenPermissions =
+    BoundScreenPermissions(
+        notifGranted = notificationPermissionGranted(ctx),
+        photosGranted = mediaImagesPermissionGranted(ctx),
+        videosGranted = mediaVideoPermissionGranted(ctx),
+        overlayGranted = overlayPermissionGranted(ctx),
+        xiaomiLike = isXiaomiLikeDevice()
+    )
+
+private fun permissionGranted(ctx: Context, perm: String): Boolean =
+    ContextCompat.checkSelfPermission(ctx, perm) == PackageManager.PERMISSION_GRANTED
+
+private fun notificationPermissionGranted(ctx: Context): Boolean =
+    Build.VERSION.SDK_INT < 33 || permissionGranted(ctx, Manifest.permission.POST_NOTIFICATIONS)
+
+private fun mediaImagesPermissionGranted(ctx: Context): Boolean =
+    Build.VERSION.SDK_INT < 33 || permissionGranted(ctx, Manifest.permission.READ_MEDIA_IMAGES)
+
+private fun mediaVideoPermissionGranted(ctx: Context): Boolean {
+    if (Build.VERSION.SDK_INT < 33) return true
+    if (permissionGranted(ctx, Manifest.permission.READ_MEDIA_VIDEO)) return true
+    return Build.VERSION.SDK_INT >= 34 && permissionGranted(
+        ctx,
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
+    )
+}
+
+private fun overlayPermissionGranted(ctx: Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(ctx)
+
+private fun isXiaomiLikeDevice(): Boolean =
+    Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true)
+        || Build.BRAND.equals("Xiaomi", ignoreCase = true)
+        || Build.DISPLAY.contains("HyperOS", ignoreCase = true)
+
+private data class BoundScreenPermissions(
+    val notifGranted: Boolean,
+    val photosGranted: Boolean,
+    val videosGranted: Boolean,
+    val overlayGranted: Boolean,
+    val xiaomiLike: Boolean
+)
+
+@Composable
+private fun PermissionWarnings(
+    permissions: BoundScreenPermissions,
+    onOpenSettings: () -> Unit
+) {
+    if (!permissions.notifGranted) {
+        PermissionCard(
+            title = "通知权限",
+            desc = "Android 13+ 必须开通知权限,前台服务才能保持运行。",
+            actionLabel = "打开设置",
+            onAction = onOpenSettings
+        )
+    }
+    if (!permissions.photosGranted) {
+        PermissionCard(
+            title = "媒体读取权限",
+            desc = "photos.list_recent 工具需要此权限,不给将返回空列表。",
+            actionLabel = "打开设置",
+            onAction = onOpenSettings
+        )
+    }
+    if (!permissions.videosGranted) {
+        PermissionCard(
+            title = "读取视频权限",
+            desc = "videos.list_recent 工具需要,不给将看不到视频。",
+            actionLabel = "打开设置",
+            onAction = onOpenSettings
+        )
+    }
+}
+
+@Composable
+private fun ScreenCaptureCard(
+    accessibilityReady: Boolean,
+    captureReady: Boolean,
+    onRequestScreenCapture: () -> Unit
+) {
+    CapabilityCard(
+        title = "屏幕识别",
+        enabled = accessibilityReady || captureReady,
+        desc = screenCaptureDescription(accessibilityReady, captureReady),
+        actionLabel = "允许屏幕识别",
+        onAction = onRequestScreenCapture
+    )
+}
+
+private fun screenCaptureDescription(accessibilityReady: Boolean, captureReady: Boolean): String =
+    when {
+        accessibilityReady -> "已启用无障碍截图,agent 可按需获取当前屏幕截图用于视觉理解。"
+        captureReady -> "已授权屏幕录制,agent 可按需获取当前屏幕截图用于视觉理解。"
+        else -> "建议先开启无障碍服务；也可授权系统屏幕录制弹窗作为截图兜底。"
+    }
+
+private fun backgroundLaunchDescription(permissions: BoundScreenPermissions): String =
+    when {
+        permissions.overlayGranted ->
+            "已允许悬浮窗权限。小米/HyperOS 还需要在其他权限里允许后台弹出界面,用于 ui.open_app 直接把微信等应用拉到前台。"
+        permissions.xiaomiLike ->
+            "小米/HyperOS 需要允许悬浮窗和后台弹出界面,否则 ui.open_app 会发出启动 intent,但目标应用可能停留在后台。"
+        else ->
+            "部分系统需要允许悬浮窗/后台弹出权限,否则后台服务不能直接把其他应用拉到前台。"
+    }
+
+private fun backgroundLaunchActionLabel(permissions: BoundScreenPermissions): String =
+    if (permissions.xiaomiLike) "打开小米权限设置" else "打开悬浮窗设置"
+
+@Composable
+private fun PrivilegeCapabilityCard(
+    status: PrivilegeManager.Status,
+    onStatusChange: (PrivilegeManager.Status) -> Unit,
+    context: Context
+) {
+    CapabilityCard(
+        title = "高级权限通道",
+        enabled = status.manageMediaGranted || status.shellAvailable,
+        desc = privilegeDescription(status),
+        actionLabel = privilegeActionLabel(status)
+    ) {
+        handlePrivilegeAction(status, context, onStatusChange)
+    }
+}
+
+private fun privilegeDescription(status: PrivilegeManager.Status): String =
+    when {
+        status.manageMediaGranted ->
+            "已获得媒体管理权限，相册移入回收站/删除可以减少 Android 系统二次确认。"
+        status.shellAvailable ->
+            "Shizuku 已运行并已授权，agent 可以使用白名单高级配置工具。"
+        status.shizukuRunning ->
+            "Shizuku 已运行，但还没有授权 Agent Platform。"
+        status.shizukuInstalled ->
+            "Shizuku 已安装但当前未运行。重启手机后需要重新用 Shizuku 启动服务。"
+        else ->
+            "未检测到 Shizuku。高级权限是可选能力，普通相册和屏幕工具仍会继续工作。"
+    }
+
+private fun privilegeActionLabel(status: PrivilegeManager.Status): String =
+    when {
+        status.shizukuRunning && !status.shizukuPermissionGranted -> "授权 Shizuku"
+        !status.manageMediaGranted && status.canRequestManageMedia -> "打开媒体管理权限"
+        else -> "刷新状态"
+    }
+
+private fun handlePrivilegeAction(
+    status: PrivilegeManager.Status,
+    context: Context,
+    onStatusChange: (PrivilegeManager.Status) -> Unit
+) {
+    when {
+        status.shizukuRunning && !status.shizukuPermissionGranted ->
+            PrivilegeManager.requestShizukuPermission()
+        !status.manageMediaGranted && status.canRequestManageMedia ->
+            runCatching { context.startActivity(PrivilegeManager.manageMediaSettingsIntent(context)) }
+    }
+    onStatusChange(PrivilegeManager.status(context))
+}
+
+@Composable
+private fun BoundScreenActions(
+    onBatterySettings: () -> Unit,
+    onUnbind: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        OutlinedButton(
+            onClick = onBatterySettings,
+            modifier = Modifier.fillMaxWidth().padding(end = 0.dp)
+        ) { Text("电池白名单") }
+    }
+
+    Button(
+        onClick = onUnbind,
+        modifier = Modifier.fillMaxWidth()
+    ) { Text("解绑设备") }
+
+    Text(
+        "解绑会停止 WebSocket 服务并清除本地 token,重新绑定需要在网页端生成新的二维码。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
 
 @Composable

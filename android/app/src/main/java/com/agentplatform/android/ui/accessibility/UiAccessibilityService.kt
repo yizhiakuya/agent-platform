@@ -381,52 +381,106 @@ class UiAccessibilityService : AccessibilityService() {
             stats: DumpTreeStats
         ) {
             if (depthLeft <= 0) return
+            val summary = nodeSummary(node)
+            // Only emit nodes the LLM can actually act on or learn from.
+            if (summary.emitCandidate && summary.hasSemanticValue) {
+                out.add(emitNode(path, node, summary, mapper))
+            } else {
+                recordSkippedNode(summary, stats)
+            }
+            walkChildren(node, path, depthLeft, mapper, out, stats)
+        }
+
+        private fun nodeSummary(node: AccessibilityNodeInfo): DumpNodeSummary {
             val rect = Rect()
             node.getBoundsInScreen(rect)
             val visible = node.isVisibleToUser
             val onScreen = !rect.isEmpty && rect.right > 0 && rect.bottom > 0
-            val emitCandidate = visible && onScreen
-            val text = node.text?.toString()?.takeIf { it.isNotBlank() }
-            val desc = node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
-            val rid = node.viewIdResourceName?.takeIf { it.isNotBlank() }
-            val clickable = node.isClickable
-            val editable = node.isEditable
-            val scrollable = node.isScrollable
-            // Only emit nodes the LLM can actually act on or learn from.
-            if (emitCandidate && (text != null || desc != null || rid != null || clickable || editable || scrollable)) {
-                val n = mapper.createObjectNode()
-                n.put("path", path)
-                if (text != null) n.put("text", text.take(200))
-                if (desc != null) n.put("desc", desc.take(200))
-                if (rid != null) n.put("id", rid)
-                val cls = node.className?.toString()
-                if (cls != null) n.put("class", cls.substringAfterLast('.'))
-                if (clickable) n.put("clickable", true)
-                if (editable) n.put("editable", true)
-                if (scrollable) n.put("scrollable", true)
-                val b = mapper.createObjectNode()
-                b.put("l", rect.left); b.put("t", rect.top)
-                b.put("r", rect.right); b.put("b", rect.bottom)
-                n.set<ObjectNode>("bounds", b)
-                out.add(n)
-            } else if (text != null || desc != null || rid != null || clickable || editable || scrollable) {
-                if (!visible) {
-                    stats.hiddenSkipped += 1
-                } else if (!onScreen) {
-                    stats.offscreenOrEmptySkipped += 1
-                } else {
-                    stats.semanticSkipped += 1
-                }
+            return DumpNodeSummary(
+                rect = rect,
+                visible = visible,
+                onScreen = onScreen,
+                text = node.text?.toString()?.takeIf { it.isNotBlank() },
+                desc = node.contentDescription?.toString()?.takeIf { it.isNotBlank() },
+                resourceId = node.viewIdResourceName?.takeIf { it.isNotBlank() },
+                clickable = node.isClickable,
+                editable = node.isEditable,
+                scrollable = node.isScrollable
+            )
+        }
+
+        private fun emitNode(
+            path: String,
+            node: AccessibilityNodeInfo,
+            summary: DumpNodeSummary,
+            mapper: ObjectMapper
+        ): ObjectNode {
+            val n = mapper.createObjectNode()
+            n.put("path", path)
+            summary.text?.let { n.put("text", it.take(200)) }
+            summary.desc?.let { n.put("desc", it.take(200)) }
+            summary.resourceId?.let { n.put("id", it) }
+            node.className?.toString()?.let { n.put("class", it.substringAfterLast('.')) }
+            if (summary.clickable) n.put("clickable", true)
+            if (summary.editable) n.put("editable", true)
+            if (summary.scrollable) n.put("scrollable", true)
+            n.set<ObjectNode>("bounds", boundsNode(summary.rect, mapper))
+            return n
+        }
+
+        private fun boundsNode(rect: Rect, mapper: ObjectMapper): ObjectNode =
+            mapper.createObjectNode().apply {
+                put("l", rect.left)
+                put("t", rect.top)
+                put("r", rect.right)
+                put("b", rect.bottom)
             }
+
+        private fun recordSkippedNode(summary: DumpNodeSummary, stats: DumpTreeStats) {
+            if (!summary.hasSemanticValue) return
+            when {
+                !summary.visible -> stats.hiddenSkipped += 1
+                !summary.onScreen -> stats.offscreenOrEmptySkipped += 1
+                else -> stats.semanticSkipped += 1
+            }
+        }
+
+        private fun walkChildren(
+            node: AccessibilityNodeInfo,
+            path: String,
+            depthLeft: Int,
+            mapper: ObjectMapper,
+            out: ArrayNode,
+            stats: DumpTreeStats
+        ) {
             val n = node.childCount
             for (i in 0 until n) {
                 val child = node.getChild(i) ?: continue
                 try {
-                    walk(child, if (path.isEmpty()) "$i" else "$path.$i", depthLeft - 1, mapper, out, stats)
+                    walk(child, childPath(path, i), depthLeft - 1, mapper, out, stats)
                 } finally {
                     child.recycle()
                 }
             }
+        }
+
+        private fun childPath(path: String, index: Int): String =
+            if (path.isEmpty()) "$index" else "$path.$index"
+
+        private data class DumpNodeSummary(
+            val rect: Rect,
+            val visible: Boolean,
+            val onScreen: Boolean,
+            val text: String?,
+            val desc: String?,
+            val resourceId: String?,
+            val clickable: Boolean,
+            val editable: Boolean,
+            val scrollable: Boolean
+        ) {
+            val emitCandidate: Boolean = visible && onScreen
+            val hasSemanticValue: Boolean =
+                text != null || desc != null || resourceId != null || clickable || editable || scrollable
         }
 
         private data class DumpTreeStats(

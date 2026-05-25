@@ -71,6 +71,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -252,71 +253,96 @@ class AgentForegroundService : Service() {
     }
 
     private fun dispatchToolCall(req: JsonRpcRequest) {
-        val toolName = req.params?.get("tool")?.asText()
-        val args = req.params?.get("args") ?: mapper.createObjectNode()
-        if (toolName == null) {
-            wsClient.send(JsonRpcResponse(
-                id = req.id,
-                error = JsonRpcError(JsonRpcError.INVALID_PARAMS, "missing tool name")
-            ))
-            return
-        }
-        val tool = toolRegistry.get(toolName)
-        if (tool == null) {
-            wsClient.send(JsonRpcResponse(
-                id = req.id,
-                error = JsonRpcError(JsonRpcError.TOOL_NOT_FOUND, "tool '$toolName' not found on this device")
-            ))
-            return
-        }
-
-        val job = scope.launch(start = CoroutineStart.LAZY) {
-            val startedAtMs = System.currentTimeMillis()
-            val wakeLock = acquireToolWakeLock(tool.name, req.id)
-            try {
-                Log.i(TAG, "Tool ${tool.name} start callId=${req.id}")
-                if (tool.confirmRequired && !AppPrefs(applicationContext).autoApproveUiTools) {
-                    val approved = ToolConfirmation.request(applicationContext, tool.name, args)
-                    if (!approved) {
-                        if (!isActive) return@launch
-                        wsClient.send(JsonRpcResponse(
-                            id = req.id,
-                            error = JsonRpcError(
-                                JsonRpcError.CONFIRMATION_REJECTED,
-                                "user rejected tool '${tool.name}'"
-                            )
-                        ))
-                        return@launch
-                    }
-                }
-                val result = withTimeout(DEVICE_TOOL_TIMEOUT_MS) { executeTool(tool, args) }
-                if (!isActive) return@launch
-                val sent = wsClient.send(JsonRpcResponse(id = req.id, result = result))
-                Log.i(TAG, "Tool ${tool.name} end callId=${req.id} durationMs=${System.currentTimeMillis() - startedAtMs} sent=$sent")
-            } catch (_: TimeoutCancellationException) {
-                if (!isActive) return@launch
-                Log.w(TAG, "Tool ${tool.name} timed out locally after ${DEVICE_TOOL_TIMEOUT_MS}ms")
-                val sent = wsClient.send(JsonRpcResponse(
-                    id = req.id,
-                    error = JsonRpcError(JsonRpcError.TOOL_TIMEOUT, "tool timed out locally")
-                ))
-                Log.w(TAG, "Tool ${tool.name} timeout response callId=${req.id} sent=$sent")
-            } catch (e: Exception) {
-                if (!isActive) return@launch
-                Log.w(TAG, "Tool ${tool.name} failed", e)
-                val sent = wsClient.send(JsonRpcResponse(
-                    id = req.id,
-                    error = JsonRpcError(JsonRpcError.INTERNAL_ERROR, e.message ?: "tool failed")
-                ))
-                Log.w(TAG, "Tool ${tool.name} error response callId=${req.id} sent=$sent")
-            } finally {
-                inFlightToolJobs.remove(req.id)
-                releaseToolWakeLock(wakeLock)
-            }
-        }
+        val call = resolveToolCall(req) ?: return
+        val job = launchToolJob(req.id, call.tool, call.args)
         inFlightToolJobs[req.id] = job
         job.start()
     }
+
+    private fun resolveToolCall(req: JsonRpcRequest): ToolCall? {
+        val toolName = req.params?.get("tool")?.asText()
+        val args = req.params?.get("args") ?: mapper.createObjectNode()
+        if (toolName == null) {
+            sendToolError(req.id, JsonRpcError.INVALID_PARAMS, "missing tool name")
+            return null
+        }
+        val tool = toolRegistry.get(toolName)
+        if (tool == null) {
+            sendToolError(req.id, JsonRpcError.TOOL_NOT_FOUND, "tool '$toolName' not found on this device")
+            return null
+        }
+        return ToolCall(tool, args)
+    }
+
+    private fun launchToolJob(
+        callId: String,
+        tool: Tool,
+        args: com.fasterxml.jackson.databind.JsonNode
+    ): Job =
+        scope.launch(start = CoroutineStart.LAZY) {
+            val startedAtMs = System.currentTimeMillis()
+            val wakeLock = acquireToolWakeLock(tool.name, callId)
+            try {
+                Log.i(TAG, "Tool ${tool.name} start callId=$callId")
+                if (!confirmToolAllowed(callId, tool, args)) {
+                    return@launch
+                }
+                val result = withTimeout(DEVICE_TOOL_TIMEOUT_MS) { executeTool(tool, args) }
+                if (!isActive) return@launch
+                sendToolResult(callId, tool, result, startedAtMs)
+            } catch (_: TimeoutCancellationException) {
+                if (!isActive) return@launch
+                sendToolTimeout(callId, tool)
+            } catch (e: Exception) {
+                if (!isActive) return@launch
+                sendToolFailure(callId, tool, e)
+            } finally {
+                inFlightToolJobs.remove(callId)
+                releaseToolWakeLock(wakeLock)
+            }
+        }
+
+    private suspend fun confirmToolAllowed(
+        callId: String,
+        tool: Tool,
+        args: com.fasterxml.jackson.databind.JsonNode
+    ): Boolean {
+        if (!tool.confirmRequired || AppPrefs(applicationContext).autoApproveUiTools) return true
+        val approved = ToolConfirmation.request(applicationContext, tool.name, args)
+        if (!approved && currentCoroutineContext().isActive) {
+            sendToolError(
+                callId,
+                JsonRpcError.CONFIRMATION_REJECTED,
+                "user rejected tool '${tool.name}'"
+            )
+        }
+        return approved
+    }
+
+    private fun sendToolResult(
+        callId: String,
+        tool: Tool,
+        result: com.fasterxml.jackson.databind.JsonNode,
+        startedAtMs: Long
+    ) {
+        val sent = wsClient.send(JsonRpcResponse(id = callId, result = result))
+        Log.i(TAG, "Tool ${tool.name} end callId=$callId durationMs=${System.currentTimeMillis() - startedAtMs} sent=$sent")
+    }
+
+    private fun sendToolTimeout(callId: String, tool: Tool) {
+        Log.w(TAG, "Tool ${tool.name} timed out locally after ${DEVICE_TOOL_TIMEOUT_MS}ms")
+        val sent = sendToolError(callId, JsonRpcError.TOOL_TIMEOUT, "tool timed out locally")
+        Log.w(TAG, "Tool ${tool.name} timeout response callId=$callId sent=$sent")
+    }
+
+    private fun sendToolFailure(callId: String, tool: Tool, e: Exception) {
+        Log.w(TAG, "Tool ${tool.name} failed", e)
+        val sent = sendToolError(callId, JsonRpcError.INTERNAL_ERROR, e.message ?: "tool failed")
+        Log.w(TAG, "Tool ${tool.name} error response callId=$callId sent=$sent")
+    }
+
+    private fun sendToolError(callId: String, code: Int, message: String): Boolean =
+        wsClient.send(JsonRpcResponse(id = callId, error = JsonRpcError(code, message)))
 
     private suspend fun executeTool(tool: Tool, args: com.fasterxml.jackson.databind.JsonNode): com.fasterxml.jackson.databind.JsonNode =
         if (tool.name.startsWith("ui.")) {
@@ -340,6 +366,11 @@ class AgentForegroundService : Service() {
             Log.w(TAG, "Failed to acquire tool wake lock callId=$callId tool=$toolName: ${it.message}")
         }.getOrNull()
     }
+
+    private data class ToolCall(
+        val tool: Tool,
+        val args: com.fasterxml.jackson.databind.JsonNode
+    )
 
     private fun releaseToolWakeLock(wakeLock: PowerManager.WakeLock?) {
         if (wakeLock == null) return
