@@ -58,46 +58,35 @@ class PhotosListRecentTool(
             "name_contains" to PhotoListQueryHelper.stringProperty(
                 mapper,
                 "Case-insensitive substring of the filename. Useful for filtering Android screenshots by source app (e.g. 'com.max.xiaoheihe')."
-            ),
-            "date_after" to PhotoListQueryHelper.integerProperty(
-                mapper,
-                "Only return photos taken on/after this UNIX millisecond timestamp (UTC)."
-            ),
-            "date_before" to PhotoListQueryHelper.integerProperty(
-                mapper,
-                "Only return photos taken on/before this UNIX millisecond timestamp (UTC)."
             )
-        ),
+        ) + PhotoListQueryHelper.dateRangeProperties(mapper),
         required = listOf("limit")
     )
 
     override val confirmRequired: Boolean = false
 
     override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
-        val request = PhotoListQueryHelper.pageRequest(args)
         val nameContains = PhotoListQueryHelper.optionalText(args, "name_contains")
-        val dateAfter = PhotoListQueryHelper.optionalLong(args, "date_after")
-        val dateBefore = PhotoListQueryHelper.optionalLong(args, "date_before")
-        val selection = PhotoListQueryHelper.selection(
-            listOf(
-                MediaStore.Images.Media.DISPLAY_NAME + " LIKE ?" to nameContains?.let { "%$it%" },
-                MediaStore.Images.Media.DATE_TAKEN + " >= ?" to dateAfter?.toString(),
-                MediaStore.Images.Media.DATE_TAKEN + " <= ?" to dateBefore?.toString()
-            )
-        )
-
-        val page = PhotoListQueryHelper.queryImages(context, mapper, request, selection, TAG)
-        val nextArgs = if (page.hasMore) nextArgs(request, page.photos.size(), nameContains, dateAfter, dateBefore) else null
-        val result = PhotoListQueryHelper.gridResult(
+        val dateRange = PhotoListQueryHelper.dateRange(args)
+        val result = PhotoListQueryHelper.filteredGridResult(
+            context = context,
             mapper = mapper,
-            page = page,
-            request = request,
-            nextArgs = nextArgs,
+            args = args,
+            tag = TAG,
+            selectionFields = listOf(
+                MediaStore.Images.Media.DISPLAY_NAME + " LIKE ?" to nameContains?.let { "%$it%" },
+            ) + PhotoListQueryHelper.dateRangeSelection(dateRange),
+            nextArgFields = { request, nextOffset ->
+                listOf(
+                    "limit" to request.limit,
+                    "offset" to nextOffset,
+                    "max_dim" to request.maxDim,
+                    "name_contains" to nameContains
+                ) + dateRange.fields
+            },
             summaryFields = listOf(
                 "name_contains" to nameContains,
-                "date_after" to dateAfter,
-                "date_before" to dateBefore
-            )
+            ) + dateRange.fields
         )
         ToolResultEnvelope.applyStandardFields(
             mapper = mapper,
@@ -109,25 +98,6 @@ class PhotosListRecentTool(
             request = args
         )
     }
-
-    private fun nextArgs(
-        request: PhotoPageRequest,
-        nextOffset: Int,
-        nameContains: String?,
-        dateAfter: Long?,
-        dateBefore: Long?
-    ) =
-        PhotoListQueryHelper.nextArgs(
-            mapper,
-            listOf(
-                "limit" to request.limit,
-                "offset" to request.offset + nextOffset,
-                "max_dim" to request.maxDim,
-                "name_contains" to nameContains,
-                "date_after" to dateAfter,
-                "date_before" to dateBefore
-            )
-        )
 
     companion object {
         private const val TAG = "PhotosListRecentTool"

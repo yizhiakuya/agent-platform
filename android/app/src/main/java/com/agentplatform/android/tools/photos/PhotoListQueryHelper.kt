@@ -34,6 +34,14 @@ internal data class PhotoPage(
     val hasMore: Boolean
 )
 
+internal data class PhotoDateRange(
+    val after: Long?,
+    val before: Long?
+) {
+    val fields: List<Pair<String, Any?>>
+        get() = listOf("date_after" to after, "date_before" to before)
+}
+
 internal object PhotoListQueryHelper {
     const val DEFAULT_LIMIT = 12
     const val MAX_RESULTS_PER_CALL = 200
@@ -70,6 +78,30 @@ internal object PhotoListQueryHelper {
 
     fun optionalLong(args: JsonNode, field: String): Long? =
         args.path(field).let { if (it.isNumber) it.asLong() else null }
+
+    fun dateRange(args: JsonNode): PhotoDateRange =
+        PhotoDateRange(
+            after = optionalLong(args, "date_after"),
+            before = optionalLong(args, "date_before")
+        )
+
+    fun dateRangeProperties(mapper: ObjectMapper): List<Pair<String, ObjectNode>> =
+        listOf(
+            "date_after" to integerProperty(
+                mapper,
+                "Only return photos taken on/after this UNIX millisecond timestamp (UTC)."
+            ),
+            "date_before" to integerProperty(
+                mapper,
+                "Only return photos taken on/before this UNIX millisecond timestamp (UTC)."
+            )
+        )
+
+    fun dateRangeSelection(range: PhotoDateRange): List<Pair<String, String?>> =
+        listOf(
+            MediaStore.Images.Media.DATE_TAKEN + " >= ?" to range.after?.toString(),
+            MediaStore.Images.Media.DATE_TAKEN + " <= ?" to range.before?.toString()
+        )
 
     fun gridSchema(
         mapper: ObjectMapper,
@@ -208,6 +240,30 @@ internal object PhotoListQueryHelper {
         result.set<ObjectNode>("display", displayNode(mapper, page, request))
         result.set<ObjectNode>("summary", summaryNode(mapper, page, request, summaryFields))
         return result
+    }
+
+    fun filteredGridResult(
+        context: Context,
+        mapper: ObjectMapper,
+        args: JsonNode,
+        tag: String,
+        selectionFields: List<Pair<String, String?>>,
+        nextArgFields: (PhotoPageRequest, Int) -> List<Pair<String, Any?>>,
+        rootFields: List<Pair<String, Any?>> = emptyList(),
+        summaryFields: List<Pair<String, Any?>> = emptyList()
+    ): ObjectNode {
+        val request = pageRequest(args)
+        val page = queryImages(context, mapper, request, selection(selectionFields), tag)
+        val nextOffset = request.offset + page.photos.size()
+        val nextArgs = if (page.hasMore) nextArgs(mapper, nextArgFields(request, nextOffset)) else null
+        return gridResult(
+            mapper = mapper,
+            page = page,
+            request = request,
+            nextArgs = nextArgs,
+            rootFields = rootFields,
+            summaryFields = summaryFields
+        )
     }
 
     private fun queryImageCursor(

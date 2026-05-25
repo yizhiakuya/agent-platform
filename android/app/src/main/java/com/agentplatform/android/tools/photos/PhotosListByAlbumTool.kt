@@ -39,16 +39,8 @@ class PhotosListByAlbumTool(
             "bucket_id" to PhotoListQueryHelper.stringProperty(
                 mapper,
                 "Album bucket id from photos.list_albums."
-            ),
-            "date_after" to PhotoListQueryHelper.integerProperty(
-                mapper,
-                "Only return photos taken on/after this UNIX millisecond timestamp (UTC)."
-            ),
-            "date_before" to PhotoListQueryHelper.integerProperty(
-                mapper,
-                "Only return photos taken on/before this UNIX millisecond timestamp (UTC)."
             )
-        ),
+        ) + PhotoListQueryHelper.dateRangeProperties(mapper),
         required = listOf("bucket_id")
     )
 
@@ -57,25 +49,25 @@ class PhotosListByAlbumTool(
     override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val bucketId = args.path("bucket_id").asText("").trim()
         require(bucketId.isNotEmpty()) { "bucket_id is required" }
-        val request = PhotoListQueryHelper.pageRequest(args)
-        val dateAfter = PhotoListQueryHelper.optionalLong(args, "date_after")
-        val dateBefore = PhotoListQueryHelper.optionalLong(args, "date_before")
-        val selection = PhotoListQueryHelper.selection(
-            listOf(
-                "${MediaStore.Images.Media.BUCKET_ID} = ?" to bucketId,
-                "${MediaStore.Images.Media.DATE_TAKEN} >= ?" to dateAfter?.toString(),
-                "${MediaStore.Images.Media.DATE_TAKEN} <= ?" to dateBefore?.toString()
-            )
-        )
-        val page = PhotoListQueryHelper.queryImages(context, mapper, request, selection, TAG)
-        val nextArgs = if (page.hasMore) nextArgs(bucketId, request, page.photos.size(), dateAfter, dateBefore) else null
-        val result = PhotoListQueryHelper.gridResult(
+        val dateRange = PhotoListQueryHelper.dateRange(args)
+        val result = PhotoListQueryHelper.filteredGridResult(
+            context = context,
             mapper = mapper,
-            page = page,
-            request = request,
-            nextArgs = nextArgs,
+            args = args,
+            tag = TAG,
+            selectionFields = listOf(
+                "${MediaStore.Images.Media.BUCKET_ID} = ?" to bucketId,
+            ) + PhotoListQueryHelper.dateRangeSelection(dateRange),
+            nextArgFields = { request, nextOffset ->
+                listOf(
+                    "bucket_id" to bucketId,
+                    "limit" to request.limit,
+                    "offset" to nextOffset,
+                    "max_dim" to request.maxDim,
+                ) + dateRange.fields
+            },
             rootFields = listOf("bucket_id" to bucketId),
-            summaryFields = listOf("bucket_id" to bucketId, "date_after" to dateAfter, "date_before" to dateBefore)
+            summaryFields = listOf("bucket_id" to bucketId) + dateRange.fields
         )
         ToolResultEnvelope.applyStandardFields(
             mapper = mapper,
@@ -87,24 +79,6 @@ class PhotosListByAlbumTool(
             request = args
         )
     }
-
-    private fun nextArgs(
-        bucketId: String,
-        request: PhotoPageRequest,
-        nextOffset: Int,
-        dateAfter: Long?,
-        dateBefore: Long?
-    ) = PhotoListQueryHelper.nextArgs(
-        mapper,
-        listOf(
-            "bucket_id" to bucketId,
-            "limit" to request.limit,
-            "offset" to request.offset + nextOffset,
-            "max_dim" to request.maxDim,
-            "date_after" to dateAfter,
-            "date_before" to dateBefore
-        )
-    )
 
     companion object {
         private const val TAG = "PhotosListByAlbumTool"
