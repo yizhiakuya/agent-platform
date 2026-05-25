@@ -8,12 +8,15 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.agentplatform.android.media.MediaStoreRequestBridge
 import com.agentplatform.android.privilege.PrivilegeManager
 import com.agentplatform.android.tools.media.MediaSelectionStore
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
+import com.fasterxml.jackson.databind.node.ObjectNode
 import java.io.IOException
 import java.util.Locale
 
@@ -27,6 +30,29 @@ internal object PhotoMutationHelpers {
         val mimeType: String,
         val dateTakenMs: Long,
         val sizeBytes: Long
+    )
+
+    data class PrivilegedMutationResult(
+        val usedPrivilegedShell: Boolean,
+        val usedManageMedia: Boolean,
+        val commandResults: List<PrivilegeManager.MediaCommandResult>,
+        val denied: SecurityException? = null
+    ) {
+        val succeeded: Boolean
+            get() = denied == null && (usedPrivilegedShell || usedManageMedia)
+    }
+
+    data class PrivilegedMutationSpec(
+        val countKey: String,
+        val unavailableCode: String,
+        val unavailableMessage: String,
+        val unavailableHint: String,
+        val deniedCode: String,
+        val deniedMessage: String,
+        val deniedHint: String,
+        val successRootFields: List<Pair<String, Any?>> = emptyList(),
+        val successSummaryFields: List<Pair<String, Any?>> = emptyList(),
+        val errorSummaryFields: List<Pair<String, Any?>> = emptyList()
     )
 
     fun parseIds(args: JsonNode): List<Long> {
@@ -238,6 +264,109 @@ internal object PhotoMutationHelpers {
         return array
     }
 
+    fun runPrivilegedImageMutation(
+        context: Context,
+        ids: List<Long>,
+        shellMutation: (List<Long>) -> List<PrivilegeManager.MediaCommandResult>,
+        manageMediaMutation: (Long) -> Unit
+    ): PrivilegedMutationResult {
+        var commandResults: List<PrivilegeManager.MediaCommandResult> = emptyList()
+        if (PrivilegeManager.status(context).shellAvailable) {
+            commandResults = shellMutation(ids)
+            if (commandResults.all { it.result.ok }) {
+                return PrivilegedMutationResult(
+                    usedPrivilegedShell = true,
+                    usedManageMedia = false,
+                    commandResults = commandResults
+                )
+            }
+        }
+        if (!PrivilegeManager.canManageMedia(context)) {
+            return PrivilegedMutationResult(
+                usedPrivilegedShell = false,
+                usedManageMedia = false,
+                commandResults = commandResults
+            )
+        }
+        return try {
+            ids.forEach(manageMediaMutation)
+            PrivilegedMutationResult(
+                usedPrivilegedShell = false,
+                usedManageMedia = true,
+                commandResults = commandResults
+            )
+        } catch (e: SecurityException) {
+            PrivilegedMutationResult(
+                usedPrivilegedShell = false,
+                usedManageMedia = true,
+                commandResults = commandResults,
+                denied = e
+            )
+        }
+    }
+
+    fun privilegedMutationSuccess(
+        mapper: ObjectMapper,
+        ids: List<Long>,
+        mutation: PrivilegedMutationResult,
+        spec: PrivilegedMutationSpec
+    ): ObjectNode {
+        return mapper.createObjectNode().apply {
+            set<JsonNode>("ids", idsArray(mapper, ids))
+            putFields(this, spec.successRootFields)
+            put(spec.countKey, ids.size)
+            put("used_privileged_shell", mutation.usedPrivilegedShell)
+            put("used_manage_media", mutation.usedManageMedia)
+            put("system_confirmation_required", !mutation.usedPrivilegedShell && !mutation.usedManageMedia)
+            put("system_confirmation_suppressed", false)
+            if (mutation.commandResults.isNotEmpty()) {
+                set<JsonNode>("privileged_shell_results", mediaCommandResultsArray(mapper, mutation.commandResults))
+            }
+            set<JsonNode>("summary", mapper.createObjectNode().apply {
+                put(spec.countKey, ids.size)
+                putFields(this, spec.successSummaryFields)
+                put("used_privileged_shell", mutation.usedPrivilegedShell)
+                put("used_manage_media", mutation.usedManageMedia)
+            })
+        }
+    }
+
+    fun privilegedMutationError(
+        mapper: ObjectMapper,
+        tool: Tool,
+        args: JsonNode,
+        ids: List<Long>,
+        mutation: PrivilegedMutationResult,
+        spec: PrivilegedMutationSpec
+    ): ObjectNode {
+        val denied = mutation.denied != null
+        val result = ToolResultEnvelope.error(
+            mapper = mapper,
+            tool = tool,
+            code = if (denied) spec.deniedCode else spec.unavailableCode,
+            message = mutation.denied?.message ?: if (denied) spec.deniedMessage else spec.unavailableMessage,
+            retryable = true,
+            hint = if (denied) spec.deniedHint else spec.unavailableHint,
+            request = args
+        )
+        result.set<JsonNode>("ids", idsArray(mapper, ids))
+        result.put(spec.countKey, 0)
+        result.put("used_privileged_shell", false)
+        result.put("used_manage_media", mutation.usedManageMedia)
+        result.put("system_confirmation_required", true)
+        result.put("system_confirmation_suppressed", true)
+        if (mutation.commandResults.isNotEmpty()) {
+            result.set<JsonNode>("privileged_shell_results", mediaCommandResultsArray(mapper, mutation.commandResults))
+        }
+        result.set<JsonNode>("summary", mapper.createObjectNode().apply {
+            put(spec.countKey, 0)
+            putFields(this, spec.errorSummaryFields)
+            put("requires_privileged_media_access", true)
+            put("system_confirmation_suppressed", true)
+        })
+        return result
+    }
+
     private fun extensionForMime(mimeType: String): String? {
         return when (mimeType.lowercase(Locale.ROOT)) {
             "image/jpeg", "image/jpg", "image/pjpeg" -> "jpg"
@@ -247,6 +376,20 @@ internal object PhotoMutationHelpers {
             "image/heic" -> "heic"
             "image/heif" -> "heif"
             else -> null
+        }
+    }
+
+    private fun putFields(node: ObjectNode, fields: List<Pair<String, Any?>>) {
+        fields.forEach { (name, value) ->
+            when (value) {
+                null -> Unit
+                is Boolean -> node.put(name, value)
+                is Int -> node.put(name, value)
+                is Long -> node.put(name, value)
+                is String -> node.put(name, value)
+                is JsonNode -> node.set<JsonNode>(name, value)
+                else -> node.put(name, value.toString())
+            }
         }
     }
 }

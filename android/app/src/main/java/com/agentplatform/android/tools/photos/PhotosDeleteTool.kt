@@ -58,90 +58,23 @@ class PhotosDeleteTool(
     override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
         val ids = PhotoMutationHelpers.parseIds(context, mapper, args)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val shellAvailable = PrivilegeManager.status(context).shellAvailable
-            var usedPrivilegedShell = false
-            var usedManageMedia = false
-            var commandResults: List<PrivilegeManager.MediaCommandResult> = emptyList()
-            if (shellAvailable) {
-                commandResults = PrivilegeManager.deleteImages(ids)
-                if (commandResults.all { it.result.ok }) {
-                    usedPrivilegedShell = true
+            val mutation = PhotoMutationHelpers.runPrivilegedImageMutation(
+                context = context,
+                ids = ids,
+                shellMutation = { PrivilegeManager.deleteImages(it) },
+                manageMediaMutation = { id ->
+                    context.contentResolver.delete(PhotoMutationHelpers.photoUri(id), null, null)
                 }
+            )
+            if (!mutation.succeeded) {
+                return@withContext mediaAccessError(args, ids, mutation)
             }
-            if (!usedPrivilegedShell && PrivilegeManager.canManageMedia(context)) {
-                usedManageMedia = true
-                try {
-                    for (id in ids) {
-                        context.contentResolver.delete(PhotoMutationHelpers.photoUri(id), null, null)
-                    }
-                } catch (e: SecurityException) {
-                    val result = ToolResultEnvelope.error(
-                        mapper = mapper,
-                        tool = this@PhotosDeleteTool,
-                        code = "media_mutation_denied",
-                        message = e.message ?: "Android denied MediaStore delete without foreground confirmation.",
-                        retryable = true,
-                        hint = "Verify Shizuku is running and authorized, then run privileges.configure target=manage_media. The tool suppressed the Android confirmation dialog.",
-                        request = args
-                    )
-                    result.set<JsonNode>("ids", PhotoMutationHelpers.idsArray(mapper, ids))
-                    result.put("deleted_count", 0)
-                    result.put("used_privileged_shell", false)
-                    result.put("used_manage_media", true)
-                    result.put("system_confirmation_required", true)
-                    result.put("system_confirmation_suppressed", true)
-                    if (commandResults.isNotEmpty()) {
-                        result.set<JsonNode>("privileged_shell_results", PhotoMutationHelpers.mediaCommandResultsArray(mapper, commandResults))
-                    }
-                    result.set<JsonNode>("summary", mapper.createObjectNode().apply {
-                        put("deleted_count", 0)
-                        put("requires_privileged_media_access", true)
-                        put("system_confirmation_suppressed", true)
-                    })
-                    return@withContext result
-                }
-            } else if (!usedPrivilegedShell) {
-                val result = ToolResultEnvelope.error(
-                    mapper = mapper,
-                    tool = this@PhotosDeleteTool,
-                    code = "privileged_media_access_required",
-                    message = "Deleting photos would require Android's foreground MediaStore confirmation on this device. Configure Shizuku/MANAGE_MEDIA first so the tool can run in the background without a system dialog.",
-                    retryable = true,
-                    hint = "Run privileges.status, then configure Shizuku and privileges.configure target=manage_media. The tool will not open the system confirmation dialog by default.",
-                    request = args
-                )
-                result.set<JsonNode>("ids", PhotoMutationHelpers.idsArray(mapper, ids))
-                result.put("deleted_count", 0)
-                result.put("used_privileged_shell", false)
-                result.put("used_manage_media", false)
-                result.put("system_confirmation_required", true)
-                result.put("system_confirmation_suppressed", true)
-                if (commandResults.isNotEmpty()) {
-                    result.set<JsonNode>("privileged_shell_results", PhotoMutationHelpers.mediaCommandResultsArray(mapper, commandResults))
-                }
-                result.set<JsonNode>("summary", mapper.createObjectNode().apply {
-                    put("deleted_count", 0)
-                    put("requires_privileged_media_access", true)
-                    put("system_confirmation_suppressed", true)
-                })
-                return@withContext result
-            }
-            val result = mapper.createObjectNode().apply {
-                set<JsonNode>("ids", PhotoMutationHelpers.idsArray(mapper, ids))
-                put("deleted_count", ids.size)
-                put("used_privileged_shell", usedPrivilegedShell)
-                put("used_manage_media", usedManageMedia)
-                put("system_confirmation_required", !usedPrivilegedShell && !usedManageMedia)
-                put("system_confirmation_suppressed", false)
-                if (commandResults.isNotEmpty()) {
-                    set<JsonNode>("privileged_shell_results", PhotoMutationHelpers.mediaCommandResultsArray(mapper, commandResults))
-                }
-                set<JsonNode>("summary", mapper.createObjectNode().apply {
-                    put("deleted_count", ids.size)
-                    put("used_privileged_shell", usedPrivilegedShell)
-                    put("used_manage_media", usedManageMedia)
-                })
-            }
+            val result = PhotoMutationHelpers.privilegedMutationSuccess(
+                mapper = mapper,
+                ids = ids,
+                mutation = mutation,
+                spec = mutationSpec()
+            )
             ToolResultEnvelope.applyStandardFields(mapper, this@PhotosDeleteTool, result, ok = true, request = args)
         } else {
             val failures = PhotoMutationHelpers.failuresArray(mapper)
@@ -177,4 +110,27 @@ class PhotosDeleteTool(
             )
         }
     }
+
+    private fun mediaAccessError(
+        args: JsonNode,
+        ids: List<Long>,
+        mutation: PhotoMutationHelpers.PrivilegedMutationResult
+    ) = PhotoMutationHelpers.privilegedMutationError(
+        mapper = mapper,
+        tool = this@PhotosDeleteTool,
+        args = args,
+        ids = ids,
+        mutation = mutation,
+        spec = mutationSpec()
+    )
+
+    private fun mutationSpec() = PhotoMutationHelpers.PrivilegedMutationSpec(
+        countKey = "deleted_count",
+        unavailableCode = "privileged_media_access_required",
+        unavailableMessage = "Deleting photos would require Android's foreground MediaStore confirmation on this device. Configure Shizuku/MANAGE_MEDIA first so the tool can run in the background without a system dialog.",
+        unavailableHint = "Run privileges.status, then configure Shizuku and privileges.configure target=manage_media. The tool will not open the system confirmation dialog by default.",
+        deniedCode = "media_mutation_denied",
+        deniedMessage = "Android denied MediaStore delete without foreground confirmation.",
+        deniedHint = "Verify Shizuku is running and authorized, then run privileges.configure target=manage_media. The tool suppressed the Android confirmation dialog."
+    )
 }
