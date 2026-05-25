@@ -233,8 +233,8 @@ class UiRunStepsTool(
         val packageName = step.path("package").asText("")
         if (packageName.isBlank()) return errorStep("missing package")
 
-        val launchTarget = launchTarget(packageName)
-            ?: knownLaunchTarget(packageName)
+        val launchTarget = UiAppLaunchHelper.launchTarget(context, packageName)
+            ?: UiAppLaunchHelper.knownLaunchTarget(packageName)
             ?: return errorStep("app not installed or has no launcher activity").apply {
                 put("package", packageName)
             }
@@ -255,7 +255,7 @@ class UiRunStepsTool(
 
     private suspend fun launchAndVerify(
         packageName: String,
-        launchTarget: LaunchTarget,
+        launchTarget: UiLaunchTarget,
         attempts: ArrayNode,
         waitMs: Long
     ): AppOpenAttempt {
@@ -275,7 +275,7 @@ class UiRunStepsTool(
         return AppOpenAttempt(sent = sent, foreground = foreground)
     }
 
-    private fun LaunchTarget.intentWithFlags(): Intent =
+    private fun UiLaunchTarget.intentWithFlags(): Intent =
         intent.apply {
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -528,27 +528,6 @@ class UiRunStepsTool(
             if (shell.result.timedOut) put("timed_out", true)
         }
 
-    private fun launchTarget(packageName: String): LaunchTarget? {
-        val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return null
-        return LaunchTarget(intent, intent.component?.className)
-    }
-
-    private fun knownLaunchTarget(packageName: String): LaunchTarget? =
-        when (packageName) {
-            "com.tencent.mm" -> launcherTarget(packageName, "com.tencent.mm.ui.LauncherUI")
-            "com.tencent.mobileqq" -> launcherTarget(packageName, "com.tencent.mobileqq.activity.SplashActivity")
-            "com.max.xiaoheihe" -> launcherTarget(packageName, "com.max.xiaoheihe.SplashActivity")
-            else -> null
-        }
-
-    private fun launcherTarget(packageName: String, activityName: String): LaunchTarget =
-        LaunchTarget(
-            Intent(Intent.ACTION_MAIN)
-                .addCategory(Intent.CATEGORY_LAUNCHER)
-                .setClassName(packageName, activityName),
-            activityName
-        )
-
     private fun numberArg(step: JsonNode, name: String): Double? {
         val value = step.get(name) ?: return null
         return if (value.isNumber) value.asDouble() else null
@@ -584,11 +563,6 @@ class UiRunStepsTool(
         val source: String,
         val cachedPackage: String,
         val activeWindowPackage: String
-    )
-
-    private data class LaunchTarget(
-        val intent: Intent,
-        val activityName: String?
     )
 
     private fun errorStep(message: String): ObjectNode =

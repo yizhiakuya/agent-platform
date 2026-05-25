@@ -49,8 +49,8 @@ class UiOpenAppTool(
             return missingPackage(args)
         }
 
-        val launchTarget = launchTarget(packageName)
-            ?: knownLaunchTarget(packageName)
+        val launchTarget = UiAppLaunchHelper.launchTarget(context, packageName)
+            ?: UiAppLaunchHelper.knownLaunchTarget(packageName)
             ?: return appNotFound(args, packageName)
 
         val launch = startLaunch(packageName, launchTarget)
@@ -85,7 +85,7 @@ class UiOpenAppTool(
         return standardResult(args, result, ok = false)
     }
 
-    private fun startLaunch(packageName: String, launchTarget: LaunchTarget): LaunchAttempt {
+    private fun startLaunch(packageName: String, launchTarget: UiLaunchTarget): LaunchAttempt {
         val intent = launchTarget.intent.apply {
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -353,40 +353,14 @@ class UiOpenAppTool(
             listOf(LaunchResult(sent = false, source = "shizuku", error = error.message))
         }
 
-    private fun launchTarget(packageName: String): LaunchTarget? {
-        val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return null
-        return LaunchTarget(intent, intent.component?.className)
-    }
-
-    private fun knownLaunchTarget(packageName: String): LaunchTarget? =
-        when (packageName) {
-            "com.tencent.mm" -> launcherTarget(packageName, "com.tencent.mm.ui.LauncherUI")
-            "com.tencent.mobileqq" -> launcherTarget(packageName, "com.tencent.mobileqq.activity.SplashActivity")
-            "com.max.xiaoheihe" -> launcherTarget(packageName, "com.max.xiaoheihe.SplashActivity")
-            else -> null
-        }
-
-    private fun launcherTarget(packageName: String, activityName: String): LaunchTarget =
-        LaunchTarget(
-            Intent(Intent.ACTION_MAIN)
-                .addCategory(Intent.CATEGORY_LAUNCHER)
-                .setClassName(packageName, activityName),
-            activityName
-        )
-
     private data class LaunchResult(
         val sent: Boolean,
         val source: String,
         val error: String? = null
     )
 
-    private data class LaunchTarget(
-        val intent: Intent,
-        val activityName: String?
-    )
-
     private data class LaunchAttempt(
-        val target: LaunchTarget,
+        val target: UiLaunchTarget,
         val initialResult: LaunchResult,
         val results: MutableList<LaunchResult>,
         val startedAtMs: Long
