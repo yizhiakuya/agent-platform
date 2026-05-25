@@ -10,12 +10,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.net.URI;
 
 /**
  * Multimodal embedding client for the server-side photo index.
@@ -42,10 +42,11 @@ public class PhotoEmbeddingService {
     private final int requestTimeoutSeconds;
 
     public PhotoEmbeddingService(WebClient.Builder defaultWebClientBuilder, AgentProperties props) {
-        AgentProperties.Agent agent = props == null ? null : props.agent();
-        AgentProperties.Photos photos = agent == null ? null : agent.photos();
-        AgentProperties.Memory memory = agent == null ? null : agent.memory();
+        AgentProperties.Photos photos = photos(props);
+        AgentProperties.Memory memory = memory(props);
         AgentProperties.Provider primary = primaryProvider(props);
+        String baseUrl = resolveBaseUrl(photos, memory, primary);
+        boolean authRequired = !isLocalEndpoint(baseUrl);
 
         this.model = photos == null ? "clip-ViT-B-32-multilingual-v1" : photos.embeddingModel();
         this.dim = photos == null ? 1024 : photos.embeddingDim();
@@ -54,18 +55,8 @@ public class PhotoEmbeddingService {
         this.inputImageField = photos == null ? "image" : photos.inputImageField();
         this.enabled = photos == null || Boolean.TRUE.equals(photos.enabled());
         this.requestTimeoutSeconds = photos == null ? 180 : Math.max(1, photos.requestTimeoutSeconds());
-
-        String configuredBase = photos == null ? null : photos.embeddingBaseUrl();
-        String configuredKey = photos == null ? null : photos.embeddingApiKey();
-        String baseUrl = configuredBase;
-        if (isBlank(baseUrl) && memory != null) baseUrl = memory.embeddingBaseUrl();
-        if (isBlank(baseUrl) && primary != null) baseUrl = primary.baseUrl();
-        if (isBlank(baseUrl)) baseUrl = "https://api.openai.com";
-
-        this.requiresApiKey = !isLocalEndpoint(baseUrl);
-        if (requiresApiKey && isBlank(configuredKey) && memory != null) configuredKey = memory.embeddingApiKey();
-        if (requiresApiKey && isBlank(configuredKey) && primary != null) configuredKey = primary.apiKey();
-        this.apiKey = configuredKey == null ? "" : configuredKey;
+        this.requiresApiKey = authRequired;
+        this.apiKey = resolveApiKey(authRequired, photos, memory, primary);
         ExchangeStrategies exchangeStrategies = ExchangeStrategies.builder()
                 .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(4 * 1024 * 1024))
                 .build();
@@ -220,5 +211,50 @@ public class PhotoEmbeddingService {
         List<AgentProperties.Provider> all = props.agent().providers();
         if (all == null || all.isEmpty()) return null;
         return all.get(0);
+    }
+
+    private static AgentProperties.Photos photos(AgentProperties props) {
+        AgentProperties.Agent agent = props == null ? null : props.agent();
+        return agent == null ? null : agent.photos();
+    }
+
+    private static AgentProperties.Memory memory(AgentProperties props) {
+        AgentProperties.Agent agent = props == null ? null : props.agent();
+        return agent == null ? null : agent.memory();
+    }
+
+    private static String resolveBaseUrl(AgentProperties.Photos photos,
+                                         AgentProperties.Memory memory,
+                                         AgentProperties.Provider primary) {
+        return firstPresent(
+                photos == null ? null : photos.embeddingBaseUrl(),
+                memory == null ? null : memory.embeddingBaseUrl(),
+                primary == null ? null : primary.baseUrl(),
+                "https://api.openai.com");
+    }
+
+    private static String resolveApiKey(boolean requiresApiKey,
+                                        AgentProperties.Photos photos,
+                                        AgentProperties.Memory memory,
+                                        AgentProperties.Provider primary) {
+        if (requiresApiKey) {
+            return firstPresent(
+                    photos == null ? null : photos.embeddingApiKey(),
+                    memory == null ? null : memory.embeddingApiKey(),
+                    primary == null ? null : primary.apiKey(),
+                    "");
+        }
+        return firstPresent(
+                photos == null ? null : photos.embeddingApiKey(),
+                "");
+    }
+
+    private static String firstPresent(String... values) {
+        for (String value : values) {
+            if (!isBlank(value)) {
+                return value;
+            }
+        }
+        return "";
     }
 }

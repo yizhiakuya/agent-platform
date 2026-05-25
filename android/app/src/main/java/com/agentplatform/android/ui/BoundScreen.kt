@@ -399,13 +399,13 @@ private fun openBatterySettings(activity: Activity) {
 private fun openBackgroundLaunchSettings(activity: Activity) {
     val packageName = activity.packageName
     val candidates = listOf(
-        Intent("miui.intent.action.APP_PERM_EDITOR")
+        Intent(MIUI_APP_PERMISSION_EDITOR_ACTION)
             .setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
             .putExtra("extra_pkgname", packageName),
-        Intent("miui.intent.action.APP_PERM_EDITOR")
+        Intent(MIUI_APP_PERMISSION_EDITOR_ACTION)
             .setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.AppPermissionsEditorActivity")
             .putExtra("extra_pkgname", packageName),
-        Intent("miui.intent.action.APP_PERM_EDITOR")
+        Intent(MIUI_APP_PERMISSION_EDITOR_ACTION)
             .putExtra("extra_pkgname", packageName),
         Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
             data = Uri.parse("package:$packageName")
@@ -419,3 +419,5 @@ private fun openBackgroundLaunchSettings(activity: Activity) {
     runCatching { activity.startActivity(intent) }
         .onFailure { openAppSettings(activity) }
 }
+
+private const val MIUI_APP_PERMISSION_EDITOR_ACTION = "miui.intent.action.APP_PERM_EDITOR"

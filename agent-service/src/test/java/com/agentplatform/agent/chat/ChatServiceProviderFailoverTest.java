@@ -461,6 +461,7 @@ class ChatServiceProviderFailoverTest {
 
         @Override
         public void savePhotoEmbedding(com.agentplatform.api.chat.PhotoAssetEmbeddingRequest req) {
+            // Test fake does not persist background photo embeddings.
         }
 
         @Override
@@ -481,6 +482,7 @@ class ChatServiceProviderFailoverTest {
 
         @Override
         public void deleteRuntimeSkill(String name, UUID userId) {
+            // Test fake has no runtime skill backing store.
         }
     }
 }

@@ -68,19 +68,7 @@ public class InternalToolController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "toolName required");
         }
 
-        DeviceSession session = registry.getSession(req.deviceId()).filter(DeviceSession::isOpen).orElse(null);
-        if (session == null) {
-            DeviceSession provisioned = provisioner.provision(req.deviceId(),
-                    req.userId() != null ? req.userId() : new UUID(0L, 0L));
-            if (provisioned == null) {
-                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                        "Device " + req.deviceId() + " is offline");
-            }
-            registry.online(provisioned);
-            session = provisioned;
-            log.info("Auto-provisioned session for device {} ({})", req.deviceId(),
-                    provisioned.getClass().getSimpleName());
-        }
+        DeviceSession session = activeSessionOrProvision(req);
         if (req.userId() != null && !session.userId().equals(req.userId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                     "Device " + req.deviceId() + " does not belong to this user");
@@ -112,6 +100,23 @@ public class InternalToolController {
         session.send(new JsonRpcRequest(callId.toString(), JsonRpcMethods.TOOL_CALL, params));
 
         return dr;
+    }
+
+    private DeviceSession activeSessionOrProvision(InternalCallRequest req) {
+        DeviceSession session = registry.getSession(req.deviceId()).filter(DeviceSession::isOpen).orElse(null);
+        if (session != null) {
+            return session;
+        }
+        DeviceSession provisioned = provisioner.provision(req.deviceId(),
+                req.userId() != null ? req.userId() : new UUID(0L, 0L));
+        if (provisioned == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Device " + req.deviceId() + " is offline");
+        }
+        registry.online(provisioned);
+        log.info("Auto-provisioned session for device {} ({})", req.deviceId(),
+                provisioned.getClass().getSimpleName());
+        return provisioned;
     }
 
     private boolean isDeviceStillActive(DeviceSession session) {
