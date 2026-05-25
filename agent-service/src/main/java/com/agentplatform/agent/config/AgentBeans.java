@@ -29,6 +29,8 @@ import java.util.concurrent.Executors;
 public class AgentBeans {
 
     private static final Logger log = LoggerFactory.getLogger(AgentBeans.class);
+    private static final String ANTHROPIC_MESSAGES_KIND = "anthropic-messages";
+    private static final String CODEX_RESPONSES_KIND = "codex-responses";
 
     @Bean
     public JwtUtil jwtUtil(AgentProperties props) {
@@ -51,8 +53,8 @@ public class AgentBeans {
         for (AgentProperties.Provider p : defs) {
             if (p == null) continue;
             String kind = p.kind() == null || p.kind().isBlank()
-                    ? "anthropic-messages" : p.kind().trim();
-            if (!"anthropic-messages".equals(kind) && !"codex-responses".equals(kind)) {
+                    ? ANTHROPIC_MESSAGES_KIND : p.kind().trim();
+            if (!ANTHROPIC_MESSAGES_KIND.equals(kind) && !CODEX_RESPONSES_KIND.equals(kind)) {
                 log.warn("[agent] skipping provider '{}' kind={} (unsupported)",
                         p.name(), kind);
                 continue;
@@ -65,7 +67,7 @@ public class AgentBeans {
             String baseUrl = p.baseUrl() == null || p.baseUrl().isBlank()
                     ? defaultBaseUrl(kind) : p.baseUrl();
             AnthropicClient client = null;
-            if ("anthropic-messages".equals(kind)) {
+            if (ANTHROPIC_MESSAGES_KIND.equals(kind)) {
                 // SDK-level retries disabled: ChatService wraps the whole
                 // provider call in an outer failover loop.
                 client = AnthropicOkHttpClient.builder()
@@ -109,7 +111,7 @@ public class AgentBeans {
     }
 
     private static String defaultBaseUrl(String kind) {
-        return "codex-responses".equals(kind)
+        return CODEX_RESPONSES_KIND.equals(kind)
                 ? "https://api.openai.com"
                 : "https://api.anthropic.com";
     }

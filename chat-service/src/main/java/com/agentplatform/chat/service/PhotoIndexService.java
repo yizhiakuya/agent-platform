@@ -36,6 +36,19 @@ public class PhotoIndexService {
     private static final String RANKING_SEMANTIC = "semantic";
     private static final String RANKING_SEMANTIC_THEN_SORT = "semantic_then_sort";
     private static final String RANKING_SORT_THEN_SEMANTIC = "sort_then_semantic";
+    private static final String SORT_BY_RELEVANCE = "relevance";
+    private static final String SORT_BY_DATE_TAKEN = "date_taken";
+    private static final String SORT_BY_DATE_MODIFIED = "date_modified";
+    private static final String SORT_BY_CREATED_AT = "created_at";
+    private static final String SORT_BY_UPDATED_AT = "updated_at";
+    private static final String SORT_BY_NAME = "name";
+    private static final String NULLS_LAST = " NULLS LAST";
+    private static final String COL_DEVICE_ID = "device_id";
+    private static final String COL_MEDIA_STORE_ID = "media_store_id";
+    private static final String COL_MIME_TYPE = "mime_type";
+    private static final String COL_THUMB_B64 = "thumb_b64";
+    private static final String COL_USER_ID = "user_id";
+    private static final String COL_UPDATED_AT = "updated_at";
     static final double SEMANTIC_THEN_SORT_MAX_SCORE_DROP = 0.06d;
     static final double SEMANTIC_THEN_SORT_MIN_SCORE_RATIO = 0.80d;
 
@@ -408,14 +421,14 @@ public class PhotoIndexService {
 
     private static String normalizeSortBy(String value) {
         String clean = cleanLower(value);
-        if ("date_taken".equals(clean)
-                || "date_modified".equals(clean)
-                || "created_at".equals(clean)
-                || "updated_at".equals(clean)
-                || "name".equals(clean)) {
+        if (SORT_BY_DATE_TAKEN.equals(clean)
+                || SORT_BY_DATE_MODIFIED.equals(clean)
+                || SORT_BY_CREATED_AT.equals(clean)
+                || SORT_BY_UPDATED_AT.equals(clean)
+                || SORT_BY_NAME.equals(clean)) {
             return clean;
         }
-        return "relevance";
+        return SORT_BY_RELEVANCE;
     }
 
     private static String normalizeSortDirection(String value) {
@@ -423,7 +436,7 @@ public class PhotoIndexService {
     }
 
     private static boolean shouldQualifyBeforeMetadataSort(String rankingMode, String sortBy) {
-        return RANKING_SEMANTIC_THEN_SORT.equals(rankingMode) && !"relevance".equals(sortBy);
+        return RANKING_SEMANTIC_THEN_SORT.equals(rankingMode) && !SORT_BY_RELEVANCE.equals(sortBy);
     }
 
     static double qualifyingScoreThreshold(double bestScore, double minScore) {
@@ -437,8 +450,8 @@ public class PhotoIndexService {
     }
 
     private static String finalOrderClause(String sortBy, String direction) {
-        if ("relevance".equals(sortBy)) {
-            return " ORDER BY distance ASC, date_taken_ms DESC NULLS LAST";
+        if (SORT_BY_RELEVANCE.equals(sortBy)) {
+            return " ORDER BY distance ASC, date_taken_ms DESC" + NULLS_LAST;
         }
         return metadataOrderClause(sortBy, direction) + ", distance ASC";
     }
@@ -447,11 +460,11 @@ public class PhotoIndexService {
         boolean asc = "asc".equals(direction);
         String dir = asc ? "ASC" : "DESC";
         return switch (sortBy) {
-            case "date_modified" -> " ORDER BY date_modified_sec " + dir + " NULLS LAST";
-            case "created_at" -> " ORDER BY indexed_at " + dir + " NULLS LAST";
-            case "updated_at" -> " ORDER BY updated_at " + dir + " NULLS LAST";
-            case "name" -> " ORDER BY name " + dir + " NULLS LAST";
-            default -> " ORDER BY date_taken_ms " + dir + " NULLS LAST";
+            case SORT_BY_DATE_MODIFIED -> " ORDER BY date_modified_sec " + dir + NULLS_LAST;
+            case SORT_BY_CREATED_AT -> " ORDER BY indexed_at " + dir + NULLS_LAST;
+            case SORT_BY_UPDATED_AT -> " ORDER BY " + COL_UPDATED_AT + " " + dir + NULLS_LAST;
+            case SORT_BY_NAME -> " ORDER BY name " + dir + NULLS_LAST;
+            default -> " ORDER BY date_taken_ms " + dir + NULLS_LAST;
         };
     }
 
@@ -473,12 +486,12 @@ public class PhotoIndexService {
     private static final RowMapper<PendingPhotoAssetDto> PENDING_ROW_MAPPER = (rs, rn) ->
             new PendingPhotoAssetDto(
                     (UUID) rs.getObject("id"),
-                    (UUID) rs.getObject("user_id"),
-                    (UUID) rs.getObject("device_id"),
-                    rs.getString("media_store_id"),
+                    (UUID) rs.getObject(COL_USER_ID),
+                    (UUID) rs.getObject(COL_DEVICE_ID),
+                    rs.getString(COL_MEDIA_STORE_ID),
                     rs.getString("name"),
-                    rs.getString("mime_type"),
-                    rs.getString("thumb_b64")
+                    rs.getString(COL_MIME_TYPE),
+                    rs.getString(COL_THUMB_B64)
             );
 
     private static final RowMapper<PhotoAssetSearchResult> SEARCH_ROW_MAPPER = (rs, rn) -> {
@@ -486,8 +499,8 @@ public class PhotoIndexService {
         double score = 1.0 - distance;
         return new PhotoAssetSearchResult(
                 (UUID) rs.getObject("id"),
-                (UUID) rs.getObject("device_id"),
-                rs.getString("media_store_id"),
+                (UUID) rs.getObject(COL_DEVICE_ID),
+                rs.getString(COL_MEDIA_STORE_ID),
                 rs.getString("name"),
                 rs.getString("bucket_id"),
                 rs.getString("bucket_name"),
@@ -496,9 +509,9 @@ public class PhotoIndexService {
                 boxedLong(rs, "size_bytes"),
                 boxedInt(rs, "width"),
                 boxedInt(rs, "height"),
-                rs.getString("mime_type"),
+                rs.getString(COL_MIME_TYPE),
                 rs.getString("content_hash"),
-                rs.getString("thumb_b64"),
+                rs.getString(COL_THUMB_B64),
                 rs.getString("embedding_model"),
                 boxedInt(rs, "embedding_dim"),
                 distance,
@@ -509,9 +522,9 @@ public class PhotoIndexService {
     private static final RowMapper<PhotoAssetDto> ASSET_ROW_MAPPER = (rs, rn) ->
             new PhotoAssetDto(
                     (UUID) rs.getObject("id"),
-                    (UUID) rs.getObject("user_id"),
-                    (UUID) rs.getObject("device_id"),
-                    rs.getString("media_store_id"),
+                    (UUID) rs.getObject(COL_USER_ID),
+                    (UUID) rs.getObject(COL_DEVICE_ID),
+                    rs.getString(COL_MEDIA_STORE_ID),
                     rs.getString("name"),
                     rs.getString("bucket_id"),
                     rs.getString("bucket_name"),
@@ -520,13 +533,13 @@ public class PhotoIndexService {
                     boxedLong(rs, "size_bytes"),
                     boxedInt(rs, "width"),
                     boxedInt(rs, "height"),
-                    rs.getString("mime_type"),
+                    rs.getString(COL_MIME_TYPE),
                     rs.getString("content_hash"),
-                    rs.getString("thumb_b64"),
+                    rs.getString(COL_THUMB_B64),
                     rs.getString("embedding_model"),
                     boxedInt(rs, "embedding_dim"),
                     odt(rs.getTimestamp("indexed_at")),
-                    odt(rs.getTimestamp("updated_at"))
+                    odt(rs.getTimestamp(COL_UPDATED_AT))
             );
 
     private static Long boxedLong(java.sql.ResultSet rs, String col) throws java.sql.SQLException {
