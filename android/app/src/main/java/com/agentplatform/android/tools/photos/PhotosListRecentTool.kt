@@ -2,13 +2,11 @@ package com.agentplatform.android.tools.photos
 
 import android.content.Context
 import android.provider.MediaStore
-import com.agentplatform.android.core.tool.Tool
-import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 /**
  * Returns the N most-recent photos from the device gallery as cached,
@@ -20,10 +18,10 @@ import kotlinx.coroutines.withContext
  * MediaStore cursor is null and the tool returns an empty array.
  */
 class PhotosListRecentTool(
-    private val context: Context,
-    private val mapper: ObjectMapper,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
-) : Tool {
+    context: Context,
+    mapper: ObjectMapper,
+    ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+) : PhotoGridTool(context, mapper, ioDispatcher) {
 
     override val name: String = "photos.list_recent"
 
@@ -63,12 +61,10 @@ class PhotosListRecentTool(
         required = listOf("limit")
     )
 
-    override val confirmRequired: Boolean = false
-
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
+    override fun gridResult(args: JsonNode): ObjectNode {
         val nameContains = PhotoListQueryHelper.optionalText(args, "name_contains")
         val dateRange = PhotoListQueryHelper.dateRange(args)
-        val result = PhotoListQueryHelper.filteredGridResult(
+        return PhotoListQueryHelper.filteredGridResult(
             PhotoFilteredGridQuery(
                 context = context,
                 mapper = mapper,
@@ -89,15 +85,6 @@ class PhotosListRecentTool(
                     "name_contains" to nameContains,
                 ) + dateRange.fields
             )
-        )
-        ToolResultEnvelope.applyStandardFields(
-            mapper = mapper,
-            tool = this@PhotosListRecentTool,
-            result = result,
-            ok = true,
-            resultType = "results",
-            displayPolicy = "show_grid",
-            request = args
         )
     }
 

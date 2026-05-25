@@ -2,23 +2,21 @@ package com.agentplatform.android.tools.photos
 
 import android.content.Context
 import android.provider.MediaStore
-import com.agentplatform.android.core.tool.Tool
-import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 /**
  * Lists cached, uploaded display-sized original image assets inside one
  * specific album bucket.
  */
 class PhotosListByAlbumTool(
-    private val context: Context,
-    private val mapper: ObjectMapper,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
-) : Tool {
+    context: Context,
+    mapper: ObjectMapper,
+    ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+) : PhotoGridTool(context, mapper, ioDispatcher) {
 
     override val name: String = "photos.list_by_album"
 
@@ -44,13 +42,11 @@ class PhotosListByAlbumTool(
         required = listOf("bucket_id")
     )
 
-    override val confirmRequired: Boolean = false
-
-    override suspend fun execute(args: JsonNode): JsonNode = withContext(ioDispatcher) {
+    override fun gridResult(args: JsonNode): ObjectNode {
         val bucketId = args.path("bucket_id").asText("").trim()
         require(bucketId.isNotEmpty()) { "bucket_id is required" }
         val dateRange = PhotoListQueryHelper.dateRange(args)
-        val result = PhotoListQueryHelper.filteredGridResult(
+        return PhotoListQueryHelper.filteredGridResult(
             PhotoFilteredGridQuery(
                 context = context,
                 mapper = mapper,
@@ -70,15 +66,6 @@ class PhotosListByAlbumTool(
                 rootFields = listOf("bucket_id" to bucketId),
                 summaryFields = listOf("bucket_id" to bucketId) + dateRange.fields
             )
-        )
-        ToolResultEnvelope.applyStandardFields(
-            mapper = mapper,
-            tool = this@PhotosListByAlbumTool,
-            result = result,
-            ok = true,
-            resultType = "results",
-            displayPolicy = "show_grid",
-            request = args
         )
     }
 

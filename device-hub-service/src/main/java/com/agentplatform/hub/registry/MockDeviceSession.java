@@ -12,13 +12,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Network-free mock session. Whenever {@link #send} receives a
@@ -27,19 +25,15 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@link PendingCallRegistry}. This keeps controller async/timeout/cancel
  * paths testable without a real Android device.
  */
-public class MockDeviceSession implements DeviceSession {
+public class MockDeviceSession extends AbstractDeviceSession {
 
     private static final Logger log = LoggerFactory.getLogger(MockDeviceSession.class);
 
-    private final UUID deviceId;
-    private final UUID userId;
-    private final OffsetDateTime connectedAt = OffsetDateTime.now();
     private final ScheduledExecutorService executor;
     private final PendingCallRegistry pendingCalls;
     private final ObjectMapper mapper;
     private final long fakeLatencyMs;
 
-    private final AtomicReference<ToolManifest> manifestRef;
     private final AtomicBoolean open = new AtomicBoolean(true);
 
     public MockDeviceSession(UUID deviceId, UUID userId,
@@ -47,13 +41,11 @@ public class MockDeviceSession implements DeviceSession {
                              PendingCallRegistry pendingCalls,
                              ObjectMapper mapper,
                              long fakeLatencyMs) {
-        this.deviceId = deviceId;
-        this.userId = userId;
+        super(deviceId, userId, defaultManifest(mapper));
         this.executor = executor;
         this.pendingCalls = pendingCalls;
         this.mapper = mapper;
         this.fakeLatencyMs = fakeLatencyMs;
-        this.manifestRef = new AtomicReference<>(defaultManifest(mapper));
     }
 
     private static ToolManifest defaultManifest(ObjectMapper mapper) {
@@ -76,17 +68,12 @@ public class MockDeviceSession implements DeviceSession {
                         false)));
     }
 
-    @Override public UUID deviceId() { return deviceId; }
-    @Override public UUID userId() { return userId; }
-    @Override public OffsetDateTime connectedAt() { return connectedAt; }
     @Override public boolean isOpen() { return open.get(); }
-    @Override public ToolManifest manifest() { return manifestRef.get(); }
-    @Override public void updateManifest(ToolManifest manifest) { manifestRef.set(manifest); }
 
     @Override
     public void send(JsonRpcMessage msg) {
         if (!open.get()) {
-            log.warn("send to closed mock session {}", deviceId);
+            log.warn("send to closed mock session {}", deviceId());
             return;
         }
         if (msg instanceof JsonRpcRequest req && JsonRpcMethods.TOOL_CALL.equals(req.method())) {
@@ -100,14 +87,14 @@ public class MockDeviceSession implements DeviceSession {
             executor.schedule(() -> deliverFakeResult(callId, req), fakeLatencyMs, TimeUnit.MILLISECONDS);
             return;
         }
-        log.debug("Mock session {} ignoring {}", deviceId, msg);
+        log.debug("Mock session {} ignoring {}", deviceId(), msg);
     }
 
     private void deliverFakeResult(UUID callId, JsonRpcRequest req) {
         try {
             ObjectNode result = mapper.createObjectNode();
             result.put("mocked", true);
-            result.put("device", deviceId.toString());
+            result.put("device", deviceId().toString());
             if (req.params() != null) {
                 result.set("echoed_params", req.params());
             }
@@ -121,7 +108,7 @@ public class MockDeviceSession implements DeviceSession {
     @Override
     public void close(String reason) {
         if (open.compareAndSet(true, false)) {
-            log.debug("Mock session {} closed: {}", deviceId, reason);
+            log.debug("Mock session {} closed: {}", deviceId(), reason);
         }
     }
 }

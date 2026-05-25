@@ -7,6 +7,8 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
+import com.agentplatform.android.core.tool.Tool
+import com.agentplatform.android.core.tool.ToolResultEnvelope
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
@@ -267,6 +269,17 @@ internal object PhotoListQueryHelper {
             summaryFields = query.summaryFields
         )
     }
+
+    fun standardGridEnvelope(mapper: ObjectMapper, tool: Tool, result: ObjectNode, request: JsonNode): JsonNode =
+        ToolResultEnvelope.applyStandardFields(
+            mapper = mapper,
+            tool = tool,
+            result = result,
+            ok = true,
+            resultType = "results",
+            displayPolicy = "show_grid",
+            request = request
+        )
 
     private fun queryImageCursor(
         context: Context,

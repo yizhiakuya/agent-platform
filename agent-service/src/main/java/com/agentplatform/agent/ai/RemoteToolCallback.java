@@ -4,7 +4,6 @@ import com.agentplatform.agent.chat.SseEvent;
 import com.agentplatform.agent.client.DeviceToolDispatcher;
 import com.agentplatform.protocol.ToolResult;
 import com.agentplatform.protocol.ToolSpec;
-import com.anthropic.core.JsonValue;
 import com.anthropic.models.messages.Tool;
 import com.anthropic.models.messages.ToolUseBlock;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -275,42 +274,7 @@ public class RemoteToolCallback {
      * {@link Tool.InputSchema.Builder#putAdditionalProperty}.
      */
     private Tool.InputSchema buildInputSchema() {
-        // Anthropic requires input_schema.type = "object". The SDK's
-        // properties() field is typed Tool.InputSchema.Properties — passing a
-        // raw JsonValue compiles via the JsonField<Properties> overload but
-        // serializes as an empty/missing field, so the LLM sees the tool with
-        // no params and never calls it.
-        Tool.InputSchema.Builder b = Tool.InputSchema.builder()
-                .type(JsonValue.from("object"));
-        JsonNode schema = spec.schema();
-        if (schema == null || schema.isNull() || !schema.isObject()) {
-            return b.build();
-        }
-        JsonNode properties = schema.get("properties");
-        if (properties != null && properties.isObject()) {
-            Tool.InputSchema.Properties.Builder pb = Tool.InputSchema.Properties.builder();
-            properties.fields().forEachRemaining(entry -> {
-                Object val = mapper.convertValue(entry.getValue(), Object.class);
-                pb.putAdditionalProperty(entry.getKey(), JsonValue.from(val));
-            });
-            b.properties(pb.build());
-        }
-        JsonNode requiredNode = schema.get("required");
-        if (requiredNode != null && requiredNode.isArray()) {
-            List<String> required = new ArrayList<>();
-            requiredNode.forEach(n -> required.add(n.asText()));
-            if (!required.isEmpty()) {
-                b.required(required);
-            }
-        }
-        schema.fields().forEachRemaining(e -> {
-            String k = e.getKey();
-            if (k.equals("type") || k.equals("properties") || k.equals("required")) return;
-            if (ANTHROPIC_UNSUPPORTED_ROOT_SCHEMA_KEYS.contains(k)) return;
-            Object val = mapper.convertValue(e.getValue(), Object.class);
-            b.putAdditionalProperty(k, JsonValue.from(val));
-        });
-        return b.build();
+        return AnthropicToolSchema.inputSchema(spec.schema(), mapper, ANTHROPIC_UNSUPPORTED_ROOT_SCHEMA_KEYS);
     }
 
     /**

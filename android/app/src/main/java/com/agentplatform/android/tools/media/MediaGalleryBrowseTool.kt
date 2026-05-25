@@ -716,41 +716,51 @@ class MediaGalleryBrowseTool(
 
     private fun readPhotoRow(cursor: Cursor, columns: PhotoColumns): GalleryMediaRow {
         val id = cursor.getLong(columns.id)
-        return GalleryMediaRow(
+        return galleryMediaRow(
             mediaType = "photo",
             id = id,
             name = cursor.getString(columns.name) ?: "image_$id",
-            time = GalleryTime(longColumn(cursor, columns.date), longColumn(cursor, columns.modified)),
-            bucket = GalleryBucketInfo(stringColumn(cursor, columns.bucketId), stringColumn(cursor, columns.bucketName)),
-            details = GalleryMediaDetails(
-                sizeBytes = longColumn(cursor, columns.size),
-                mimeType = stringColumn(cursor, columns.mime),
-                width = longColumn(cursor, columns.width),
-                height = longColumn(cursor, columns.height),
-                relativePath = stringColumn(cursor, columns.relativePath),
-                durationMs = null
-            )
+            columns = columns,
+            durationMs = null
         )
     }
 
     private fun readVideoRow(cursor: Cursor, columns: VideoColumns): GalleryMediaRow {
         val id = cursor.getLong(columns.id)
-        return GalleryMediaRow(
+        return galleryMediaRow(
             mediaType = "video",
             id = id,
             name = cursor.getString(columns.name) ?: "video_$id",
-            time = GalleryTime(longColumn(cursor, columns.date), longColumn(cursor, columns.modified)),
-            bucket = GalleryBucketInfo(stringColumn(cursor, columns.bucketId), stringColumn(cursor, columns.bucketName)),
-            details = GalleryMediaDetails(
-                sizeBytes = longColumn(cursor, columns.size),
-                mimeType = stringColumn(cursor, columns.mime),
-                width = longColumn(cursor, columns.width),
-                height = longColumn(cursor, columns.height),
-                relativePath = stringColumn(cursor, columns.relativePath),
-                durationMs = longColumn(cursor, columns.duration)
-            )
+            columns = columns,
+            durationMs = longColumn(cursor, columns.duration)
         )
     }
+
+    private fun galleryMediaRow(
+        mediaType: String,
+        id: Long,
+        name: String,
+        columns: MediaColumns,
+        durationMs: Long?
+    ): GalleryMediaRow =
+        GalleryMediaRow(
+            mediaType = mediaType,
+            id = id,
+            name = name,
+            time = GalleryTime(longColumn(columns.cursor, columns.date), longColumn(columns.cursor, columns.modified)),
+            bucket = GalleryBucketInfo(
+                stringColumn(columns.cursor, columns.bucketId),
+                stringColumn(columns.cursor, columns.bucketName)
+            ),
+            details = GalleryMediaDetails(
+                sizeBytes = longColumn(columns.cursor, columns.size),
+                mimeType = stringColumn(columns.cursor, columns.mime),
+                width = longColumn(columns.cursor, columns.width),
+                height = longColumn(columns.cursor, columns.height),
+                relativePath = stringColumn(columns.cursor, columns.relativePath),
+                durationMs = durationMs
+            )
+        )
 
     private fun mediaCandidate(row: GalleryMediaRow): MediaCandidate {
         val item = mediaItem(row)
@@ -985,33 +995,45 @@ class MediaGalleryBrowseTool(
         val durationMs: Long?
     )
 
-    private class PhotoColumns(cursor: Cursor) {
-        val id: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-        val name: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-        val date: Int = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
-        val modified: Int = cursor.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
-        val size: Int = cursor.getColumnIndex(MediaStore.Images.Media.SIZE)
-        val bucketId: Int = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_ID)
-        val bucketName: Int = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-        val mime: Int = cursor.getColumnIndex(MediaStore.Images.Media.MIME_TYPE)
-        val width: Int = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
-        val height: Int = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
-        val relativePath: Int = cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
+    private abstract class MediaColumns(val cursor: Cursor) {
+        abstract val date: Int
+        abstract val modified: Int
+        abstract val size: Int
+        abstract val bucketId: Int
+        abstract val bucketName: Int
+        abstract val mime: Int
+        abstract val width: Int
+        abstract val height: Int
+        abstract val relativePath: Int
     }
 
-    private class VideoColumns(cursor: Cursor) {
+    private class PhotoColumns(cursor: Cursor) : MediaColumns(cursor) {
+        val id: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+        val name: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+        override val date: Int = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+        override val modified: Int = cursor.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
+        override val size: Int = cursor.getColumnIndex(MediaStore.Images.Media.SIZE)
+        override val bucketId: Int = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_ID)
+        override val bucketName: Int = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+        override val mime: Int = cursor.getColumnIndex(MediaStore.Images.Media.MIME_TYPE)
+        override val width: Int = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
+        override val height: Int = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
+        override val relativePath: Int = cursor.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
+    }
+
+    private class VideoColumns(cursor: Cursor) : MediaColumns(cursor) {
         val id: Int = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
         val name: Int = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
-        val date: Int = cursor.getColumnIndex(MediaStore.Video.Media.DATE_TAKEN)
-        val modified: Int = cursor.getColumnIndex(MediaStore.Video.Media.DATE_MODIFIED)
-        val size: Int = cursor.getColumnIndex(MediaStore.Video.Media.SIZE)
-        val bucketId: Int = cursor.getColumnIndex(MediaStore.Video.Media.BUCKET_ID)
-        val bucketName: Int = cursor.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
-        val mime: Int = cursor.getColumnIndex(MediaStore.Video.Media.MIME_TYPE)
+        override val date: Int = cursor.getColumnIndex(MediaStore.Video.Media.DATE_TAKEN)
+        override val modified: Int = cursor.getColumnIndex(MediaStore.Video.Media.DATE_MODIFIED)
+        override val size: Int = cursor.getColumnIndex(MediaStore.Video.Media.SIZE)
+        override val bucketId: Int = cursor.getColumnIndex(MediaStore.Video.Media.BUCKET_ID)
+        override val bucketName: Int = cursor.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+        override val mime: Int = cursor.getColumnIndex(MediaStore.Video.Media.MIME_TYPE)
         val duration: Int = cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
-        val width: Int = cursor.getColumnIndex(MediaStore.Video.Media.WIDTH)
-        val height: Int = cursor.getColumnIndex(MediaStore.Video.Media.HEIGHT)
-        val relativePath: Int = cursor.getColumnIndex(MediaStore.Video.Media.RELATIVE_PATH)
+        override val width: Int = cursor.getColumnIndex(MediaStore.Video.Media.WIDTH)
+        override val height: Int = cursor.getColumnIndex(MediaStore.Video.Media.HEIGHT)
+        override val relativePath: Int = cursor.getColumnIndex(MediaStore.Video.Media.RELATIVE_PATH)
     }
 
     private enum class MediaMutationAction(
