@@ -13,11 +13,7 @@ public final class ToolInputParser {
             if (raw == null) return mapper.createObjectNode();
             JsonNode node = mapper.valueToTree(raw);
             if (node != null && node.isTextual()) {
-                try {
-                    return mapper.readTree(node.asText());
-                } catch (Exception ignored) {
-                    return node;
-                }
+                return parseTextNode(node, mapper);
             }
             return node == null || node.isNull() ? mapper.createObjectNode() : node;
         } catch (Exception e) {
@@ -25,6 +21,14 @@ public final class ToolInputParser {
                 log.warn("Failed to parse tool input for {}: {}", toolName, e.getMessage());
             }
             return mapper.createObjectNode();
+        }
+    }
+
+    private static JsonNode parseTextNode(JsonNode node, ObjectMapper mapper) {
+        try {
+            return mapper.readTree(node.asText());
+        } catch (Exception ignored) {
+            return node;
         }
     }
 }
