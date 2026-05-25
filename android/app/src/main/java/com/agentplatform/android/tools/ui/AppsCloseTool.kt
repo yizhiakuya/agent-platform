@@ -56,150 +56,161 @@ class AppsCloseTool(
     )
 
     override suspend fun execute(args: JsonNode): JsonNode {
-        val mode = args.path("mode").asText("recent_task").trim().lowercase(Locale.ROOT)
-        val timeoutMs = args.path("timeout_ms").asLong(DEFAULT_TIMEOUT_MS).coerceIn(1000L, 12000L)
-        val steps = mapper.createArrayNode()
-
+        val request = closeRequest(args)
         val targetResolution = resolveTarget(args)
-        if (targetResolution.error != null) {
-            return closeResult(
-                ok = false,
-                verified = false,
-                mode = mode,
-                target = targetResolution.target,
-                observedState = emptyObservedState(),
-                steps = steps,
-                error = targetResolution.error,
-                hint = targetResolution.hint,
-                request = args
+        validateRequest(request, targetResolution)?.let { return it }
+        return closeRecentTask(request, targetResolution)
+    }
+
+    private fun closeRequest(args: JsonNode): CloseRequest =
+        CloseRequest(
+            mode = args.path("mode").asText("recent_task").trim().lowercase(Locale.ROOT),
+            timeoutMs = args.path("timeout_ms").asLong(DEFAULT_TIMEOUT_MS).coerceIn(1000L, 12000L),
+            steps = mapper.createArrayNode(),
+            raw = args
+        )
+
+    private fun validateRequest(request: CloseRequest, target: TargetResolution): JsonNode? =
+        when {
+            target.error != null -> closeFailure(request, target, target.error, target.hint)
+            target.packageName.isBlank() -> closeFailure(
+                request,
+                target,
+                "unable_to_resolve_target_package",
+                "Provide package directly, or use a more specific label/query."
             )
+            target.packageName in protectedPackages() -> closeFailure(
+                request,
+                target,
+                "protected_package_blocked",
+                "Refusing to close protected/system-critical package: ${target.packageName}"
+            )
+            request.mode == "force_stop" -> closeFailure(
+                request,
+                target,
+                "privileged_access_required",
+                "force_stop requires Shizuku-backed implementation; this build currently supports recent_task only."
+            )
+            request.mode != "recent_task" -> closeFailure(
+                request,
+                target,
+                "invalid_mode",
+                "mode must be recent_task or force_stop"
+            )
+            !UiAccessibilityService.isAvailable() -> closeFailure(
+                request,
+                target,
+                "accessibility_disabled",
+                "Enable Agent Platform Accessibility service in Android settings."
+            )
+            else -> null
         }
 
-        val targetPackage = targetResolution.packageName
-        if (targetPackage.isBlank()) {
-            return closeResult(
+    private fun closeFailure(
+        request: CloseRequest,
+        target: TargetResolution,
+        error: String,
+        hint: String?
+    ): JsonNode =
+        closeResult(
+            closeResultSpec(
+                request = request,
+                target = target.target,
+                observedState = emptyObservedState(),
                 ok = false,
                 verified = false,
-                mode = mode,
-                target = targetResolution.target,
-                observedState = emptyObservedState(),
-                steps = steps,
-                error = "unable_to_resolve_target_package",
-                hint = "Provide package directly, or use a more specific label/query.",
-                request = args
+                error = error,
+                hint = hint
             )
-        }
-        if (targetPackage in protectedPackages()) {
-            return closeResult(
-                ok = false,
-                verified = false,
-                mode = mode,
-                target = targetResolution.target,
-                observedState = emptyObservedState(),
-                steps = steps,
-                error = "protected_package_blocked",
-                hint = "Refusing to close protected/system-critical package: $targetPackage",
-                request = args
-            )
-        }
+        )
 
-        if (mode == "force_stop") {
-            return closeResult(
-                ok = false,
-                verified = false,
-                mode = mode,
-                target = targetResolution.target,
-                observedState = emptyObservedState(),
-                steps = steps,
-                error = "privileged_access_required",
-                hint = "force_stop requires Shizuku-backed implementation; this build currently supports recent_task only.",
-                request = args
-            )
-        }
-        if (mode != "recent_task") {
-            return closeResult(
-                ok = false,
-                verified = false,
-                mode = mode,
-                target = targetResolution.target,
-                observedState = emptyObservedState(),
-                steps = steps,
-                error = "invalid_mode",
-                hint = "mode must be recent_task or force_stop",
-                request = args
-            )
-        }
-
-        if (!UiAccessibilityService.isAvailable()) {
-            return closeResult(
-                ok = false,
-                verified = false,
-                mode = mode,
-                target = targetResolution.target,
-                observedState = emptyObservedState(),
-                steps = steps,
-                error = "accessibility_disabled",
-                hint = "Enable Agent Platform Accessibility service in Android settings.",
-                request = args
-            )
-        }
-
+    private suspend fun closeRecentTask(request: CloseRequest, targetResolution: TargetResolution): JsonNode {
         val beforeForeground = observeForegroundPackage()
         val beforeRecentsProbe = probeRecentsForTarget(
             target = targetResolution,
-            timeoutMs = timeoutMs,
+            timeoutMs = request.timeoutMs,
             openRecents = true,
-            steps = steps
+            steps = request.steps
         )
         val beforeInRecents = beforeRecentsProbe.matched
         if (!beforeRecentsProbe.recentsOpened) {
-            return closeResult(
-                ok = false,
-                verified = false,
-                mode = mode,
+            return recentsUnavailableResult(request, targetResolution, beforeForeground, beforeInRecents)
+        }
+
+        val dismissResult = dismissTargetCard(beforeRecentsProbe, request.steps)
+        UiAccessibilityService.globalAction("HOME")
+        delay(250L)
+
+        val verification = verifyRecentTaskClosed(request, targetResolution)
+        val ok = dismissResult.dispatched && verification.verified
+
+        return closeResult(
+            closeResultSpec(
+                request = request,
                 target = targetResolution.target,
+                observedState = observedState(
+                    beforeForeground,
+                    beforeInRecents,
+                    verification.afterForeground,
+                    verification.afterInRecents
+                ),
+                ok = ok,
+                verified = verification.verified,
+                error = if (ok) null else buildFailureMessage(
+                    dismissResult.dispatched,
+                    verification.notForeground,
+                    verification.removedFromRecents
+                ),
+                hint = if (ok) null else "If recents card did not dismiss on this ROM, inspect with ui.dump_tree and retry."
+            )
+        )
+    }
+
+    private suspend fun recentsUnavailableResult(
+        request: CloseRequest,
+        target: TargetResolution,
+        beforeForeground: String,
+        beforeInRecents: Boolean
+    ): JsonNode =
+        closeResult(
+            closeResultSpec(
+                request = request,
+                target = target.target,
                 observedState = observedState(
                     beforeForeground = beforeForeground,
                     beforeInRecents = beforeInRecents,
                     afterForeground = observeForegroundPackage(),
                     afterInRecents = beforeInRecents
                 ),
-                steps = steps,
+                ok = false,
+                verified = false,
                 error = "recents_unavailable",
-                hint = "Could not open Android Recents via accessibility global action.",
-                request = args
+                hint = "Could not open Android Recents via accessibility global action."
             )
-        }
+        )
 
-        val dismissResult = dismissTargetCard(beforeRecentsProbe, steps)
-        UiAccessibilityService.globalAction("HOME")
-        delay(250L)
-
+    private suspend fun verifyRecentTaskClosed(
+        request: CloseRequest,
+        target: TargetResolution
+    ): CloseVerification {
         val afterForeground = observeForegroundPackage()
         val afterRecentsProbe = probeRecentsForTarget(
-            target = targetResolution,
-            timeoutMs = timeoutMs,
+            target = target,
+            timeoutMs = request.timeoutMs,
             openRecents = true,
-            steps = steps
+            steps = request.steps
         )
         UiAccessibilityService.globalAction("HOME")
 
         val afterInRecents = afterRecentsProbe.matched
-        val notForeground = afterForeground != targetPackage
+        val notForeground = afterForeground != target.packageName
         val removedFromRecents = !afterInRecents
-        val verified = notForeground && removedFromRecents
-        val ok = dismissResult.dispatched && verified
-
-        return closeResult(
-            ok = ok,
-            verified = verified,
-            mode = mode,
-            target = targetResolution.target,
-            observedState = observedState(beforeForeground, beforeInRecents, afterForeground, afterInRecents),
-            steps = steps,
-            error = if (ok) null else buildFailureMessage(dismissResult.dispatched, notForeground, removedFromRecents),
-            hint = if (ok) null else "If recents card did not dismiss on this ROM, inspect with ui.dump_tree and retry.",
-            request = args
+        return CloseVerification(
+            afterForeground = afterForeground,
+            afterInRecents = afterInRecents,
+            notForeground = notForeground,
+            removedFromRecents = removedFromRecents,
+            verified = notForeground && removedFromRecents,
         )
     }
 
@@ -244,81 +255,13 @@ class AppsCloseTool(
         openRecents: Boolean,
         steps: ArrayNode
     ): RecentsProbeResult {
-        if (openRecents) {
-            val opened = UiAccessibilityService.globalAction("RECENTS")
-            steps.addObject().apply {
-                put("name", "open_recents")
-                put("ok", opened)
-            }
-            if (!opened) {
-                return RecentsProbeResult(
-                    recentsOpened = false,
-                    matched = false,
-                    cardBounds = null,
-                    candidates = emptyList()
-                )
-            }
-            delay(500L)
+        if (openRecents && !openRecents(steps)) {
+            return emptyRecentsProbe(recentsOpened = false)
         }
 
         val tree = UiAccessibilityService.dumpTreeWithTimeout(mapper, RECENTS_TREE_DEPTH, timeoutMs)
-        val nodes = tree.path("nodes")
-        val candidates = mutableListOf<RecentsCandidate>()
-
-        var matchedByPackageHint: Bounds? = null
-        var matchedByPackageText: Bounds? = null
-        var matchedByLabelOrQuery: Bounds? = null
-
-        val normalizedPackage = normalize(target.packageName)
-        val labelNeedle = normalize(target.label)
-        val queryNeedle = normalize(target.query)
-
-        if (nodes.isArray) {
-            for (node in nodes) {
-                val text = node.path("text").asText("")
-                val desc = node.path("desc").asText("")
-                val id = node.path("id").asText("")
-                val raw = "$text $desc $id"
-                val hay = normalize(raw)
-                if (hay.isBlank()) continue
-
-                val looksTaskCard = id.contains("task", ignoreCase = true) ||
-                    id.contains("recent", ignoreCase = true) ||
-                    desc.contains("recent", ignoreCase = true) ||
-                    desc.contains("未加锁") ||
-                    desc.contains("锁定")
-                if (!looksTaskCard) continue
-
-                val bounds = parseBounds(node.path("bounds")) ?: continue
-                val packageHint = extractPackageHint(raw)
-                val packageHintMatched = !packageHint.isNullOrBlank() && packageHint == target.packageName
-                val packageTextMatched = normalizedPackage.isNotBlank() && hay.contains(normalizedPackage)
-                val labelMatched = labelNeedle.isNotBlank() && hay.contains(labelNeedle)
-                val queryMatched = queryNeedle.isNotBlank() && hay.contains(queryNeedle)
-                val matched = packageHintMatched || packageTextMatched || labelMatched || queryMatched
-
-                candidates += RecentsCandidate(
-                    matched = matched,
-                    label = text.ifBlank { desc }.take(100),
-                    packageHint = packageHint,
-                    bounds = bounds,
-                    packageHintMatched = packageHintMatched,
-                    packageTextMatched = packageTextMatched,
-                    labelMatched = labelMatched,
-                    queryMatched = queryMatched
-                )
-
-                if (packageHintMatched && matchedByPackageHint == null) {
-                    matchedByPackageHint = bounds
-                } else if (packageTextMatched && matchedByPackageText == null) {
-                    matchedByPackageText = bounds
-                } else if ((labelMatched || queryMatched) && matchedByLabelOrQuery == null) {
-                    matchedByLabelOrQuery = bounds
-                }
-            }
-        }
-
-        val matchedBounds = matchedByPackageHint ?: matchedByPackageText ?: matchedByLabelOrQuery
+        val candidates = recentTaskCandidates(tree, target)
+        val matchedBounds = bestRecentMatch(candidates)
 
         steps.addObject().apply {
             put("name", "scan_recents")
@@ -335,6 +278,72 @@ class AppsCloseTool(
             candidates = candidates
         )
     }
+
+    private suspend fun openRecents(steps: ArrayNode): Boolean {
+        val opened = UiAccessibilityService.globalAction("RECENTS")
+        steps.addObject().apply {
+            put("name", "open_recents")
+            put("ok", opened)
+        }
+        if (opened) delay(500L)
+        return opened
+    }
+
+    private fun emptyRecentsProbe(recentsOpened: Boolean): RecentsProbeResult =
+        RecentsProbeResult(
+            recentsOpened = recentsOpened,
+            matched = false,
+            cardBounds = null,
+            candidates = emptyList()
+        )
+
+    private fun recentTaskCandidates(tree: JsonNode, target: TargetResolution): List<RecentsCandidate> {
+        val nodes = tree.path("nodes")
+        if (!nodes.isArray) return emptyList()
+
+        val matcher = RecentTargetMatcher(
+            packageName = target.packageName,
+            normalizedPackage = normalize(target.packageName),
+            labelNeedle = normalize(target.label),
+            queryNeedle = normalize(target.query)
+        )
+        return nodes.mapNotNull { node -> recentTaskCandidate(node, matcher) }
+    }
+
+    private fun recentTaskCandidate(node: JsonNode, matcher: RecentTargetMatcher): RecentsCandidate? {
+        val text = node.path("text").asText("")
+        val desc = node.path("desc").asText("")
+        val id = node.path("id").asText("")
+        val raw = "$text $desc $id"
+        val hay = normalize(raw)
+        if (hay.isBlank() || !looksLikeTaskCard(id, desc)) return null
+
+        val bounds = parseBounds(node.path("bounds")) ?: return null
+        val packageHint = extractPackageHint(raw)
+        val match = matcher.match(hay, packageHint)
+        return RecentsCandidate(
+            matched = match.matched,
+            label = text.ifBlank { desc }.take(100),
+            packageHint = packageHint,
+            bounds = bounds,
+            packageHintMatched = match.packageHintMatched,
+            packageTextMatched = match.packageTextMatched,
+            labelMatched = match.labelMatched,
+            queryMatched = match.queryMatched
+        )
+    }
+
+    private fun looksLikeTaskCard(id: String, desc: String): Boolean =
+        id.contains("task", ignoreCase = true) ||
+            id.contains("recent", ignoreCase = true) ||
+            desc.contains("recent", ignoreCase = true) ||
+            desc.contains("未加锁") ||
+            desc.contains("锁定")
+
+    private fun bestRecentMatch(candidates: List<RecentsCandidate>): Bounds? =
+        candidates.firstOrNull { it.packageHintMatched }?.bounds
+            ?: candidates.firstOrNull { it.packageTextMatched }?.bounds
+            ?: candidates.firstOrNull { it.labelMatched || it.queryMatched }?.bounds
 
     private fun observeForegroundPackage(): String {
         val cached = UiAccessibilityService.currentPackage()
@@ -498,28 +507,40 @@ class AppsCloseTool(
 
     private fun emptyObservedState(): ObjectNode = observedState("", false, "", false)
 
-    private fun closeResult(
-        ok: Boolean,
-        verified: Boolean,
-        mode: String,
+    private fun closeResultSpec(
+        request: CloseRequest,
         target: ObjectNode,
         observedState: ObjectNode,
-        steps: ArrayNode,
+        ok: Boolean,
+        verified: Boolean,
         error: String?,
-        hint: String?,
-        request: JsonNode
-    ): ObjectNode {
+        hint: String?
+    ): CloseResultSpec =
+        CloseResultSpec(
+            outcome = CloseOutcome(ok = ok, verified = verified, error = error, hint = hint),
+            context = CloseResultContext(
+                mode = request.mode,
+                target = target,
+                observedState = observedState,
+                steps = request.steps,
+                request = request.raw
+            )
+        )
+
+    private fun closeResult(spec: CloseResultSpec): ObjectNode {
+        val outcome = spec.outcome
+        val context = spec.context
         val result = mapper.createObjectNode().apply {
-            put("ok", ok)
-            put("verified", verified)
-            put("mode", mode)
-            set<JsonNode>("target", target)
-            set<JsonNode>("observed_state", observedState)
-            set<JsonNode>("steps", steps)
-            if (!error.isNullOrBlank()) put("error", error)
-            if (!hint.isNullOrBlank()) put("hint", hint)
+            put("ok", outcome.ok)
+            put("verified", outcome.verified)
+            put("mode", context.mode)
+            set<JsonNode>("target", context.target)
+            set<JsonNode>("observed_state", context.observedState)
+            set<JsonNode>("steps", context.steps)
+            if (!outcome.error.isNullOrBlank()) put("error", outcome.error)
+            if (!outcome.hint.isNullOrBlank()) put("hint", outcome.hint)
         }
-        return ToolResultEnvelope.applyStandardFields(mapper, this, result, ok = ok, request = request)
+        return ToolResultEnvelope.applyStandardFields(mapper, this, result, ok = outcome.ok, request = context.request)
     }
 
     private fun normalize(value: String): String =
@@ -538,6 +559,41 @@ class AppsCloseTool(
         val label: String,
         val packageName: String,
         val isSystem: Boolean
+    )
+
+    private data class CloseRequest(
+        val mode: String,
+        val timeoutMs: Long,
+        val steps: ArrayNode,
+        val raw: JsonNode
+    )
+
+    private data class CloseResultSpec(
+        val outcome: CloseOutcome,
+        val context: CloseResultContext
+    )
+
+    private data class CloseOutcome(
+        val ok: Boolean,
+        val verified: Boolean,
+        val error: String?,
+        val hint: String?
+    )
+
+    private data class CloseResultContext(
+        val mode: String,
+        val target: ObjectNode,
+        val observedState: ObjectNode,
+        val steps: ArrayNode,
+        val request: JsonNode
+    )
+
+    private data class CloseVerification(
+        val afterForeground: String,
+        val afterInRecents: Boolean,
+        val notForeground: Boolean,
+        val removedFromRecents: Boolean,
+        val verified: Boolean
     )
 
     private data class TargetResolution(
@@ -559,6 +615,31 @@ class AppsCloseTool(
         val cardBounds: Bounds?,
         val candidates: List<RecentsCandidate>
     )
+
+    private data class RecentTargetMatcher(
+        val packageName: String,
+        val normalizedPackage: String,
+        val labelNeedle: String,
+        val queryNeedle: String
+    ) {
+        fun match(hay: String, packageHint: String?): RecentTargetMatch =
+            RecentTargetMatch(
+                packageHintMatched = !packageHint.isNullOrBlank() && packageHint == packageName,
+                packageTextMatched = normalizedPackage.isNotBlank() && hay.contains(normalizedPackage),
+                labelMatched = labelNeedle.isNotBlank() && hay.contains(labelNeedle),
+                queryMatched = queryNeedle.isNotBlank() && hay.contains(queryNeedle)
+            )
+    }
+
+    private data class RecentTargetMatch(
+        val packageHintMatched: Boolean,
+        val packageTextMatched: Boolean,
+        val labelMatched: Boolean,
+        val queryMatched: Boolean
+    ) {
+        val matched: Boolean
+            get() = packageHintMatched || packageTextMatched || labelMatched || queryMatched
+    }
 
     private data class RecentsCandidate(
         val matched: Boolean,
