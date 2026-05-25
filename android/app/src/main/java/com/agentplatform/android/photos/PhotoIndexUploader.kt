@@ -11,6 +11,7 @@ import com.agentplatform.android.data.AppPrefs
 import com.agentplatform.android.tools.photos.PhotoToolUtils
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
+import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -35,89 +36,128 @@ internal class PhotoIndexUploader(
         .build()
 
     suspend fun syncOnce(maxRows: Int = 300, batchSize: Int = 20): SyncResult = withContext(ioDispatcher) {
-        val serverUrl = appPrefs.serverUrl?.trimEnd('/')
-        val token = appPrefs.token
-        if (serverUrl.isNullOrBlank() || token.isNullOrBlank()) {
+        val binding = currentBinding()
+        if (binding == null) {
             return@withContext SyncResult(0, 0, "not_bound")
         }
 
-        val didReconcile = maybeReconcile(serverUrl, token)
+        val didReconcile = maybeReconcile(binding.serverUrl, binding.token)
         val rows = loadRows(
             maxRows.coerceIn(1, 500),
             indexPrefs.lastIndexedModifiedSec,
             indexPrefs.lastIndexedIdAtModified
         )
         if (rows.isEmpty()) {
-            indexPrefs.lastRunMs = System.currentTimeMillis()
-            return@withContext SyncResult(0, 0, if (didReconcile) "reconciled" else "no_new_rows")
+            return@withContext finishEmptySync(didReconcile)
         }
 
-        var uploaded = 0
-        var maxModified = indexPrefs.lastIndexedModifiedSec
-        var maxIdAtModified = indexPrefs.lastIndexedIdAtModified
-        var sawPayloadFailure = false
-        for (chunk in rows.chunked(batchSize.coerceIn(1, 50))) {
-            val assets: ArrayNode = mapper.createArrayNode()
-            val assetRows = mutableListOf<Row>()
-            for (row in chunk) {
-                if (sawPayloadFailure) break
-                try {
-                    val bitmap = PhotoToolUtils.loadThumbnail(context.contentResolver, row.id, 512)
-                    val thumbB64 = PhotoToolUtils.jpegBase64(bitmap, 76)
-                    bitmap.recycle()
-                    val obj = mapper.createObjectNode()
-                    obj.put("mediaStoreId", row.id.toString())
-                    obj.put("name", row.name)
-                    if (row.bucketId.isNotBlank()) obj.put("bucketId", row.bucketId)
-                    if (row.bucketName.isNotBlank()) obj.put("bucketName", row.bucketName)
-                    obj.put("dateTakenMs", row.dateTakenMs)
-                    obj.put("dateModifiedSec", row.dateModifiedSec)
-                    obj.put("sizeBytes", row.sizeBytes)
-                    obj.put("width", row.width)
-                    obj.put("height", row.height)
-                    if (row.mimeType.isNotBlank()) obj.put("mimeType", row.mimeType)
-                    obj.put("contentHash", row.fingerprint())
-                    obj.put("thumbB64", thumbB64)
-                    assets.add(obj)
-                    assetRows += row
-                } catch (e: Exception) {
-                    sawPayloadFailure = true
-                    Log.w(TAG, "thumbnail/index payload failed id=${row.id}: ${e.message}")
-                }
-            }
-            if (assets.isEmpty) break
+        val progress = uploadRows(binding, rows, batchSize.coerceIn(1, 50))
+        finishUploadedSync(rows.size, progress)
+    }
 
-            val body = mapper.createObjectNode()
-            body.set<ArrayNode>("assets", assets)
-            val req = Request.Builder()
-                .url("$serverUrl/api/photos/index/batch")
-                .header("Authorization", "Bearer $token")
-                .post(mapper.writeValueAsBytes(body).toRequestBody(JSON))
-                .build()
-            client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    val err = resp.body?.string()?.take(300)
-                    throw RuntimeException("photo index upload failed HTTP ${resp.code}: $err")
-                }
-            }
-            uploaded += assets.size()
-            for (row in assetRows) {
-                if (row.dateModifiedSec > maxModified) {
-                    maxModified = row.dateModifiedSec
-                    maxIdAtModified = row.id
-                } else if (row.dateModifiedSec == maxModified) {
-                    maxIdAtModified = maxOf(maxIdAtModified, row.id)
-                }
-            }
-            if (sawPayloadFailure) break
+    private fun currentBinding(): ServerBinding? {
+        val serverUrl = appPrefs.serverUrl?.trimEnd('/')
+        val token = appPrefs.token
+        return if (serverUrl.isNullOrBlank() || token.isNullOrBlank()) {
+            null
+        } else {
+            ServerBinding(serverUrl, token)
         }
+    }
 
-        if (uploaded > 0) {
-            indexPrefs.lastIndexedModifiedSec = maxModified
-            indexPrefs.lastIndexedIdAtModified = maxIdAtModified
+    private fun finishEmptySync(didReconcile: Boolean): SyncResult {
+        indexPrefs.lastRunMs = System.currentTimeMillis()
+        return SyncResult(0, 0, if (didReconcile) "reconciled" else "no_new_rows")
+    }
+
+    private fun finishUploadedSync(scanned: Int, progress: UploadProgress): SyncResult {
+        if (progress.uploaded > 0) {
+            indexPrefs.lastIndexedModifiedSec = progress.maxModified
+            indexPrefs.lastIndexedIdAtModified = progress.maxIdAtModified
         }
         indexPrefs.lastRunMs = System.currentTimeMillis()
-        SyncResult(rows.size, uploaded, "ok")
+        return SyncResult(scanned, progress.uploaded, "ok")
+    }
+
+    private fun uploadRows(binding: ServerBinding, rows: List<Row>, batchSize: Int): UploadProgress {
+        var progress = UploadProgress(
+            uploaded = 0,
+            maxModified = indexPrefs.lastIndexedModifiedSec,
+            maxIdAtModified = indexPrefs.lastIndexedIdAtModified
+        )
+        for (chunk in rows.chunked(batchSize)) {
+            val batch = buildUploadBatch(chunk)
+            if (batch.assets.isEmpty) break
+
+            postAssetBatch(binding, batch.assets)
+            progress = progress.record(batch)
+            if (batch.stoppedByPayloadFailure) break
+        }
+        return progress
+    }
+
+    private fun buildUploadBatch(rows: List<Row>): UploadBatch {
+        val assets = mapper.createArrayNode()
+        val assetRows = mutableListOf<Row>()
+        var stoppedByPayloadFailure = false
+        for (row in rows) {
+            val asset = buildAsset(row)
+            if (asset == null) {
+                stoppedByPayloadFailure = true
+                break
+            }
+            assets.add(asset)
+            assetRows += row
+        }
+        return UploadBatch(assets, assetRows, stoppedByPayloadFailure)
+    }
+
+    private fun buildAsset(row: Row): ObjectNode? {
+        return try {
+            val bitmap = PhotoToolUtils.loadThumbnail(context.contentResolver, row.id, 512)
+            try {
+                val thumbB64 = PhotoToolUtils.jpegBase64(bitmap, 76)
+                buildAssetNode(row, thumbB64)
+            } finally {
+                bitmap.recycle()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "thumbnail/index payload failed id=${row.id}: ${e.message}")
+            null
+        }
+    }
+
+    private fun buildAssetNode(row: Row, thumbB64: String): ObjectNode {
+        return mapper.createObjectNode().apply {
+            put("mediaStoreId", row.id.toString())
+            put("name", row.name)
+            if (row.bucketId.isNotBlank()) put("bucketId", row.bucketId)
+            if (row.bucketName.isNotBlank()) put("bucketName", row.bucketName)
+            put("dateTakenMs", row.dateTakenMs)
+            put("dateModifiedSec", row.dateModifiedSec)
+            put("sizeBytes", row.sizeBytes)
+            put("width", row.width)
+            put("height", row.height)
+            if (row.mimeType.isNotBlank()) put("mimeType", row.mimeType)
+            put("contentHash", row.fingerprint())
+            put("thumbB64", thumbB64)
+        }
+    }
+
+    private fun postAssetBatch(binding: ServerBinding, assets: ArrayNode) {
+        val body = mapper.createObjectNode()
+        body.set<ArrayNode>("assets", assets)
+        val req = Request.Builder()
+            .url("${binding.serverUrl}/api/photos/index/batch")
+            .header("Authorization", "Bearer ${binding.token}")
+            .post(mapper.writeValueAsBytes(body).toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val err = resp.body?.string()?.take(300)
+                throw RuntimeException("photo index upload failed HTTP ${resp.code}: $err")
+            }
+        }
     }
 
     private fun maybeReconcile(serverUrl: String, token: String): Boolean {
@@ -290,6 +330,41 @@ internal class PhotoIndexUploader(
 
     private fun i(c: android.database.Cursor, idx: Int): Int =
         if (idx >= 0 && !c.isNull(idx)) c.getInt(idx) else 0
+
+    private data class ServerBinding(
+        val serverUrl: String,
+        val token: String
+    )
+
+    private data class UploadBatch(
+        val assets: ArrayNode,
+        val rows: List<Row>,
+        val stoppedByPayloadFailure: Boolean
+    )
+
+    private data class UploadProgress(
+        val uploaded: Int,
+        val maxModified: Long,
+        val maxIdAtModified: Long
+    ) {
+        fun record(batch: UploadBatch): UploadProgress {
+            var nextMaxModified = maxModified
+            var nextMaxIdAtModified = maxIdAtModified
+            batch.rows.forEach { row ->
+                val newerModified = row.dateModifiedSec > nextMaxModified
+                val sameModifiedWithHigherId = row.dateModifiedSec == nextMaxModified && row.id > nextMaxIdAtModified
+                if (newerModified || sameModifiedWithHigherId) {
+                    nextMaxModified = row.dateModifiedSec
+                    nextMaxIdAtModified = row.id
+                }
+            }
+            return copy(
+                uploaded = uploaded + batch.assets.size(),
+                maxModified = nextMaxModified,
+                maxIdAtModified = nextMaxIdAtModified
+            )
+        }
+    }
 
     private data class Row(
         val id: Long,
