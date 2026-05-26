@@ -71,15 +71,17 @@ class MemoryServiceTest {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         MemoryService service = new MemoryService(jdbc);
         UUID userId = UUID.randomUUID();
-        when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<MemoryFactDto>>any(), eq(userId), eq(20)))
+        when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<MemoryFactDto>>any(),
+                eq(userId), eq(true), eq(20)))
                 .thenReturn(List.of());
 
         service.listFacts(userId, 20, true);
 
         verify(jdbc).query(org.mockito.ArgumentMatchers.argThat(sql ->
-                        sql.contains("WHERE user_id = ?\nORDER BY")),
+                        sql.contains("WHERE user_id = ?\n  AND (? OR is_curated = true)\nORDER BY")),
                 org.mockito.ArgumentMatchers.<RowMapper<MemoryFactDto>>any(),
                 eq(userId),
+                eq(true),
                 eq(20));
     }
 }

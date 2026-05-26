@@ -4,17 +4,19 @@ import com.agentplatform.api.chat.MemoryFactDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.sql.Array;
+import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
@@ -112,17 +114,17 @@ public class MemoryService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId is required");
         }
         int cap = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 100));
-        String where = includeRaw ? "WHERE user_id = ?\n" : "WHERE user_id = ? AND is_curated = true\n";
         return jdbc.query("""
                 SELECT id, user_id, kind, content, source_message_id,
                        created_at, is_curated, access_count, curated_at
                 FROM memory_facts
-                """ + where + """
+                WHERE user_id = ?
+                  AND (? OR is_curated = true)
                 ORDER BY is_curated DESC, created_at DESC
                 LIMIT ?
                 """,
                 FACT_ROW_MAPPER,
-                userId, cap);
+                userId, includeRaw, cap);
     }
 
     @Transactional
@@ -204,10 +206,12 @@ public class MemoryService {
         if (!out.isEmpty()) {
             List<UUID> ids = new ArrayList<>(out.size());
             for (MemoryFactDto f : out) ids.add(f.id());
-            String placeholders = String.join(",", Collections.nCopies(ids.size(), "?"));
-            jdbc.update(
-                    "UPDATE memory_facts SET access_count = access_count + 1 WHERE id IN (" + placeholders + ")",
-                    ids.toArray());
+            updateFactsByIds("""
+                    UPDATE memory_facts
+                    SET access_count = access_count + 1
+                    WHERE id = ANY (?::uuid[])
+                    """,
+                    ids);
         }
         return out;
     }
@@ -241,15 +245,13 @@ public class MemoryService {
 
         if (ids.isEmpty()) return 0;
 
-        String placeholders = String.join(",", Collections.nCopies(ids.size(), "?"));
-        Object[] args = new Object[ids.size() + 1];
-        args[0] = Timestamp.from(OffsetDateTime.now(ZoneOffset.UTC).toInstant());
-        for (int i = 0; i < ids.size(); i++) args[i + 1] = ids.get(i);
-
-        int updated = jdbc.update(
-                "UPDATE memory_facts SET is_curated = true, curated_at = ? WHERE id IN ("
-                        + placeholders + ")",
-                args);
+        int updated = updateFactsByIds("""
+                UPDATE memory_facts
+                SET is_curated = true, curated_at = ?
+                WHERE id = ANY (?::uuid[])
+                """,
+                ids,
+                Timestamp.from(OffsetDateTime.now(ZoneOffset.UTC).toInstant()));
         log.info("Promoted {} fact(s) to curated for user {} (min_access={}, cap={})",
                 updated, userId, min, cap);
         return updated;
@@ -282,6 +284,23 @@ public class MemoryService {
             log.info("Demoted {} stale curated fact(s) for user {} (older than {} days)",
                     demoted, userId, days);
         }
+    }
+
+    private int updateFactsByIds(String sql, List<UUID> ids, Object... leadingArgs) {
+        if (ids.isEmpty()) return 0;
+        return jdbc.execute((ConnectionCallback<Integer>) connection -> {
+            Array idArray = connection.createArrayOf("uuid", ids.toArray(UUID[]::new));
+            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+                int index = 1;
+                for (Object arg : leadingArgs) {
+                    ps.setObject(index++, arg);
+                }
+                ps.setArray(index, idArray);
+                return ps.executeUpdate();
+            } finally {
+                idArray.free();
+            }
+        });
     }
 
     private static final RowMapper<MemoryFactDto> FACT_ROW_MAPPER = (rs, rn) -> {

@@ -43,13 +43,82 @@ public class PhotoIndexService {
     private static final String SORT_BY_CREATED_AT = "created_at";
     private static final String SORT_BY_UPDATED_AT = "updated_at";
     private static final String SORT_BY_NAME = "name";
-    private static final String NULLS_LAST = " NULLS LAST";
     private static final String COL_DEVICE_ID = "device_id";
     private static final String COL_MEDIA_STORE_ID = "media_store_id";
     private static final String COL_MIME_TYPE = "mime_type";
     private static final String COL_THUMB_B64 = "thumb_b64";
     private static final String COL_USER_ID = "user_id";
     private static final String COL_UPDATED_AT = "updated_at";
+    private static final String PHOTO_SEARCH_SQL = """
+            WITH ranked_photo_assets AS (
+                SELECT pa.id, pa.device_id, pa.media_store_id, pa.name,
+                       pa.bucket_id, pa.bucket_name, pa.date_taken_ms,
+                       pa.date_modified_sec, pa.size_bytes, pa.width, pa.height,
+                       pa.mime_type, pa.content_hash, pa.thumb_b64,
+                       pa.indexed_at, pa.updated_at,
+                       pe.embedding_model, pe.embedding_dim,
+                       pe.embedding OPERATOR(public.<=>) ?::public.vector AS distance
+                FROM photo_assets pa
+                JOIN photo_asset_embeddings pe ON pe.asset_id = pa.id
+                WHERE pa.user_id = ?
+                  AND pa.deleted_at IS NULL
+                  AND (?::text IS NULL OR pa.bucket_id = ?::text)
+                  AND (?::text IS NULL OR lower(pa.name) LIKE ?::text)
+                  AND (?::bigint IS NULL OR pa.date_taken_ms >= ?::bigint)
+                  AND (?::bigint IS NULL OR pa.date_taken_ms <= ?::bigint)
+                  AND (?::double precision <= 0.0
+                       OR 1.0 - (pe.embedding OPERATOR(public.<=>) ?::public.vector) >= ?::double precision)
+                ORDER BY
+                    CASE WHEN ?::boolean THEN date_modified_sec END ASC NULLS LAST,
+                    CASE WHEN ?::boolean THEN date_modified_sec END DESC NULLS LAST,
+                    CASE WHEN ?::boolean THEN indexed_at END ASC NULLS LAST,
+                    CASE WHEN ?::boolean THEN indexed_at END DESC NULLS LAST,
+                    CASE WHEN ?::boolean THEN updated_at END ASC NULLS LAST,
+                    CASE WHEN ?::boolean THEN updated_at END DESC NULLS LAST,
+                    CASE WHEN ?::boolean THEN name END ASC NULLS LAST,
+                    CASE WHEN ?::boolean THEN name END DESC NULLS LAST,
+                    CASE WHEN ?::boolean THEN date_taken_ms END ASC NULLS LAST,
+                    CASE WHEN ?::boolean THEN date_taken_ms END DESC NULLS LAST,
+                    CASE WHEN ?::boolean THEN pe.embedding OPERATOR(public.<=>) ?::public.vector END ASC
+                LIMIT ?
+            ),
+            qualified_photo_assets AS (
+                SELECT *
+                FROM (
+                    SELECT ranked_photo_assets.*,
+                           max(1.0 - distance) OVER () AS best_score
+                    FROM ranked_photo_assets
+                ) scored
+                WHERE NOT ?::boolean
+                   OR 1.0 - distance >= GREATEST(
+                        ?::double precision,
+                        best_score - ?::double precision,
+                        best_score * ?::double precision
+                   )
+            )
+            SELECT id, device_id, media_store_id, name,
+                   bucket_id, bucket_name, date_taken_ms,
+                   date_modified_sec, size_bytes, width, height,
+                   mime_type, content_hash, thumb_b64,
+                   indexed_at, updated_at,
+                   embedding_model, embedding_dim, distance
+            FROM qualified_photo_assets
+            ORDER BY
+                CASE WHEN ?::boolean THEN distance END ASC,
+                CASE WHEN ?::boolean THEN date_taken_ms END DESC NULLS LAST,
+                CASE WHEN ?::boolean THEN date_modified_sec END ASC NULLS LAST,
+                CASE WHEN ?::boolean THEN date_modified_sec END DESC NULLS LAST,
+                CASE WHEN ?::boolean THEN indexed_at END ASC NULLS LAST,
+                CASE WHEN ?::boolean THEN indexed_at END DESC NULLS LAST,
+                CASE WHEN ?::boolean THEN updated_at END ASC NULLS LAST,
+                CASE WHEN ?::boolean THEN updated_at END DESC NULLS LAST,
+                CASE WHEN ?::boolean THEN name END ASC NULLS LAST,
+                CASE WHEN ?::boolean THEN name END DESC NULLS LAST,
+                CASE WHEN ?::boolean THEN date_taken_ms END ASC NULLS LAST,
+                CASE WHEN ?::boolean THEN date_taken_ms END DESC NULLS LAST,
+                CASE WHEN ?::boolean THEN distance END ASC
+            LIMIT ?
+            """;
     static final double SEMANTIC_THEN_SORT_MAX_SCORE_DROP = 0.06d;
     static final double SEMANTIC_THEN_SORT_MIN_SCORE_RATIO = 0.80d;
 
@@ -292,114 +361,74 @@ public class PhotoIndexService {
         }
         SearchOptions options = SearchOptions.from(request);
         String vec = MemoryService.toVectorLiteral(queryEmbedding);
+        return jdbc.query(PHOTO_SEARCH_SQL, SEARCH_ROW_MAPPER, searchArgs(request, options, vec));
+    }
+
+    private static Object[] searchArgs(PhotoAssetSearchRequest request, SearchOptions options, String vec) {
         List<Object> args = new ArrayList<>();
         args.add(vec);
         args.add(request.userId());
 
-        StringBuilder sql = new StringBuilder("""
-                SELECT pa.id, pa.device_id, pa.media_store_id, pa.name,
-                       pa.bucket_id, pa.bucket_name, pa.date_taken_ms,
-                       pa.date_modified_sec, pa.size_bytes, pa.width, pa.height,
-                       pa.mime_type, pa.content_hash, pa.thumb_b64,
-                       pa.indexed_at, pa.updated_at,
-                       pe.embedding_model, pe.embedding_dim,
-                       pe.embedding OPERATOR(public.<=>) ?::public.vector AS distance
-                FROM photo_assets pa
-                JOIN photo_asset_embeddings pe ON pe.asset_id = pa.id
-                WHERE pa.user_id = ?
-                  AND pa.deleted_at IS NULL
-                """);
-        appendSearchFilters(sql, args, request, options, vec);
-        appendCandidateOrder(sql, args, options, vec);
-        sql.append(" LIMIT ?");
+        String cleanBucket = clean(request.bucketId());
+        args.add(cleanBucket);
+        args.add(cleanBucket);
+
+        String cleanNameContains = clean(request.nameContains());
+        String nameLike = cleanNameContains == null
+                ? null
+                : "%" + cleanNameContains.toLowerCase(Locale.ROOT) + "%";
+        args.add(nameLike);
+        args.add(nameLike);
+
+        Long dateAfter = request.dateAfter() != null && request.dateAfter() > 0L ? request.dateAfter() : null;
+        args.add(dateAfter);
+        args.add(dateAfter);
+
+        Long dateBefore = request.dateBefore() != null && request.dateBefore() > 0L ? request.dateBefore() : null;
+        args.add(dateBefore);
+        args.add(dateBefore);
+
+        args.add(options.threshold());
+        args.add(vec);
+        args.add(options.threshold());
+
+        boolean sortThenSemantic = options.sortThenSemantic();
+        addMetadataOrderArgs(args, sortThenSemantic, options.candidateSort(), options.direction());
+        args.add(!sortThenSemantic);
+        args.add(vec);
         args.add(options.candidateK());
 
-        String qualificationCte = qualificationCte(options, args);
-        String sourceCte = options.qualifyBeforeSort() ? "qualified_photo_assets" : "ranked_photo_assets";
-        String finalOrder = finalSearchOrder(options);
-        String wrapped = """
-                WITH ranked_photo_assets AS (
-                %s
-                )%s
-                SELECT *
-                FROM %s
-                %s
-                LIMIT ?
-                """.formatted(sql, qualificationCte, sourceCte, finalOrder);
-        args.add(options.finalLimit());
-
-        return jdbc.query(wrapped, SEARCH_ROW_MAPPER, args.toArray());
-    }
-
-    private static void appendSearchFilters(StringBuilder sql,
-                                            List<Object> args,
-                                            PhotoAssetSearchRequest request,
-                                            SearchOptions options,
-                                            String vec) {
-        String cleanBucket = clean(request.bucketId());
-        if (cleanBucket != null) {
-            sql.append(" AND pa.bucket_id = ?");
-            args.add(cleanBucket);
-        }
-        String cleanNameContains = clean(request.nameContains());
-        if (cleanNameContains != null) {
-            sql.append(" AND lower(pa.name) LIKE ?");
-            args.add("%" + cleanNameContains.toLowerCase(Locale.ROOT) + "%");
-        }
-        if (request.dateAfter() != null && request.dateAfter() > 0L) {
-            sql.append(" AND pa.date_taken_ms >= ?");
-            args.add(request.dateAfter());
-        }
-        if (request.dateBefore() != null && request.dateBefore() > 0L) {
-            sql.append(" AND pa.date_taken_ms <= ?");
-            args.add(request.dateBefore());
-        }
-        if (options.threshold() > 0.0d) {
-            sql.append(" AND 1.0 - (pe.embedding OPERATOR(public.<=>) ?::public.vector) >= ?");
-            args.add(vec);
-            args.add(options.threshold());
-        }
-    }
-
-    private static void appendCandidateOrder(StringBuilder sql, List<Object> args, SearchOptions options, String vec) {
-        if (RANKING_SORT_THEN_SEMANTIC.equals(options.ranking())) {
-            sql.append(metadataOrderClause(options.sort(), options.direction()));
-            return;
-        }
-        sql.append(" ORDER BY pe.embedding OPERATOR(public.<=>) ?::public.vector");
-        args.add(vec);
-    }
-
-    private static String qualificationCte(SearchOptions options, List<Object> args) {
-        if (!options.qualifyBeforeSort()) {
-            return "";
-        }
+        args.add(options.qualifyBeforeSort());
         args.add(options.threshold());
         args.add(SEMANTIC_THEN_SORT_MAX_SCORE_DROP);
         args.add(SEMANTIC_THEN_SORT_MIN_SCORE_RATIO);
-        return """
-                ,
-                qualified_photo_assets AS (
-                    SELECT *
-                    FROM (
-                        SELECT ranked_photo_assets.*,
-                               max(1.0 - distance) OVER () AS best_score
-                        FROM ranked_photo_assets
-                    ) scored
-                    WHERE 1.0 - distance >= GREATEST(
-                        ?::double precision,
-                        best_score - ?::double precision,
-                        best_score * ?::double precision
-                    )
-                )
-                """;
+
+        boolean finalRelevanceOrder = options.finalRelevanceOrder();
+        boolean finalMetadataOrder = !finalRelevanceOrder;
+        args.add(finalRelevanceOrder);
+        args.add(finalRelevanceOrder);
+        addMetadataOrderArgs(args, finalMetadataOrder, options.sort(), options.direction());
+        args.add(finalMetadataOrder);
+        args.add(options.finalLimit());
+        return args.toArray();
     }
 
-    private static String finalSearchOrder(SearchOptions options) {
-        if (RANKING_SORT_THEN_SEMANTIC.equals(options.ranking())) {
-            return " ORDER BY distance ASC, date_taken_ms DESC NULLS LAST";
-        }
-        return finalOrderClause(options.sort(), options.direction());
+    private static void addMetadataOrderArgs(List<Object> args,
+                                             boolean enabled,
+                                             String sortBy,
+                                             String direction) {
+        String metadataSort = SORT_BY_RELEVANCE.equals(sortBy) ? SORT_BY_DATE_TAKEN : sortBy;
+        boolean asc = "asc".equals(direction);
+        args.add(enabled && SORT_BY_DATE_MODIFIED.equals(metadataSort) && asc);
+        args.add(enabled && SORT_BY_DATE_MODIFIED.equals(metadataSort) && !asc);
+        args.add(enabled && SORT_BY_CREATED_AT.equals(metadataSort) && asc);
+        args.add(enabled && SORT_BY_CREATED_AT.equals(metadataSort) && !asc);
+        args.add(enabled && SORT_BY_UPDATED_AT.equals(metadataSort) && asc);
+        args.add(enabled && SORT_BY_UPDATED_AT.equals(metadataSort) && !asc);
+        args.add(enabled && SORT_BY_NAME.equals(metadataSort) && asc);
+        args.add(enabled && SORT_BY_NAME.equals(metadataSort) && !asc);
+        args.add(enabled && SORT_BY_DATE_TAKEN.equals(metadataSort) && asc);
+        args.add(enabled && SORT_BY_DATE_TAKEN.equals(metadataSort) && !asc);
     }
 
     public PhotoAssetDto get(UUID userId, UUID assetId) {
@@ -501,25 +530,18 @@ public class PhotoIndexService {
         boolean qualifyBeforeSort() {
             return shouldQualifyBeforeMetadataSort(ranking, sort);
         }
-    }
 
-    private static String finalOrderClause(String sortBy, String direction) {
-        if (SORT_BY_RELEVANCE.equals(sortBy)) {
-            return " ORDER BY distance ASC, date_taken_ms DESC" + NULLS_LAST;
+        boolean sortThenSemantic() {
+            return RANKING_SORT_THEN_SEMANTIC.equals(ranking);
         }
-        return metadataOrderClause(sortBy, direction) + ", distance ASC";
-    }
 
-    private static String metadataOrderClause(String sortBy, String direction) {
-        boolean asc = "asc".equals(direction);
-        String dir = asc ? "ASC" : "DESC";
-        return switch (sortBy) {
-            case SORT_BY_DATE_MODIFIED -> " ORDER BY date_modified_sec " + dir + NULLS_LAST;
-            case SORT_BY_CREATED_AT -> " ORDER BY indexed_at " + dir + NULLS_LAST;
-            case SORT_BY_UPDATED_AT -> " ORDER BY " + COL_UPDATED_AT + " " + dir + NULLS_LAST;
-            case SORT_BY_NAME -> " ORDER BY name " + dir + NULLS_LAST;
-            default -> " ORDER BY date_taken_ms " + dir + NULLS_LAST;
-        };
+        String candidateSort() {
+            return sort;
+        }
+
+        boolean finalRelevanceOrder() {
+            return sortThenSemantic() || SORT_BY_RELEVANCE.equals(sort);
+        }
     }
 
     private static String cleanLower(String value) {
