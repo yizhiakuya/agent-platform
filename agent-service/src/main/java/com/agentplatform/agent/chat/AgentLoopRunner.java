@@ -89,7 +89,7 @@ public class AgentLoopRunner {
             throw new IllegalArgumentException("AgentLoopRunner requires anthropic-messages provider");
         }
 
-        AnthropicRunState state = initialRunState(runRequest, provider);
+        AnthropicRunState state = initialRunState(runRequest);
         state.cancellation.setCancelAction(() -> closeCurrentStream(state));
         state.emitter.onTimeout(state.cancellation::cancel);
 
@@ -103,7 +103,7 @@ public class AgentLoopRunner {
         return exhaustedRunResult(state, maxIterations);
     }
 
-    private AnthropicRunState initialRunState(RunRequest request, ConfiguredProvider provider) {
+    private AnthropicRunState initialRunState(RunRequest request) {
         AnthropicRunState state = new AnthropicRunState();
         state.systemBlocks = request.systemBlocks();
         state.tools = request.tools();

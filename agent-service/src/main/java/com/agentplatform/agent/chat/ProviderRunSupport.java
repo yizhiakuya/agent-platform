@@ -31,7 +31,7 @@ final class ProviderRunSupport {
         );
     }
 
-    static class Request<Self extends Request<Self>> {
+    static class Request<T extends Request<T>> {
         ConfiguredProvider provider;
         UUID sessionId;
         UUID userId;
@@ -40,37 +40,37 @@ final class ProviderRunSupport {
         SseEmitter emitter;
         ChatCancellationToken cancellation;
 
-        public Self withProvider(ConfiguredProvider provider) {
+        public T withProvider(ConfiguredProvider provider) {
             this.provider = provider;
             return self();
         }
 
-        public Self withSessionId(UUID sessionId) {
+        public T withSessionId(UUID sessionId) {
             this.sessionId = sessionId;
             return self();
         }
 
-        public Self withUserId(UUID userId) {
+        public T withUserId(UUID userId) {
             this.userId = userId;
             return self();
         }
 
-        public Self withResolved(ResolvedTools resolved) {
+        public T withResolved(ResolvedTools resolved) {
             this.resolved = resolved;
             return self();
         }
 
-        public Self withSink(ChatEventSink sink) {
+        public T withSink(ChatEventSink sink) {
             this.sink = sink;
             return self();
         }
 
-        public Self withEmitter(SseEmitter emitter) {
+        public T withEmitter(SseEmitter emitter) {
             this.emitter = emitter;
             return self();
         }
 
-        public Self withCancellation(ChatCancellationToken cancellation) {
+        public T withCancellation(ChatCancellationToken cancellation) {
             this.cancellation = cancellation;
             return self();
         }
@@ -104,8 +104,8 @@ final class ProviderRunSupport {
         }
 
         @SuppressWarnings("unchecked")
-        private Self self() {
-            return (Self) this;
+        private T self() {
+            return (T) this;
         }
     }
 
