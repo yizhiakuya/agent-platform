@@ -25,7 +25,6 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -88,10 +87,9 @@ public class CodexResponsesLoopRunner {
         }
 
         ChatCancellationToken cancellation = runRequest.cancellation();
-        SseEmitter emitter = runRequest.emitter();
-        emitter.onTimeout(cancellation::cancel);
+        runRequest.emitter().onTimeout(cancellation::cancel);
 
-        CodexRunState state = initialRunState(runRequest, provider, emitter, cancellation);
+        CodexRunState state = initialRunState(runRequest, provider);
 
         int maxIterations = props.agent().maxAgentIterations();
         for (int iter = 0; iter < maxIterations; iter++) {
@@ -103,26 +101,14 @@ public class CodexResponsesLoopRunner {
         return exhaustedRunResult(state, maxIterations);
     }
 
-    private CodexRunState initialRunState(RunRequest request,
-                                          ConfiguredProvider provider,
-                                          SseEmitter emitter,
-                                          ChatCancellationToken cancellation) {
+    private CodexRunState initialRunState(RunRequest request, ConfiguredProvider provider) {
         CodexRunState state = new CodexRunState();
-        state.provider = provider;
-        state.sessionId = request.sessionId;
-        state.userId = request.userId;
-        state.resolved = request.resolved();
         state.systemText = request.systemText;
-        state.sink = request.sink();
-        state.emitter = emitter;
-        state.cancellation = cancellation;
+        state.apply(request);
         state.client = webClientBuilder.baseUrl(stripTrailingSlash(provider.baseUrl())).build();
-        state.textBuf = new StringBuilder();
         state.transcript = buildInitialInput(request.history(), request.userText, request.attachmentsOrDefault());
         state.tools = buildTools(state.resolved);
-        state.toolBudget = new ToolCallBudget(
-                props.agent().maxToolCallsPerTurn(),
-                props.agent().maxConsecutiveUiToolCalls());
+        state.toolBudget = ProviderRunSupport.toolBudget(props);
         return state;
     }
 
@@ -235,47 +221,14 @@ public class CodexResponsesLoopRunner {
 
     private RunResult exhaustedRunResult(CodexRunState state, int maxIterations) {
         log.warn("Codex Responses loop hit maxAgentIterations={} for user {}", maxIterations, state.userId);
-        return RunResult.exhausted(
-                state.textBuf.toString(),
-                state.lastUsage,
-                "任务还没完成，但本轮思考/工具循环已达到上限（" + maxIterations + " 轮，已调用 "
-                        + state.toolBudget.used() + "/" + state.toolBudget.maxToolCalls()
-                        + " 个工具）。请发送“继续”，我会接着当前页面状态往下做。"
-        );
+        return ProviderRunSupport.exhausted(state.textBuf.toString(), state.lastUsage, state.toolBudget, maxIterations);
     }
 
-    public static final class RunRequest {
-        private ConfiguredProvider provider;
-        private UUID sessionId;
-        private UUID userId;
-        private ResolvedTools resolved;
+    public static final class RunRequest extends ProviderRunSupport.Request<RunRequest> {
         private String systemText;
         private List<MessageDto> history;
         private String userText;
         private ChatAttachmentContext attachments;
-        private ChatEventSink sink;
-        private SseEmitter emitter;
-        private ChatCancellationToken cancellation;
-
-        public RunRequest withProvider(ConfiguredProvider provider) {
-            this.provider = provider;
-            return this;
-        }
-
-        public RunRequest withSessionId(UUID sessionId) {
-            this.sessionId = sessionId;
-            return this;
-        }
-
-        public RunRequest withUserId(UUID userId) {
-            this.userId = userId;
-            return this;
-        }
-
-        public RunRequest withResolved(ResolvedTools resolved) {
-            this.resolved = resolved;
-            return this;
-        }
 
         public RunRequest withSystemText(String systemText) {
             this.systemText = systemText;
@@ -297,25 +250,6 @@ public class CodexResponsesLoopRunner {
             return this;
         }
 
-        public RunRequest withSink(ChatEventSink sink) {
-            this.sink = sink;
-            return this;
-        }
-
-        public RunRequest withEmitter(SseEmitter emitter) {
-            this.emitter = emitter;
-            return this;
-        }
-
-        public RunRequest withCancellation(ChatCancellationToken cancellation) {
-            this.cancellation = cancellation;
-            return this;
-        }
-
-        private ResolvedTools resolved() {
-            return resolved == null ? new ResolvedTools(List.of(), Map.of()) : resolved;
-        }
-
         private List<MessageDto> history() {
             return history == null ? List.of() : history;
         }
@@ -325,35 +259,14 @@ public class CodexResponsesLoopRunner {
                     ? new ChatAttachmentContext(List.of(), List.of(), new ObjectMapper().createArrayNode(), "")
                     : attachments;
         }
-
-        private ChatEventSink sink() {
-            return sink == null ? event -> { } : sink;
-        }
-
-        private SseEmitter emitter() {
-            return emitter == null ? new SseEmitter() : emitter;
-        }
-
-        private ChatCancellationToken cancellation() {
-            return cancellation == null ? new ChatCancellationToken() : cancellation;
-        }
     }
 
-    private static final class CodexRunState {
-        private ConfiguredProvider provider;
-        private UUID sessionId;
-        private UUID userId;
-        private ResolvedTools resolved;
+    private static final class CodexRunState extends ProviderRunSupport.State {
         private String systemText;
-        private ChatEventSink sink;
-        private SseEmitter emitter;
-        private ChatCancellationToken cancellation;
         private WebClient client;
-        private StringBuilder textBuf;
         private JsonNode lastUsage;
         private List<JsonNode> transcript;
         private ArrayNode tools;
-        private ToolCallBudget toolBudget;
     }
 
     private JsonNode streamResponse(WebClient client,

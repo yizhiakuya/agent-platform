@@ -34,7 +34,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -106,22 +105,13 @@ public class AgentLoopRunner {
 
     private AnthropicRunState initialRunState(RunRequest request, ConfiguredProvider provider) {
         AnthropicRunState state = new AnthropicRunState();
-        state.provider = provider;
-        state.sessionId = request.sessionId;
-        state.userId = request.userId;
-        state.resolved = request.resolved();
         state.systemBlocks = request.systemBlocks();
         state.tools = request.tools();
         state.thinking = request.thinking;
         state.messages = request.messages();
-        state.sink = request.sink();
-        state.emitter = request.emitter();
-        state.cancellation = request.cancellation();
-        state.textBuf = new StringBuilder();
+        state.apply(request);
         state.currentStream = new AtomicReference<>();
-        state.toolBudget = new ToolCallBudget(
-                props.agent().maxToolCallsPerTurn(),
-                props.agent().maxConsecutiveUiToolCalls());
+        state.toolBudget = ProviderRunSupport.toolBudget(props);
         return state;
     }
 
@@ -260,47 +250,14 @@ public class AgentLoopRunner {
 
     private RunResult exhaustedRunResult(AnthropicRunState state, int maxIterations) {
         log.warn("agentic loop hit maxAgentIterations={} for user {}", maxIterations, state.userId);
-        return RunResult.exhausted(
-                state.textBuf.toString(),
-                state.lastUsage,
-                "任务还没完成，但本轮思考/工具循环已达到上限（" + maxIterations + " 轮，已调用 "
-                        + state.toolBudget.used() + "/" + state.toolBudget.maxToolCalls()
-                        + " 个工具）。请发送“继续”，我会接着当前页面状态往下做。"
-        );
+        return ProviderRunSupport.exhausted(state.textBuf.toString(), state.lastUsage, state.toolBudget, maxIterations);
     }
 
-    public static final class RunRequest {
-        private ConfiguredProvider provider;
-        private UUID sessionId;
-        private UUID userId;
-        private ResolvedTools resolved;
+    public static final class RunRequest extends ProviderRunSupport.Request<RunRequest> {
         private List<TextBlockParam> systemBlocks;
         private List<ToolUnion> tools;
         private ThinkingConfigEnabled thinking;
         private List<MessageParam> messages;
-        private ChatEventSink sink;
-        private SseEmitter emitter;
-        private ChatCancellationToken cancellation;
-
-        public RunRequest withProvider(ConfiguredProvider provider) {
-            this.provider = provider;
-            return this;
-        }
-
-        public RunRequest withSessionId(UUID sessionId) {
-            this.sessionId = sessionId;
-            return this;
-        }
-
-        public RunRequest withUserId(UUID userId) {
-            this.userId = userId;
-            return this;
-        }
-
-        public RunRequest withResolved(ResolvedTools resolved) {
-            this.resolved = resolved;
-            return this;
-        }
 
         public RunRequest withSystemBlocks(List<TextBlockParam> systemBlocks) {
             this.systemBlocks = systemBlocks;
@@ -322,25 +279,6 @@ public class AgentLoopRunner {
             return this;
         }
 
-        public RunRequest withSink(ChatEventSink sink) {
-            this.sink = sink;
-            return this;
-        }
-
-        public RunRequest withEmitter(SseEmitter emitter) {
-            this.emitter = emitter;
-            return this;
-        }
-
-        public RunRequest withCancellation(ChatCancellationToken cancellation) {
-            this.cancellation = cancellation;
-            return this;
-        }
-
-        private ResolvedTools resolved() {
-            return resolved == null ? new ResolvedTools(List.of(), java.util.Map.of()) : resolved;
-        }
-
         private List<TextBlockParam> systemBlocks() {
             return systemBlocks == null ? List.of() : systemBlocks;
         }
@@ -352,36 +290,15 @@ public class AgentLoopRunner {
         private List<MessageParam> messages() {
             return messages == null ? new ArrayList<>() : messages;
         }
-
-        ChatEventSink sink() {
-            return sink == null ? event -> { } : sink;
-        }
-
-        SseEmitter emitter() {
-            return emitter == null ? new SseEmitter() : emitter;
-        }
-
-        ChatCancellationToken cancellation() {
-            return cancellation == null ? new ChatCancellationToken() : cancellation;
-        }
     }
 
-    private static final class AnthropicRunState {
-        private ConfiguredProvider provider;
-        private UUID sessionId;
-        private UUID userId;
-        private ResolvedTools resolved;
+    private static final class AnthropicRunState extends ProviderRunSupport.State {
         private List<TextBlockParam> systemBlocks;
         private List<ToolUnion> tools;
         private ThinkingConfigEnabled thinking;
         private List<MessageParam> messages;
-        private ChatEventSink sink;
-        private SseEmitter emitter;
-        private ChatCancellationToken cancellation;
-        private StringBuilder textBuf;
         private Usage lastUsage;
         private AtomicReference<StreamResponse<RawMessageStreamEvent>> currentStream;
-        private ToolCallBudget toolBudget;
     }
 
     /**
