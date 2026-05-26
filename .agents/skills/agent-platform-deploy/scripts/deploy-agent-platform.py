@@ -659,7 +659,7 @@ done
 
 echo '--- public https ---'
 for i in $(seq 1 20); do
-    if curl -k -fsSI "$public_url" | sed -n '1,12p'; then
+    if curl --noproxy '*' -k -fsSI --max-time 15 "$public_url" | sed -n '1,12p'; then
         break
     fi
     if [ "$i" = "20" ]; then
@@ -670,7 +670,7 @@ for i in $(seq 1 20); do
 done
 
 echo '--- public assets ---'
-curl -k -fsS "$public_url" | grep -o 'assets/[^" ]*' | head -n 10 || true
+curl --noproxy '*' -k -fsS --max-time 15 "$public_url" | grep -o 'assets/[^" ]*' | head -n 10 || true
 echo 'DEPLOY_OK=1'
 """
     return script.replace("\r\n", "\n")
@@ -736,7 +736,7 @@ done
 
 echo '--- public https ---'
 for i in $(seq 1 20); do
-    if curl -k -fsSI "$public_url" | sed -n '1,12p'; then
+    if curl --noproxy '*' -k -fsSI --max-time 15 "$public_url" | sed -n '1,12p'; then
         break
     fi
     if [ "$i" = "20" ]; then
@@ -747,7 +747,7 @@ for i in $(seq 1 20); do
 done
 
 echo '--- public assets ---'
-curl -k -fsS "$public_url" | grep -o 'assets/[^" ]*' | head -n 10 || true
+curl --noproxy '*' -k -fsS --max-time 15 "$public_url" | grep -o 'assets/[^" ]*' | head -n 10 || true
 echo 'ROLLBACK_OK=1'
 """
     return script.replace("\r\n", "\n")
